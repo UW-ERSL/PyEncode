@@ -1,0 +1,8 @@
+# PyEncode requirements
+# Install with: pip install -r requirements.txt
+
+qiskit>=2.3.0
+numpy>=2.0.0
+
+# Development / testing
+pytest>=9.0.0
