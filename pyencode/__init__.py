@@ -110,16 +110,16 @@ class EncodingInfo:
 # ---------------------------------------------------------------------------
 
 _COMPLEXITY = {
-    LoadType.POINT_LOAD:      "O(m)",
-    LoadType.UNIFORM_LOAD:    "O(m)",
-    LoadType.STEP_LOAD:       "O(m)",
-    LoadType.SQUARE_LOAD:     "O(m)",
-    LoadType.SINUSOIDAL_LOAD: "O(m²)",
-    LoadType.COSINE_LOAD:     "O(m²)",
-    LoadType.DISJOINT_POINT_LOAD:          "O(m · |loads|)",
-    LoadType.MULTI_SIN_LOAD:          "O(m²)",
-    LoadType.UNIFORM_SPIKE_LOAD:          "O(2^m) [impl]; O(m²) analytical",
-    LoadType.UNKNOWN:         "O(2^m)  [Shende fallback]",
+    LoadType.POINT_LOAD:        "O(m)",
+    LoadType.UNIFORM_LOAD:      "O(m)",
+    LoadType.STEP_LOAD:         "O(m)",
+    LoadType.SQUARE_LOAD:       "O(m)",
+    LoadType.SINUSOIDAL_LOAD:   "O(m²)",
+    LoadType.COSINE_LOAD:       "O(m²)",
+    LoadType.MULTI_POINT_LOAD:  "O(m · L)",
+    LoadType.MULTI_SIN_LOAD:    "O(m²)",
+    LoadType.UNIFORM_SPIKE_LOAD: "O(2^m) [impl]; O(m²) analytical",
+    LoadType.UNKNOWN:           "O(2^m)  [Shende fallback]",
 }
 
 
@@ -332,7 +332,7 @@ def _build_expected_vector(
         k = np.arange(N)
         return p["A"] * np.sin(p["n"] * math.pi * k / N)
 
-    if lt == LoadType.DISJOINT_POINT_LOAD:
+    if lt == LoadType.MULTI_POINT_LOAD:
         f = np.zeros(N)
         for load in p["loads"]:
             f[load["k"]] = load["P"]

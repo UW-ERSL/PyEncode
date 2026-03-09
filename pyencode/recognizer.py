@@ -15,9 +15,9 @@ Supported patterns
   SQUARE_LOAD     : f[k1:k2] = c  (interior segment)
   SINUSOIDAL_LOAD : f = sin(2*pi*n*k/N + phi)  (single mode, optional phase)
   COSINE_LOAD     : f = cos(2*pi*n*k/N + phi)  (single mode, optional phase)
-  DISJOINT_POINT_LOAD          : disjoint point loads on non-overlapping index ranges
-  MULTI_SIN_LOAD          : sum of sinusoidal modes (same Fourier basis)
-  UNIFORM_SPIKE_LOAD          : uniform + single point perturbation (rank-1)
+  MULTI_POINT_LOAD: multiple f[k_i] = P_i with L >= 2, arbitrary weights
+  MULTI_SIN_LOAD  : sum of sinusoidal modes (same Fourier basis)
+  UNIFORM_SPIKE_LOAD: uniform + single point perturbation (rank-1)
 
 References
 ----------
@@ -45,9 +45,9 @@ class LoadType(Enum):
     SQUARE_LOAD     = auto()   # f[k1:k2] = c  (interior segment)
     SINUSOIDAL_LOAD = auto()
     COSINE_LOAD     = auto()
-    DISJOINT_POINT_LOAD          = auto()   # disjoint point loads
-    MULTI_SIN_LOAD          = auto()   # sum of sinusoidal modes
-    UNIFORM_SPIKE_LOAD          = auto()   # uniform + point perturbation
+    MULTI_POINT_LOAD   = auto()   # L >= 2 point loads, arbitrary weights
+    MULTI_SIN_LOAD  = auto()   # sum of sinusoidal modes
+    UNIFORM_SPIKE_LOAD = auto()   # uniform + point perturbation
     UNKNOWN         = auto()   # fallback to Mottonen
 
 
@@ -105,7 +105,7 @@ def recognise(code: str) -> LoadPattern:
         _try_square_load,
         _try_sinusoidal_load,
         _try_cosine_load,
-        _try_disjoint_point_load,
+        _try_multi_point_load,
         _try_multi_sin_load,
     ]:
         result = recogniser_fn(ctx)
@@ -706,10 +706,13 @@ def _try_cosine_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     return LoadPattern(LoadType.COSINE_LOAD, N=N,
                        params={"n": n, "A": A, "phi": phi})
 
-def _try_disjoint_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
+def _try_multi_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     """
-    Case A: disjoint point loads — multiple f[k_i] = P_i with distinct indices.
-    All indices must be distinct (non-overlapping).
+    Multi-point load: L >= 2 assignments f[k_i] = P_i with distinct indices.
+
+    Weights P_i may be arbitrary (need not be equal).  The synthesizer
+    uses a binary-tree Ry decomposition giving gate count O(m * L),
+    strictly cheaper than Shende's O(2^m) for sparse L << 2^m.
     """
     subscript_assigns = [a for a in ctx.assignments
                          if a["kind"] == "subscript_assign"
@@ -732,7 +735,7 @@ def _try_disjoint_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     loads = [{"k": int(a["index"]["value"]), "P": float(a["value"]["value"])}
              for a in subscript_assigns]
 
-    return LoadPattern(LoadType.DISJOINT_POINT_LOAD, N=N, params={"loads": loads})
+    return LoadPattern(LoadType.MULTI_POINT_LOAD, N=N, params={"loads": loads})
 
 
 def _try_multi_sin_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:

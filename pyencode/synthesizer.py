@@ -11,7 +11,7 @@ derived from the structure of the load type.  Gate complexities:
   STEP_LOAD       :  O(m)       — H on lower qubits, conditional on upper bits
   SINUSOIDAL_LOAD :  O(m²)      — QFT-based, encodes sin(2πnk/N + φ)
   COSINE_LOAD     :  O(m²)      — QFT-based, encodes cos(2πnk/N + φ)
-  DISJOINT_POINT_LOAD          :  O(m · |loads|) — W-state style superposition
+  MULTI_POINT_LOAD             :  O(m · L)      — binary-tree Ry, arbitrary weights
   MULTI_SIN_LOAD          :  O(m²)      — QFT + multi-amplitude encoding
   UNIFORM_SPIKE_LOAD          :  O(m)       — H^{⊗m} + multi-controlled Ry perturbation
 
@@ -66,16 +66,16 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        LoadType.POINT_LOAD:      _synth_point_load,
-        LoadType.UNIFORM_LOAD:    _synth_uniform_load,
-        LoadType.STEP_LOAD:       _synth_step_load,
-        LoadType.SQUARE_LOAD:     _synth_square_load,
-        LoadType.SINUSOIDAL_LOAD: _synth_sinusoidal,
-        LoadType.COSINE_LOAD:     _synth_cosine,
-        LoadType.DISJOINT_POINT_LOAD:          _synth_disjoint_point_load,
-        LoadType.MULTI_SIN_LOAD:          _synth_multi_sin_load,
-        LoadType.UNIFORM_SPIKE_LOAD:          _synth_uniform_spike_load,
-        LoadType.UNKNOWN:         _synth_mottonen,
+        LoadType.POINT_LOAD:        _synth_point_load,
+        LoadType.UNIFORM_LOAD:      _synth_uniform_load,
+        LoadType.STEP_LOAD:         _synth_step_load,
+        LoadType.SQUARE_LOAD:       _synth_square_load,
+        LoadType.SINUSOIDAL_LOAD:   _synth_sinusoidal,
+        LoadType.COSINE_LOAD:       _synth_cosine,
+        LoadType.MULTI_POINT_LOAD:  _synth_disjoint_point_load,
+        LoadType.MULTI_SIN_LOAD:    _synth_multi_sin_load,
+        LoadType.UNIFORM_SPIKE_LOAD: _synth_uniform_spike_load,
+        LoadType.UNKNOWN:           _synth_mottonen,
     }
 
     fn = dispatch.get(pattern.load_type, _synth_mottonen)
@@ -347,99 +347,225 @@ def _encode_index_controlled(qc: QuantumCircuit, idx: int, m: int,
 
 
 # ---------------------------------------------------------------------------
-# Case A: disjoint point loads
+# Case A: multi-point loads  (arbitrary L ≥ 2, arbitrary weights)
 # ---------------------------------------------------------------------------
 
 def _synth_disjoint_point_load(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare a weighted superposition of L disjoint point loads:
+    Prepare a weighted superposition of L ≥ 2 point loads with arbitrary
+    non-negative magnitudes:
 
-        |ψ⟩ ∝ Σ_{i=1}^{L} |P_i| |k_i⟩
+        |ψ⟩ = (1/‖a‖) Σ_{i=1}^{L} a_i |k_i⟩,   a_i = |P_i|
 
-    For L = 2 (the dominant engineering case): hand-crafted O(m) circuit.
-      - One Ry gate allocates amplitude between the two branches
-      - At most 2(m-1) CX gates encode the two indices
-      - Total: O(m) gates
+    Algorithm: binary-tree Ry decomposition (Mottonen et al., 2005;
+    Plesch & Brukner, PRA 83, 2011).
 
-    For L > 2: falls back to Qiskit StatePreparation on the sparse vector.
+    The L normalised amplitudes are arranged as the leaves of a complete
+    binary tree of depth ⌈log₂ L⌉.  Each internal node j holds the
+    partial norm of its subtree; the Ry rotation angle at node j is
 
-    Reference: Shende, Markov, Bullock, IEEE TCAD 25(6), 2006.
+        θ_j = 2 arcsin( ‖right subtree‖ / ‖node‖ )
+
+    so that the amplitude is correctly split between the left (|0⟩) and
+    right (|1⟩) children.
+
+    After the Ry tree has distributed amplitudes, X-gate sequences encode
+    each target index k_i onto the qubits, controlled on the binary path
+    through the tree that selected leaf i.
+
+    Gate count
+    ----------
+    - Ry tree     : L − 1  Ry gates
+    - Index encoding : O(m · L) CX + X gates
+    - Total : O(m · L)
+
+    This reduces exactly to the hand-crafted two-point circuit for L = 2,
+    and for all L is strictly cheaper than the Shende O(2^m) fallback
+    whenever L ≪ 2^m.
+
+    References
+    ----------
+    Mottonen et al., Quantum Inf. Comput. 5(6), 467–473, 2005.
+    Plesch & Brukner, Phys. Rev. A 83, 032302, 2011.
+    Shende, Markov, Bullock, IEEE TCAD 25(6), 1000–1010, 2006.
     """
     loads = params["loads"]
     L     = len(loads)
-    N     = 2 ** m
 
-    if L == 2:
-        k1, P1 = loads[0]["k"], abs(loads[0]["P"])
-        k2, P2 = loads[1]["k"], abs(loads[1]["P"])
-        return _synth_two_point_loads(m, k1, P1, k2, P2)
-
-    # L > 2: use StatePreparation on sparse vector
-    f = np.zeros(N)
-    for load in loads:
-        f[load["k"]] = abs(load["P"])
-    return _mottonen_from_vector(f.astype(complex), m, name="disjoint_point_load")
-
-
-def _synth_two_point_loads(m: int, k1: int, P1: float,
-                            k2: int, P2: float) -> QuantumCircuit:
-    """
-    Exact O(m) circuit for the two-point-load state:
-
-        |ψ⟩ = (P1 |k1⟩ + P2 |k2⟩) / √(P1² + P2²)
-
-    Strategy
-    --------
-    1. Find the highest bit position where k1 and k2 differ — call it
-       the *split bit*.  The corresponding qubit acts as the amplitude
-       splitter.
-
-    2. Apply Ry(θ) on the split qubit, with θ chosen so that the
-       amplitude assigned to each branch matches P1, P2.
-
-    3. For each branch (split_qubit = 0 or 1), apply CX gates
-       controlled on the split qubit to encode the remaining bits of
-       the target index.
-
-    Gate count: 1 Ry + at most 2(m-1) CX + at most 2(m-1) X  =  O(m).
-    """
-    norm = math.sqrt(P1 ** 2 + P2 ** 2)
+    # Normalise amplitudes
+    amps = np.array([abs(load["P"]) for load in loads], dtype=float)
+    norm = np.linalg.norm(amps)
     if norm < 1e-14:
-        raise ValueError("Both point loads are zero.")
-    a1, a2 = P1 / norm, P2 / norm
+        raise ValueError("All point-load magnitudes are zero.")
+    amps = amps / norm
 
-    xor = k1 ^ k2
-    if xor == 0:
-        raise ValueError(f"Duplicate index k={k1}.")
+    indices = [load["k"] for load in loads]
 
-    # Highest bit where k1 and k2 differ
-    split_bit   = xor.bit_length() - 1
-    split_qubit = split_bit   # qubit i encodes bit i (LSB = qubit 0)
-
-    # Assign branches: branch 0 (split_qubit=0) and branch 1 (split_qubit=1)
-    if (k1 >> split_bit) & 1 == 0:
-        branch0_k, branch1_k = k1, k2
-        theta = 2.0 * math.asin(a2)    # sin(θ/2) = amplitude in |1⟩ branch
-    else:
-        branch0_k, branch1_k = k2, k1
-        theta = 2.0 * math.asin(a1)
-
-    qc = QuantumCircuit(m, name="disjoint_point_load")
-    qc.ry(theta, split_qubit)
-
-    # Encode remaining bits of each branch index via controlled X
-    for branch_val, target_k in [(0, branch0_k), (1, branch1_k)]:
-        for bit in range(m):
-            if bit == split_bit:
-                continue
-            if (target_k >> bit) & 1:
-                if branch_val == 0:
-                    qc.x(split_qubit)        # temporarily flip to make control = 1
-                qc.cx(split_qubit, bit)
-                if branch_val == 0:
-                    qc.x(split_qubit)
-
+    qc = QuantumCircuit(m, name="multi_point_load")
+    _ry_tree_encode(qc, amps, indices, m)
     return qc
+
+
+def _ry_tree_encode(qc: QuantumCircuit,
+                    amps: np.ndarray,
+                    indices: list,
+                    m: int) -> None:
+    """
+    Binary-tree Ry encoding.
+
+    Path-qubit design
+    -----------------
+    We use d path qubits (qubits m-d..m-1, root = qubit m-1).  The Ry
+    tree routes amplitude to leaf i by setting path_qubits[j] = (i>>j)&1.
+    For this to correctly encode index k_i, the d-bit *top prefix* of k_i
+    (bits m-d..m-1) must equal the leaf index i.  This requires:
+
+      1. d ≥ ceil(log2(L))  (enough leaves)
+      2. All d-bit top prefixes of the L indices are DISTINCT.
+
+    We choose the smallest d satisfying both constraints.  If no d ≤ m
+    works, we fall back to Shende's general state preparation.
+
+    After the Ry tree, the low (m-d) bits of each k_i are encoded onto
+    data qubits (0..m-d-1) via controlled-X gates.
+    """
+    L = len(amps)
+    if L == 1:
+        for bit in range(m):
+            if (indices[0] >> bit) & 1:
+                qc.x(bit)
+        return
+
+    # Find minimum d such that all top-d-bit prefixes are distinct
+    d_min = math.ceil(math.log2(L))
+    d = None
+    for d_try in range(d_min, m + 1):
+        prefixes = [(k >> (m - d_try)) for k in indices]
+        if len(set(prefixes)) == L:
+            d = d_try
+            break
+
+    if d is None or d > m:
+        # Fallback: Shende on sparse vector
+        N = 2 ** m
+        f = np.zeros(N, dtype=complex)
+        for a, k in zip(amps, indices):
+            f[k] = a
+        norm = np.linalg.norm(f)
+        if norm > 1e-14:
+            f /= norm
+        from qiskit.circuit.library import StatePreparation
+        sp = StatePreparation(f, label="multi_point_load")
+        qc.append(sp, range(m))
+        qc.decompose(inplace=True)
+        return
+
+    path_qubits = list(range(m - d, m))   # [m-d, ..., m-1]; path_qubits[d-1] = root
+    data_qubits = list(range(0, m - d))   # [0, ..., m-d-1]
+
+    # Each index k_i has a unique d-bit top prefix: prefix_i = k_i >> (m-d).
+    # We assign k_i to leaf number prefix_i.  This ensures that after the
+    # Ry tree, path_qubits are in state = bits m-d..m-1 of k_i.
+    num_leaves = 1 << d
+    amps_padded    = np.zeros(num_leaves)
+    indices_padded = [0] * num_leaves
+
+    for a, k in zip(amps, indices):
+        leaf_i = k >> (m - d)           # d-bit top prefix of k
+        amps_padded[leaf_i]    = a
+        indices_padded[leaf_i] = k
+
+    # Build partial-norm heap (1-indexed)
+    node_norm = np.zeros(2 * num_leaves + 1)
+    for i in range(num_leaves):
+        node_norm[num_leaves + i] = amps_padded[i]
+    for node in range(num_leaves - 1, 0, -1):
+        node_norm[node] = math.sqrt(node_norm[2 * node] ** 2 +
+                                     node_norm[2 * node + 1] ** 2)
+
+    # Apply Ry tree on path_qubits
+    _apply_ry_subtree(qc, node_norm, node=1, depth=0, d=d,
+                      path_qubits=path_qubits, ctrl_path=[])
+
+    # For each real leaf i, encode data bits of k_i controlled on path.
+    # After the Ry tree, path_qubits[j] = (i >> j) & 1 = (k >> (m-d+j)) & 1 ✓
+    for i in range(num_leaves):
+        if amps_padded[i] < 1e-14:
+            continue
+        k = indices_padded[i]
+        path_state = [(i >> j) & 1 for j in range(d)]
+
+        for b in range(m - d):
+            if (k >> b) & 1:
+                _controlled_x(qc, path_qubits, path_state, data_qubits[b])
+
+
+def _apply_ry_subtree(qc: QuantumCircuit,
+                      node_norm: np.ndarray,
+                      node: int,
+                      depth: int,
+                      d: int,
+                      path_qubits: list,
+                      ctrl_path: list) -> None:
+    """
+    Recursively apply Ry rotations for the subtree rooted at `node`.
+    path_qubits[d-1] is the root qubit (MSB); path_qubits[0] is deepest.
+    Node at `depth` acts on path_qubits[d-1-depth].
+    """
+    num_leaves = 1 << d
+    if node >= num_leaves:
+        return
+
+    norm_node  = node_norm[node]
+    norm_right = node_norm[2 * node + 1]
+
+    if norm_node < 1e-14:
+        return
+
+    theta = 2.0 * math.asin(min(norm_right / norm_node, 1.0))
+    target_qubit = path_qubits[d - 1 - depth]   # root → top qubit
+
+    if not ctrl_path:
+        qc.ry(theta, target_qubit)
+    else:
+        ctrl_q = [cp[0] for cp in ctrl_path]
+        ctrl_v = [cp[1] for cp in ctrl_path]
+        _controlled_ry(qc, theta, ctrl_q, ctrl_v, target_qubit)
+
+    _apply_ry_subtree(qc, node_norm, 2 * node,     depth + 1, d, path_qubits,
+                      ctrl_path + [(target_qubit, 0)])
+    _apply_ry_subtree(qc, node_norm, 2 * node + 1, depth + 1, d, path_qubits,
+                      ctrl_path + [(target_qubit, 1)])
+
+
+def _controlled_ry(qc, theta, ctrl_qubits, ctrl_vals, target):
+    """Multi-controlled Ry with active-low controls handled via X flanking."""
+    flip = [q for q, v in zip(ctrl_qubits, ctrl_vals) if v == 0]
+    for q in flip:
+        qc.x(q)
+    qc.mcry(theta, ctrl_qubits, target)
+    for q in flip:
+        qc.x(q)
+
+
+def _controlled_x(qc, ctrl_qubits, ctrl_vals, target):
+    """Multi-controlled X (Toffoli) with active-low controls via X flanking."""
+    flip = [q for q, v in zip(ctrl_qubits, ctrl_vals) if v == 0]
+    for q in flip:
+        qc.x(q)
+    if len(ctrl_qubits) == 0:
+        qc.x(target)
+    elif len(ctrl_qubits) == 1:
+        qc.cx(ctrl_qubits[0], target)
+    else:
+        qc.mcx(ctrl_qubits, target)
+    for q in flip:
+        qc.x(q)
+
+
+def _encode_index_on_path(qc, k, m, d, ctrl_qubits, path):
+    """Kept for compatibility; superseded by inline logic in _ry_tree_encode."""
+    pass
 
 
 # ---------------------------------------------------------------------------

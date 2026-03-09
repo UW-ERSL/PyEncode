@@ -114,18 +114,34 @@ f = np.sin(3 * np.pi * x / 1.0)
         assert pattern.load_type == LoadType.SINUSOIDAL_LOAD
         assert pattern.params["n"] == 3
 
-    def test_disjoint_point_load_two_loads(self):
+    def test_multi_point_load_two_equal(self):
         code = "N = 8\nf = np.zeros(N)\nf[1] = 2.0\nf[5] = 3.0"
         pattern = recognise(code)
-        assert pattern.load_type == LoadType.DISJOINT_POINT_LOAD
+        assert pattern.load_type == LoadType.MULTI_POINT_LOAD
         indices = [l["k"] for l in pattern.params["loads"]]
         assert set(indices) == {1, 5}
 
-    def test_disjoint_point_load_three_loads(self):
+    def test_multi_point_load_three_unequal(self):
         code = "N = 16\nf = np.zeros(N)\nf[0] = 1.0\nf[7] = 2.0\nf[15] = 0.5"
         pattern = recognise(code)
-        assert pattern.load_type == LoadType.DISJOINT_POINT_LOAD
+        assert pattern.load_type == LoadType.MULTI_POINT_LOAD
         assert len(pattern.params["loads"]) == 3
+        weights = {l["k"]: l["P"] for l in pattern.params["loads"]}
+        assert weights[0]  == pytest.approx(1.0)
+        assert weights[7]  == pytest.approx(2.0)
+        assert weights[15] == pytest.approx(0.5)
+
+    def test_multi_point_load_four_loads(self):
+        code = "N = 16\nf = np.zeros(N)\nf[2] = 1.0\nf[5] = 3.0\nf[9] = 2.0\nf[14] = 4.0"
+        pattern = recognise(code)
+        assert pattern.load_type == LoadType.MULTI_POINT_LOAD
+        assert len(pattern.params["loads"]) == 4
+
+    def test_multi_point_load_five_loads(self):
+        code = "N = 32\nf = np.zeros(N)\nf[1]=1.0\nf[5]=2.0\nf[10]=3.0\nf[20]=1.5\nf[30]=0.5"
+        pattern = recognise(code)
+        assert pattern.load_type == LoadType.MULTI_POINT_LOAD
+        assert len(pattern.params["loads"]) == 5
 
     def test_uniform_spike_load_recognised(self):
         code = "N = 8\nf = np.ones(N) * 1.0\nf[3] = 10.0"
@@ -201,13 +217,71 @@ class TestEncoding:
         expected = np.array([1, 1, 0, 0, 0, 0, 0, 0], dtype=float)
         assert_encodes(circuit, expected)
 
-    def test_disjoint_point_load_two_point_loads(self):
+    def test_multi_point_load_L2_unequal(self):
+        """L=2 unequal weights: binary-tree Ry circuit."""
         code = "N = 8\nf = np.zeros(N)\nf[1] = 3.0\nf[6] = 4.0"
         circuit, info = encode(code)
-        assert info.load_type == "DISJOINT_POINT_LOAD"
+        assert info.load_type == "MULTI_POINT_LOAD"
         expected = np.zeros(8)
         expected[1] = 3.0
         expected[6] = 4.0
+        assert_encodes(circuit, expected)
+
+    def test_multi_point_load_L2_same_high_bit(self):
+        """L=2 with indices sharing their high bits — tests split-bit logic."""
+        code = "N = 16\nf = np.zeros(N)\nf[4] = 1.0\nf[7] = 1.0"
+        circuit, info = encode(code)
+        assert info.load_type == "MULTI_POINT_LOAD"
+        expected = np.zeros(16)
+        expected[4] = 1.0
+        expected[7] = 1.0
+        assert_encodes(circuit, expected)
+
+    def test_multi_point_load_L3_unequal(self):
+        """L=3 arbitrary weights on N=16."""
+        code = "N = 16\nf = np.zeros(N)\nf[0] = 1.0\nf[7] = 2.0\nf[15] = 3.0"
+        circuit, info = encode(code)
+        assert info.load_type == "MULTI_POINT_LOAD"
+        expected = np.zeros(16)
+        expected[0]  = 1.0
+        expected[7]  = 2.0
+        expected[15] = 3.0
+        assert_encodes(circuit, expected)
+
+    def test_multi_point_load_L4_unequal(self):
+        """L=4 arbitrary weights on N=16."""
+        code = "N = 16\nf = np.zeros(N)\nf[2] = 1.0\nf[5] = 3.0\nf[9] = 2.0\nf[14] = 4.0"
+        circuit, info = encode(code)
+        assert info.load_type == "MULTI_POINT_LOAD"
+        expected = np.zeros(16)
+        expected[2]  = 1.0
+        expected[5]  = 3.0
+        expected[9]  = 2.0
+        expected[14] = 4.0
+        assert_encodes(circuit, expected)
+
+    def test_multi_point_load_L5_unequal(self):
+        """L=5 (non-power-of-2 number of loads) arbitrary weights on N=32."""
+        code = "N = 32\nf = np.zeros(N)\nf[1]=1.0\nf[5]=2.0\nf[10]=3.0\nf[20]=1.5\nf[30]=0.5"
+        circuit, info = encode(code)
+        assert info.load_type == "MULTI_POINT_LOAD"
+        expected = np.zeros(32)
+        expected[1]  = 1.0
+        expected[5]  = 2.0
+        expected[10] = 3.0
+        expected[20] = 1.5
+        expected[30] = 0.5
+        assert_encodes(circuit, expected)
+
+    def test_multi_point_load_equal_weights(self):
+        """Equal weights (W-state style) still handled correctly."""
+        code = "N = 8\nf = np.zeros(N)\nf[0] = 1.0\nf[3] = 1.0\nf[5] = 1.0"
+        circuit, info = encode(code)
+        assert info.load_type == "MULTI_POINT_LOAD"
+        expected = np.zeros(8)
+        expected[0] = 1.0
+        expected[3] = 1.0
+        expected[5] = 1.0
         assert_encodes(circuit, expected)
 
     def test_uniform_spike_load_uniform_plus_spike(self):
