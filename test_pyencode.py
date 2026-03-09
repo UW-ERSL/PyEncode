@@ -453,5 +453,117 @@ class TestDisplay:
         assert isinstance(circuit, QuantumCircuit)
 
 
+# ---------------------------------------------------------------------------
+# Emitter tests  (circuit_code field)
+# ---------------------------------------------------------------------------
+
+def _exec_circuit_code(code_str: str) -> QuantumCircuit:
+    """Execute emitted code and return the 'qc' circuit object."""
+    ns = {}
+    exec(compile(code_str, "<emitted>", "exec"), ns)
+    assert "qc" in ns, "Emitted code must define variable 'qc'"
+    return ns["qc"]
+
+
+class TestEmitter:
+
+    def test_point_load_code_is_valid(self):
+        code = "N = 8\nf = np.zeros(N)\nf[5] = 2.0"
+        _, info = encode(code)
+        assert info.circuit_code != ""
+        qc = _exec_circuit_code(info.circuit_code)
+        assert isinstance(qc, QuantumCircuit)
+
+    def test_point_load_code_correct_state(self):
+        code = "N = 8\nf = np.zeros(N)\nf[5] = 1.0"
+        _, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        expected = np.zeros(8); expected[5] = 1.0
+        assert_encodes(qc, expected)
+
+    def test_uniform_load_code_correct_state(self):
+        code = "N = 8\nf = np.ones(N)"
+        _, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        assert_encodes(qc, np.ones(8))
+
+    def test_step_load_code_correct_state(self):
+        code = "N = 8\nf = np.zeros(N)\nf[:4] = 1.0"
+        _, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        expected = np.array([1, 1, 1, 1, 0, 0, 0, 0], dtype=float)
+        assert_encodes(qc, expected)
+
+    def test_square_load_code_correct_state(self):
+        # [8,16): k1=8, w=8, k1%w=0 → H-tractable
+        code = "N = 16\nf = np.zeros(N)\nf[8:16] = 1.0"
+        _, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        expected = np.zeros(16); expected[8:16] = 1.0
+        assert_encodes(qc, expected)
+
+    def test_square_load_unaligned_falls_back(self):
+        # [4,12): k1=4, w=8, k1%w!=0 → Shende fallback in emitter
+        code = "N = 16\nf = np.zeros(N)\nf[4:12] = 1.0"
+        _, info = encode(code)
+        assert "StatePreparation" in info.circuit_code
+
+    def test_sinusoidal_code_correct_state(self):
+        code = "N = 8\nx = np.linspace(0,1,8)\nf = np.sin(np.pi * x)"
+        circuit, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        # Both the synthesizer circuit and emitted circuit should produce the same state
+        sv_synth  = np.abs(statevector(circuit))
+        sv_emitted = np.abs(statevector(qc))
+        np.testing.assert_allclose(sv_emitted, sv_synth, atol=1e-5)
+
+    def test_cosine_code_correct_state(self):
+        code = "N = 8\nx = np.linspace(0,1,8)\nf = np.cos(np.pi * x)"
+        circuit, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        sv_synth   = np.abs(statevector(circuit))
+        sv_emitted = np.abs(statevector(qc))
+        np.testing.assert_allclose(sv_emitted, sv_synth, atol=1e-5)
+
+    def test_multi_point_L2_code_correct_state(self):
+        code = "N = 8\nf = np.zeros(N)\nf[1] = 3.0\nf[6] = 4.0"
+        _, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        expected = np.zeros(8); expected[1] = 3.0; expected[6] = 4.0
+        assert_encodes(qc, expected)
+
+    def test_multi_point_L4_code_correct_state(self):
+        code = "N = 16\nf = np.zeros(N)\nf[2]=1.0\nf[5]=3.0\nf[9]=2.0\nf[14]=4.0"
+        _, info = encode(code)
+        qc = _exec_circuit_code(info.circuit_code)
+        expected = np.zeros(16)
+        expected[2]=1.0; expected[5]=3.0; expected[9]=2.0; expected[14]=4.0
+        assert_encodes(qc, expected)
+
+    def test_uniform_spike_code_is_valid(self):
+        code = "N = 8\nf = np.ones(N) * 1.0\nf[3] = 5.0"
+        _, info = encode(code)
+        assert "StatePreparation" in info.circuit_code
+        qc = _exec_circuit_code(info.circuit_code)
+        assert isinstance(qc, QuantumCircuit)
+
+    def test_circuit_code_field_exists_on_all_patterns(self):
+        """Every recognised pattern must populate circuit_code."""
+        cases = [
+            "N=8\nf=np.zeros(8)\nf[3]=1.0",
+            "N=8\nf=np.ones(8)",
+            "N=8\nf=np.zeros(8)\nf[:4]=1.0",
+            "N=8\nx=np.linspace(0,1,8)\nf=np.sin(np.pi*x)",
+            "N=8\nx=np.linspace(0,1,8)\nf=np.cos(np.pi*x)",
+            "N=8\nf=np.zeros(8)\nf[1]=1.0\nf[6]=2.0",
+            "N=8\nf=np.ones(8)\nf[3]=5.0",
+        ]
+        for c in cases:
+            _, info = encode(c)
+            assert info.circuit_code != "", f"Empty circuit_code for: {c!r}"
+            assert "qc" in info.circuit_code, \
+                f"circuit_code does not define qc for: {c!r}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

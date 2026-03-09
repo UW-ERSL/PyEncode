@@ -51,6 +51,7 @@ from qiskit import QuantumCircuit
 
 from .recognizer import recognise, LoadPattern, LoadType
 from .synthesizer import synthesize
+from .emitter import emit_code
 
 
 __all__ = ["encode", "EncodingInfo"]
@@ -82,6 +83,10 @@ class EncodingInfo:
         True if the Möttönen fallback was used (pattern unrecognised).
     params : dict
         Extracted load parameters (amplitudes, mode numbers, etc.).
+    circuit_code : str
+        Standalone Python/Qiskit source code that builds the same
+        circuit.  Can be copy-pasted, saved to a .py file, or tweaked
+        without PyEncode installed.
     """
     load_type: str
     N: int
@@ -90,6 +95,7 @@ class EncodingInfo:
     gate_complexity: str
     fallback: bool
     params: dict
+    circuit_code: str = ""
 
     def __str__(self) -> str:
         lines = [
@@ -253,6 +259,7 @@ def encode(
         gate_complexity=complexity,
         fallback=fallback,
         params=_sanitise_params(pattern.params),
+        circuit_code=emit_code(pattern),
     )
 
     return circuit, info

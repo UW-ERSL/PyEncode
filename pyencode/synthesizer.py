@@ -218,10 +218,11 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
 
     # Special case: width and start are both powers of 2
     # e.g. f[16:48] on N=64: k1=16=2^4, w=32=2^5
-    if (w & (w - 1)) == 0 and (k1 & (k1 - 1)) == 0:
+    # H-gate circuit: width is a power of 2 AND segment is w-aligned (k1 % w == 0)
+    if (w & (w - 1)) == 0 and (k1 % w == 0):
         p = int(round(math.log2(w)))       # H on p lower qubits
-        # Encode k1 on upper bits
-        for bit in range(p, m):
+        # Encode k1 on all bits (upper bits identify the aligned block)
+        for bit in range(m):
             if (k1 >> bit) & 1:
                 qc.x(bit)
         for q in range(p):
