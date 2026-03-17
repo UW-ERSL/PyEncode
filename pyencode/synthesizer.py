@@ -32,7 +32,7 @@ from typing import Optional
 
 from qiskit import QuantumCircuit, QuantumRegister
 
-from .recognizer import LoadPattern, LoadType
+from .recognizer import LoadPattern, VectorType
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +66,16 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        LoadType.POINT_LOAD:        _synth_point_load,
-        LoadType.UNIFORM_LOAD:      _synth_uniform_load,
-        LoadType.STEP_LOAD:         _synth_step_load,
-        LoadType.SQUARE_LOAD:       _synth_square_load,
-        LoadType.SINUSOIDAL_LOAD:   _synth_sinusoidal,
-        LoadType.COSINE_LOAD:       _synth_cosine,
-        LoadType.MULTI_POINT_LOAD:  _synth_disjoint_point_load,
-        LoadType.MULTI_SIN_LOAD:    _synth_multi_sin_load,
-        LoadType.UNIFORM_SPIKE_LOAD: _synth_uniform_spike_load,
-        LoadType.UNKNOWN:           _synth_mottonen,
+        VectorType.DISCRETE:        _synth_point_load,
+        VectorType.UNIFORM:      _synth_uniform_load,
+        VectorType.STEP:         _synth_step_load,
+        VectorType.SQUARE:       _synth_square_load,
+        VectorType.SINE:   _synth_sinusoidal,
+        VectorType.COSINE:       _synth_cosine,
+        VectorType.MULTI_DISCRETE:  _synth_disjoint_point_load,
+        VectorType.MULTI_SINE:    _synth_multi_sin_load,
+        VectorType.UNIFORM_SPIKE: _synth_uniform_spike_load,
+        VectorType.UNKNOWN:           _synth_mottonen,
     }
 
     fn = dispatch.get(pattern.load_type, _synth_mottonen)
