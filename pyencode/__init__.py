@@ -236,7 +236,7 @@ _COMPLEXITY = {
     VectorType.COSINE:          "O(m\u00b2)",
     VectorType.MULTI_DISCRETE:  "O(m \u00b7 L)",
     VectorType.MULTI_SINE:      "O(m\u00b2)",
-    VectorType.UNKNOWN:         "O(2^m)  [Shende fallback]",
+    VectorType.UNKNOWN:         "O(2^m)",
 }
 
 
