@@ -72,10 +72,43 @@ def plot_vector_2d(f_2d, N, title, filename):
     print(f"  saved {FIGDIR}/{filename}")
 
 
-def save_circuit(circuit, filename, scale=0.7):
+def save_circuit(circuit, filename, scale=0.8, fold=-1, transpile_circuit=False):
     """Save Qiskit circuit diagram as PNG."""
-    fig = circuit.draw('mpl', scale=scale)
+    circ = circuit
+    if transpile_circuit:
+        from qiskit import transpile
+        circ = transpile(circ,
+                         basis_gates=['cx', 'u', 'x', 'h', 'ry', 'rz', 'rx', 'p'],
+                         optimization_level=2)
+    fig = circ.draw('mpl', scale=scale, fold=fold)
     fig.savefig(f"{FIGDIR}/{filename}", bbox_inches='tight', pad_inches=0.05)
+    plt.close(fig)
+    print(f"  saved {FIGDIR}/{filename}")
+
+
+def save_shende_block(m, filename, label=None):
+    """Draw a clean single-block diagram for Shende fallback."""
+    if label is None:
+        label = "Shende\nState Prep\n$\\mathcal{O}(2^m)$"
+    fig, ax = plt.subplots(figsize=(3.4, 0.45 * m + 0.8))
+    ax.set_xlim(-0.8, 3.5)
+    ax.set_ylim(-0.5, m - 0.5)
+    ax.invert_yaxis()
+    for i in range(m):
+        ax.plot([-0.5, 0.5], [i, i], 'k-', lw=1.5)
+        ax.plot([2.5, 3.3], [i, i], 'k-', lw=1.5)
+        ax.text(-0.7, i, f'$q_{{{i}}}$', ha='right', va='center', fontsize=12)
+    rect = plt.Rectangle((0.5, -0.4), 2.0, m - 0.2,
+                          facecolor='#b5446e', edgecolor='#8b3456',
+                          linewidth=2.0, alpha=0.92)
+    ax.add_patch(rect)
+    ax.text(1.5, (m - 1) / 2, label,
+            ha='center', va='center', fontsize=10, color='white',
+            fontweight='bold', linespacing=1.4)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    fig.tight_layout()
+    fig.savefig(f"{FIGDIR}/{filename}", bbox_inches='tight', pad_inches=0.08)
     plt.close(fig)
     print(f"  saved {FIGDIR}/{filename}")
 
@@ -103,7 +136,7 @@ f[20] = 1.0
 
     f = np.zeros(64); f[20] = 1.0
     plot_vector(f, 64, "Discrete: $f_{20}=1$", "discrete_vector.png")
-    save_circuit(circuit, "discrete_circuit.png", scale=0.7)
+    save_circuit(circuit, "discrete_circuit.png", scale=0.8)
 
 
 def sec51_example2():
@@ -122,7 +155,7 @@ for i in range(N):
     N = 64; k = np.arange(N)
     f = np.sin(3 * np.pi * k / N)
     plot_vector(f, N, r"Sine: $\sin(3\pi i/N)$", "sine_loop_vector.png")
-    save_circuit(circuit, "sine_loop_circuit.png", scale=0.5)
+    save_circuit(circuit, "sine_loop_circuit.png", scale=0.8)
 
 
 def sec51_example3():
@@ -143,7 +176,7 @@ f = np.sin(3 * np.pi * x) * np.exp(-x)
     f = np.sin(3 * np.pi * x) * np.exp(-x)
     plot_vector(f, N, r"Damped sine: $\sin(3\pi x)e^{-x}$",
                 "damped_sine_vector.png")
-    save_circuit(circuit, "damped_sine_circuit.png", scale=0.35)
+    save_shende_block(6, "damped_sine_circuit.png")
 
 
 # ===================================================================
@@ -161,7 +194,8 @@ def sec52_example3():
 
     plot_vector(f, N, r"Multi-tone: $0.8\sin(3\pi i/N)+0.6\sin(7\pi i/N)$",
                 "multi_tone_vector.png")
-    save_circuit(circuit, "multi_tone_circuit.png", scale=0.35)
+    save_shende_block(6, "multi_tone_circuit.png",
+                      label="Freq Prep\n+ QFT\n$\\mathcal{O}(m^2)$")
 
 
 # ===================================================================
@@ -176,7 +210,7 @@ def sec53_example1a():
 
     f = np.zeros(64); f[32] = 1.0
     plot_vector(f, 64, "Discrete: $f_{32}=1$", "params_discrete_vector.png")
-    save_circuit(circuit, "params_discrete_circuit.png", scale=0.7)
+    save_circuit(circuit, "params_discrete_circuit.png", scale=0.8)
 
 
 def sec53_example1b():
@@ -189,7 +223,7 @@ def sec53_example1b():
     f = 2.0 * np.sin(3 * np.pi * k / N + np.pi / 4)
     plot_vector(f, N, r"Sine: $2\sin(3\pi i/N + \pi/4)$",
                 "params_sine_vector.png")
-    save_circuit(circuit, "params_sine_circuit.png", scale=0.5)
+    save_circuit(circuit, "params_sine_circuit.png", scale=0.8)
 
 
 def sec53_example2():
@@ -215,7 +249,7 @@ def sec53_example2():
     plot_vector(f, N,
                 r"Composite: sine + sine + discrete",
                 "composite_vector.png")
-    save_circuit(circuit, "composite_circuit.png", scale=0.35)
+    save_shende_block(6, "composite_circuit.png")
 
 
 # ===================================================================
@@ -241,7 +275,7 @@ def sec61_hubbard():
     plot_vector(f, N_pauli,
                 r"Fermi-Hubbard: $t=1, U=4, L=8$",
                 "hubbard_vector.png")
-    save_circuit(circuit, "hubbard_circuit.png", scale=0.35)
+    save_shende_block(5, "hubbard_circuit.png")
 
 
 def sec62_poisson():
@@ -263,7 +297,7 @@ def sec62_poisson():
     plot_vector_2d(f_2d, N,
                    r"$\sin(2\pi i/N)\sin(3\pi j/N)$",
                    "poisson_vector.png")
-    save_circuit(circuit, "poisson_circuit.png", scale=0.45)
+    save_circuit(circuit, "poisson_circuit.png", scale=0.7)
 
 
 def sec63_finance():
@@ -290,7 +324,7 @@ def sec63_finance():
                 "Price distribution (7 bins)",
                 "finance_vector.png",
                 ylabel=r"$\sqrt{p_i}$")
-    save_circuit(circuit, "finance_circuit.png", scale=0.45)
+    save_circuit(circuit, "finance_circuit.png", scale=0.7, fold=10)
 
 
 # ===================================================================

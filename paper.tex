@@ -526,7 +526,7 @@ circuit, info = encode_python(code)
 \loadfigs{discrete_vector.png}{discrete_circuit.png}
   {Discrete vector: $f_{20}=1$, $N=64$}
   {unused}
-  {0.7}{sec5_discrete}
+  {1.0}{sec5_discrete}
 
 
 \textbf{Example 2: Loop syntax with hint.}
@@ -552,7 +552,7 @@ circuit, info = encode_python(
 \loadfigs{sine_loop_vector.png}{sine_loop_circuit.png}
   {Sine vector: $\sin(3\pi i/N)$, $N=64$}
   {unused}
-  {0.5}{sec5_sine_loop}
+  {1.0}{sec5_sine_loop}
 
 \textbf{Example 3: Checking for Shende fallback.}
 When the pattern is not recognised and no hint is
@@ -580,7 +580,7 @@ if info.complexity == "O(2^m)":
 \loadfigs{damped_sine_vector.png}{damped_sine_circuit.png}
   {Damped sine: $\sin(3\pi x)e^{-x}$ (Shende fallback)}
   {unused}
-  {0.35}{sec5_damped}
+  {1.0}{sec5_damped}
 
 The damped sinusoid is not in PyEncode's pattern
 library; the warning alerts the user that the
@@ -652,7 +652,7 @@ circuit, info = encode_vector(f)
 \loadfigs{multi_tone_vector.png}{multi_tone_circuit.png}
   {Multi-tone: $0.8\sin(3\pi i/N)+0.6\sin(7\pi i/N)$}
   {unused}
-  {0.35}{sec5_multi_tone}
+  {1.0}{sec5_multi_tone}
 
 The same circuit would require $\bigO{2^m}$
 gates under Shende's general preparation for $N=64$;
@@ -710,7 +710,7 @@ circuit, info = encode_params(
 \loadfigs{params_discrete_vector.png}{params_discrete_circuit.png}
   {Discrete: $f_{32}=1$, $N=64$}
   {unused}
-  {0.7}{sec5_params_discrete}
+  {1.0}{sec5_params_discrete}
 
 \begin{lstlisting}[style=python]
 # Sinusoidal with phase
@@ -722,7 +722,7 @@ circuit, info = encode_params(
 \loadfigs{params_sine_vector.png}{params_sine_circuit.png}
   {Sine: $2\sin(3\pi i/N + \pi/4)$, $N=64$}
   {unused}
-  {0.5}{sec5_params_sine}
+  {1.0}{sec5_params_sine}
 
 \textbf{Example 2: Composite vector.}
 A superposition of two sine modes and a discrete vector, expressed as a list of
@@ -739,7 +739,7 @@ circuit, info = encode_params([
 \loadfigs{composite_vector.png}{composite_circuit.png}
   {Composite: sine + sine + discrete}
   {unused}
-  {0.35}{sec5_composite}
+  {1.0}{sec5_composite}
 
 \textbf{Example 3: Statevector validation.}
 For development use, \texttt{validate=True}
@@ -866,7 +866,7 @@ circuit, info = encode_params([
 \loadfigs{hubbard_vector.png}{hubbard_circuit.png}
   {Fermi-Hubbard PREP coefficients ($t\!=\!1$, $U\!=\!4$, $L\!=\!8$)}
   {unused}
-  {0.5}{sec6_hubbard}
+  {1.0}{sec6_hubbard}
 
 This yields an $\bigO{m}$ PREP circuit with
 $m = \lceil\log_2 4L\rceil$ qubits.
@@ -928,7 +928,7 @@ circuit = circ_x.tensor(circ_y)
 \loadfigs{poisson_vector.png}{poisson_circuit.png}
   {2D Poisson source: $\sin(2\pi i/N)\sin(3\pi j/N)$}
   {unused}
-  {0.45}{sec6_poisson}
+  {1.0}{sec6_poisson}
 
 The total gate count is $2\times\bigO{m^2}$ for $2m$
 qubits encoding $N^2$ amplitudes, compared to
@@ -969,7 +969,7 @@ circuit, info = encode_params(
 \loadfigs{finance_vector.png}{finance_circuit.png}
   {Price distribution as MULTI\_DISCRETE ($|S|\!=\!7$, $N\!=\!64$)}
   {unused}
-  {0.45}{sec6_finance}
+  {1.0}{sec6_finance}
 
 Since QAE applies the state preparation oracle
 $\bigO{1/\varepsilon}$ times to achieve error
