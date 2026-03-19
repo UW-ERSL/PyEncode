@@ -577,11 +577,6 @@ if info.complexity == "O(2^m)":
         f"{info.gate_count} for N=64")
 \end{lstlisting}
 
-\loadfigs{damped_sine_vector.png}{damped_sine_circuit.png}
-  {Damped sine: $\sin(3\pi x)e^{-x}$ (Shende fallback)}
-  {unused}
-  {1.0}{sec5_damped}
-
 The damped sinusoid is not in PyEncode's pattern
 library; the warning alerts the user that the
 exponential-cost circuit was used and invites them
@@ -648,11 +643,6 @@ circuit, info = encode_vector(f)
 # info.vector_type  -> "MULTI_SINE"
 # info.complexity   -> "O(m^2)"
 \end{lstlisting}
-
-\loadfigs{multi_tone_vector.png}{multi_tone_circuit.png}
-  {Multi-tone: $0.8\sin(3\pi i/N)+0.6\sin(7\pi i/N)$}
-  {unused}
-  {1.0}{sec5_multi_tone}
 
 The same circuit would require $\bigO{2^m}$
 gates under Shende's general preparation for $N=64$;
@@ -735,11 +725,6 @@ circuit, info = encode_params([
     DISCRETE(k=32, P=2.0),
 ], N=64)
 \end{lstlisting}
-
-\loadfigs{composite_vector.png}{composite_circuit.png}
-  {Composite: sine + sine + discrete}
-  {unused}
-  {1.0}{sec5_composite}
 
 \textbf{Example 3: Statevector validation.}
 For development use, \texttt{validate=True}
@@ -862,11 +847,6 @@ circuit, info = encode_params([
     SQUARE(k1=2*L, k2=3*L, c=U),
 ], N=4*L)
 \end{lstlisting}
-
-\loadfigs{hubbard_vector.png}{hubbard_circuit.png}
-  {Fermi-Hubbard PREP coefficients ($t\!=\!1$, $U\!=\!4$, $L\!=\!8$)}
-  {unused}
-  {1.0}{sec6_hubbard}
 
 This yields an $\bigO{m}$ PREP circuit with
 $m = \lceil\log_2 4L\rceil$ qubits.

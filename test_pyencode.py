@@ -307,14 +307,14 @@ class TestEncodeVectorWithType:
 
     def test_sine(self):
         N = 64; k = np.arange(N)
-        f = np.sin(1 * np.pi * k / N)
+        f = np.sin(1 * 2 * np.pi * k / N)
         circuit, info = encode_vector(f, vector_type="SINE")
         assert info.vector_type == "SINE"
         assert not info.validated
 
     def test_cosine(self):
         N = 64; k = np.arange(N)
-        f = np.cos(1 * np.pi * k / N)
+        f = np.cos(1 * 2 * np.pi * k / N)
         circuit, info = encode_vector(f, vector_type="COSINE")
         assert info.vector_type == "COSINE"
 
@@ -325,7 +325,7 @@ class TestEncodeVectorWithType:
 
     def test_multi_sine(self):
         N = 16; k = np.arange(N)
-        f = 2.0 * np.sin(1 * np.pi * k / N) + np.sin(3 * np.pi * k / N)
+        f = 2.0 * np.sin(1 * 2 * np.pi * k / N) + np.sin(3 * 2 * np.pi * k / N)
         circuit, info = encode_vector(f, vector_type="MULTI_SINE")
         assert info.vector_type == "MULTI_SINE"
 
@@ -395,14 +395,14 @@ class TestEncodeVectorAutoDetect:
 
     def test_auto_sine(self):
         N = 64; k = np.arange(N)
-        f = np.sin(1 * np.pi * k / N)
+        f = np.sin(1 * 2 * np.pi * k / N)
         circuit, info = encode_vector(f)
         assert info.vector_type == "SINE"
         assert not info.validated
 
     def test_auto_cosine(self):
         N = 64; k = np.arange(N)
-        f = np.cos(1 * np.pi * k / N)
+        f = np.cos(1 * 2 * np.pi * k / N)
         circuit, info = encode_vector(f)
         assert info.vector_type == "COSINE"
         assert not info.validated
@@ -415,7 +415,7 @@ class TestEncodeVectorAutoDetect:
 
     def test_auto_multi_sine(self):
         N = 16; k = np.arange(N)
-        f = 2.0 * np.sin(1 * np.pi * k / N) + np.sin(3 * np.pi * k / N)
+        f = 2.0 * np.sin(1 * 2 * np.pi * k / N) + np.sin(3 * 2 * np.pi * k / N)
         circuit, info = encode_vector(f)
         assert info.vector_type == "MULTI_SINE"
         assert not info.validated
@@ -560,7 +560,7 @@ import numpy as np
 N = 64
 f = np.zeros(N)
 for k in range(N):
-    f[k] = np.sin(1 * np.pi * k / N)
+    f[k] = np.sin(1 * 2 * np.pi * k / N)
 """
         circuit, info = encode_python(code, vector_type="SINE")
         assert info.vector_type == "SINE"

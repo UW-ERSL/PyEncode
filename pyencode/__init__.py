@@ -401,11 +401,7 @@ def _encode_composite(
             validate=validate, tol=tol,
         )
 
-    # Mixed types: build combined vector and fall back to Shende
-    warnings.warn(
-        "Composite vector with mixed types: falling back to Shende O(2^m) synthesis.",
-        stacklevel=3,
-    )
+    # General composite: build combined vector, try auto-detect
     f = np.zeros(N)
     for comp in components:
         f += _build_component_vector(comp, N)
@@ -414,6 +410,23 @@ def _encode_composite(
     if norm < 1e-14:
         raise ValueError("Composite vector is the zero vector.")
 
+    # Try auto-detect on the combined vector
+    try:
+        detected_type, detected_params = auto_detect(f, tol=tol)
+        pattern = LoadPattern(detected_type, N=N, params=detected_params)
+        return _synthesise_and_build_info(
+            pattern, fallback_vector=None,
+            validate=validate, tol=tol,
+        )
+    except ValueError:
+        pass
+
+    # No pattern matched: Shende fallback with warning
+    warnings.warn(
+        "Composite vector does not match any known pattern: "
+        "falling back to Shende O(2^m) synthesis.",
+        stacklevel=3,
+    )
     pattern = LoadPattern(VectorType.UNKNOWN, N=N,
                           params={"amplitudes": (f / norm).astype(complex)})
     return _synthesise_and_build_info(
@@ -436,9 +449,9 @@ def _build_component_vector(comp: _VectorObj, N: int) -> np.ndarray:
     if comp.vector_type == VectorType.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
     if comp.vector_type == VectorType.SINE:
-        return p.get("A", 1.0) * np.sin(p["n"] * math.pi * k / N + p.get("phi", 0.0))
+        return p.get("A", 1.0) * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
     if comp.vector_type == VectorType.COSINE:
-        return p.get("A", 1.0) * np.cos(p["n"] * math.pi * k / N + p.get("phi", 0.0))
+        return p.get("A", 1.0) * np.cos(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
     raise TypeError(f"Cannot materialise component of type {comp.vector_type.name}.")
 
@@ -926,11 +939,11 @@ def _build_expected_vector(
 
     if lt == VectorType.SINE:
         k = np.arange(N)
-        return p.get("A", 1.0) * np.sin(p["n"] * math.pi * k / N + p.get("phi", 0.0))
+        return p.get("A", 1.0) * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
     if lt == VectorType.COSINE:
         k = np.arange(N)
-        return p.get("A", 1.0) * np.cos(p["n"] * math.pi * k / N + p.get("phi", 0.0))
+        return p.get("A", 1.0) * np.cos(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
     if lt == VectorType.MULTI_DISCRETE:
         f = np.zeros(N)
@@ -942,7 +955,7 @@ def _build_expected_vector(
         k = np.arange(N)
         f = np.zeros(N)
         for mode in p["modes"]:
-            f += mode["A"] * np.sin(mode["n"] * math.pi * k / N)
+            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N)
         return f
 
     return None

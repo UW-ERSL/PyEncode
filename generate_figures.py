@@ -72,15 +72,9 @@ def plot_vector_2d(f_2d, N, title, filename):
     print(f"  saved {FIGDIR}/{filename}")
 
 
-def save_circuit(circuit, filename, scale=0.8, fold=-1, transpile_circuit=False):
+def save_circuit(circuit, filename, scale=0.8, fold=-1):
     """Save Qiskit circuit diagram as PNG."""
-    circ = circuit
-    if transpile_circuit:
-        from qiskit import transpile
-        circ = transpile(circ,
-                         basis_gates=['cx', 'u', 'x', 'h', 'ry', 'rz', 'rx', 'p'],
-                         optimization_level=2)
-    fig = circ.draw('mpl', scale=scale, fold=fold)
+    fig = circuit.draw('mpl', scale=scale, fold=fold)
     fig.savefig(f"{FIGDIR}/{filename}", bbox_inches='tight', pad_inches=0.05)
     plt.close(fig)
     print(f"  saved {FIGDIR}/{filename}")

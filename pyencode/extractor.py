@@ -205,7 +205,7 @@ def _fit_sinusoidal(f: np.ndarray, atol: float, *, use_cos: bool) -> dict:
     best_phi = None
 
     for n_cand in range(1, N):
-        basis = n_cand * math.pi * k / N
+        basis = 2 * math.pi * n_cand * k / N
         s = np.sin(basis)
         c = np.cos(basis)
 
@@ -336,7 +336,7 @@ def _extract_multi_sin_load(f: np.ndarray, atol: float) -> dict:
         for n_cand in range(1, N):
             if n_cand in used_freqs:
                 continue
-            basis = np.sin(n_cand * math.pi * k / N)
+            basis = np.sin(2 * math.pi * n_cand * k / N)
             norm_sq = np.dot(basis, basis)
             if norm_sq < 1e-14:
                 continue
@@ -350,7 +350,7 @@ def _extract_multi_sin_load(f: np.ndarray, atol: float) -> dict:
 
         modes.append({"n": best_n, "A": best_A})
         used_freqs.add(best_n)
-        residual = residual - best_A * np.sin(best_n * math.pi * k / N)
+        residual = residual - best_A * np.sin(2 * math.pi * best_n * k / N)
 
     if len(modes) < 2:
         raise ValueError(
@@ -457,10 +457,10 @@ def _reconstruct(vector_type: VectorType, N: int, params: dict) -> np.ndarray:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p["c"]; return f
 
     if vector_type == VectorType.SINE:
-        return p["A"] * np.sin(p["n"] * math.pi * k / N + p.get("phi", 0.0))
+        return p["A"] * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
     if vector_type == VectorType.COSINE:
-        return p["A"] * np.cos(p["n"] * math.pi * k / N + p.get("phi", 0.0))
+        return p["A"] * np.cos(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
     if vector_type == VectorType.MULTI_DISCRETE:
         f = np.zeros(N)
@@ -471,7 +471,7 @@ def _reconstruct(vector_type: VectorType, N: int, params: dict) -> np.ndarray:
     if vector_type == VectorType.MULTI_SINE:
         f = np.zeros(N)
         for mode in p["modes"]:
-            f += mode["A"] * np.sin(mode["n"] * math.pi * k / N)
+            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N)
         return f
 
     if vector_type == VectorType.UNIFORM_SPIKE:
