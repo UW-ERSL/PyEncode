@@ -29,8 +29,8 @@ rcParams.update({
     'axes.labelsize': 12,
     'xtick.labelsize': 10,
     'ytick.labelsize': 10,
-    'figure.dpi': 200,
-    'savefig.dpi': 200,
+    'figure.dpi': 300,
+    'savefig.dpi': 300,
     'savefig.bbox': 'tight',
     'savefig.pad_inches': 0.05,
 })
@@ -40,11 +40,22 @@ FIGDIR = "figures"
 
 # ── helpers ───────────────────────────────────────────────────────
 
-def plot_vector(f, N, title, filename, ylabel=r"$f_i$"):
-    """Bar chart of vector f, matching paper style."""
-    fig, ax = plt.subplots(figsize=(3.4, 2.2))
-    ax.bar(range(N), f, width=1.0, color='steelblue', edgecolor='steelblue',
-           linewidth=0.3)
+def plot_vector(f, N, title, filename, ylabel=r"$f_i$", smooth=False):
+    """Plot vector f. Use smooth=True for continuous functions (sine, cosine, etc.)."""
+    fig, ax = plt.subplots(figsize=(4.2, 2.6))
+    if smooth:
+        x = np.arange(N)
+        # Interpolate for smooth curve
+        from scipy.interpolate import make_interp_spline
+        x_smooth = np.linspace(0, N - 1, 500)
+        spl = make_interp_spline(x, f, k=3)
+        f_smooth = spl(x_smooth)
+        ax.plot(x_smooth, f_smooth, color='steelblue', linewidth=1.5)
+        ax.fill_between(x_smooth, 0, f_smooth, alpha=0.15, color='steelblue')
+        ax.plot(x, f, 'o', color='steelblue', markersize=2.0, alpha=0.4)
+    else:
+        ax.bar(range(N), f, width=1.0, color='steelblue', edgecolor='steelblue',
+               linewidth=0.3)
     ax.set_xlabel("Node index $i$")
     ax.set_ylabel(ylabel)
     ax.set_xlim(-0.5, N - 0.5)
@@ -60,7 +71,7 @@ def plot_vector(f, N, title, filename, ylabel=r"$f_i$"):
 
 def plot_vector_2d(f_2d, N, title, filename):
     """Heatmap of a 2D vector."""
-    fig, ax = plt.subplots(figsize=(3.4, 2.8))
+    fig, ax = plt.subplots(figsize=(4.2, 3.2))
     im = ax.imshow(f_2d, origin='lower', cmap='RdBu_r', aspect='equal')
     ax.set_xlabel("$j$")
     ax.set_ylabel("$i$")
@@ -121,16 +132,16 @@ def sec51_example1():
     """Discrete vector, AST recognition, no hint."""
     print("\n--- Sec 5.1 Example 1: Discrete (encode_python, no hint) ---")
     code = """
-N = 64
+N = 8
 f = np.zeros(N)
-f[20] = 1.0
+f[3] = 1.0
 """
     circuit, info = encode_python(code)
     print_info("encode_python", info)
 
-    f = np.zeros(64); f[20] = 1.0
-    plot_vector(f, 64, "Discrete: $f_{20}=1$", "discrete_vector.png")
-    save_circuit(circuit, "discrete_circuit.png", scale=0.8)
+    f = np.zeros(8); f[3] = 1.0
+    plot_vector(f, 8, "Discrete: $f_3=1$, $N=8$", "discrete_vector.png")
+    save_circuit(circuit, "discrete_circuit.png", scale=0.6)
 
 
 def sec51_example2():
@@ -138,18 +149,18 @@ def sec51_example2():
     print("\n--- Sec 5.1 Example 2: Sine for-loop (encode_python, hint) ---")
     code = """
 import numpy as np
-N = 64
+N = 8
 f = np.zeros(N)
 for i in range(N):
-    f[i] = np.sin(3 * np.pi * i / N)
+    f[i] = np.sin(1 * 2 * np.pi * i / N)
 """
     circuit, info = encode_python(code, vector_type="SINE")
     print_info("encode_python", info)
 
-    N = 64; k = np.arange(N)
-    f = np.sin(3 * np.pi * k / N)
-    plot_vector(f, N, r"Sine: $\sin(3\pi i/N)$", "sine_loop_vector.png")
-    save_circuit(circuit, "sine_loop_circuit.png", scale=0.8)
+    N = 8; k = np.arange(N)
+    f = np.sin(1 * 2 * np.pi * k / N)
+    plot_vector(f, N, r"Sine: $\sin(2\pi i/N)$, $N=8$", "sine_loop_vector.png", smooth=True)
+    save_circuit(circuit, "sine_loop_circuit.png", scale=1.0)
 
 
 def sec51_example3():
@@ -157,39 +168,72 @@ def sec51_example3():
     print("\n--- Sec 5.1 Example 3: Damped sine (Shende fallback) ---")
     code = """
 import numpy as np
-N = 64
+N = 8
 x = np.linspace(0, 1, N)
-f = np.sin(3 * np.pi * x) * np.exp(-x)
+f = np.sin(3 * 2 * np.pi * x) * np.exp(-x)
 """
     with warnings.catch_warnings(record=True):
         warnings.simplefilter("always")
         circuit, info = encode_python(code)
     print_info("encode_python", info)
 
-    N = 64; x = np.linspace(0, 1, N)
-    f = np.sin(3 * np.pi * x) * np.exp(-x)
-    plot_vector(f, N, r"Damped sine: $\sin(3\pi x)e^{-x}$",
-                "damped_sine_vector.png")
-    save_shende_block(6, "damped_sine_circuit.png")
+    N = 8; x = np.linspace(0, 1, N)
+    f = np.sin(3 * 2 * np.pi * x) * np.exp(-x)
+    plot_vector(f, N, r"Damped sine: $\sin(6\pi x)e^{-x}$, $N=8$",
+                "damped_sine_vector.png", smooth=True)
+    save_shende_block(3, "damped_sine_circuit.png")
 
 
 # ===================================================================
 # Section 5.2: encode_vector examples
 # ===================================================================
 
-def sec52_example3():
-    """Multi-tone signal, auto-detect."""
-    print("\n--- Sec 5.2 Example 3: Multi-tone (encode_vector, auto) ---")
-    N = 64
-    k = np.arange(N)
-    f = 0.8 * np.sin(3 * np.pi * k / N) + 0.6 * np.sin(7 * np.pi * k / N)
+def sec52_uniform():
+    """Uniform vector, auto-detect."""
+    print("\n--- Sec 5.2: Uniform (encode_vector, auto) ---")
+    f = np.full(8, 3.0)
     circuit, info = encode_vector(f)
     print_info("encode_vector", info)
 
-    plot_vector(f, N, r"Multi-tone: $0.8\sin(3\pi i/N)+0.6\sin(7\pi i/N)$",
-                "multi_tone_vector.png")
-    save_shende_block(6, "multi_tone_circuit.png",
-                      label="Freq Prep\n+ QFT\n$\\mathcal{O}(m^2)$")
+    plot_vector(f, 8, r"Uniform: $f_i=3$, $N=8$", "uniform_vector.png")
+    save_circuit(circuit, "uniform_circuit.png", scale=0.6)
+
+
+def sec52_step():
+    """Step vector, auto-detect."""
+    print("\n--- Sec 5.2: Step (encode_vector, auto) ---")
+    N = 8
+    f = np.zeros(N); f[:4] = 2.0
+    circuit, info = encode_vector(f)
+    print_info("encode_vector", info)
+
+    plot_vector(f, N, r"Step: $f_{[:4]}=2$, $N=8$", "step_vector.png")
+    save_circuit(circuit, "step_circuit.png", scale=0.6)
+
+
+def sec52_square():
+    """Square vector, auto-detect."""
+    print("\n--- Sec 5.2: Square (encode_vector, auto) ---")
+    N = 8
+    f = np.zeros(N); f[4:8] = 1.0
+    circuit, info = encode_vector(f)
+    print_info("encode_vector", info)
+
+    plot_vector(f, N, r"Square: $f_{[4:8]}=1$, $N=8$", "square_vector.png")
+    save_circuit(circuit, "square_circuit.png", scale=0.6)
+
+
+def sec52_multi_discrete():
+    """Multi-discrete signal, auto-detect."""
+    print("\n--- Sec 5.2: Multi-discrete (encode_vector, auto) ---")
+    N = 8
+    f = np.zeros(N); f[1] = 3.0; f[6] = 4.0
+    circuit, info = encode_vector(f)
+    print_info("encode_vector", info)
+
+    plot_vector(f, N, r"Multi-discrete: $f_1=3,\;f_6=4$, $N=8$",
+                "multi_discrete_vector.png")
+    save_circuit(circuit, "multi_discrete_circuit.png", scale=1.0)
 
 
 # ===================================================================
@@ -197,53 +241,74 @@ def sec52_example3():
 # ===================================================================
 
 def sec53_example1a():
-    """DISCRETE(k=32, P=1.0), N=64."""
-    print("\n--- Sec 5.3 Example 1a: DISCRETE(k=32) ---")
-    circuit, info = encode_params(DISCRETE(k=32, P=1.0), N=64)
+    """DISCRETE(k=5, P=1.0), N=8."""
+    print("\n--- Sec 5.3 Example 1a: DISCRETE(k=5) ---")
+    circuit, info = encode_params(DISCRETE(k=5, P=1.0), N=8)
     print_info("encode_params", info)
 
-    f = np.zeros(64); f[32] = 1.0
-    plot_vector(f, 64, "Discrete: $f_{32}=1$", "params_discrete_vector.png")
-    save_circuit(circuit, "params_discrete_circuit.png", scale=0.8)
+    f = np.zeros(8); f[5] = 1.0
+    plot_vector(f, 8, "Discrete: $f_5=1$, $N=8$", "params_discrete_vector.png")
+    save_circuit(circuit, "params_discrete_circuit.png", scale=0.6)
 
 
-def sec53_example1b():
-    """SINE(n=3, A=2.0, phi=pi/4), N=64."""
-    print("\n--- Sec 5.3 Example 1b: SINE(n=3, phi=pi/4) ---")
-    circuit, info = encode_params(SINE(n=3, A=2.0, phi=np.pi/4), N=64)
+def sec53_sine():
+    """SINE(n=1, A=1.0), N=16."""
+    print("\n--- Sec 5.3: SINE(n=1) ---")
+    circuit, info = encode_params(SINE(n=1, A=1.0), N=16)
     print_info("encode_params", info)
 
-    N = 64; k = np.arange(N)
-    f = 2.0 * np.sin(3 * np.pi * k / N + np.pi / 4)
-    plot_vector(f, N, r"Sine: $2\sin(3\pi i/N + \pi/4)$",
-                "params_sine_vector.png")
-    save_circuit(circuit, "params_sine_circuit.png", scale=0.8)
+    N = 16; k = np.arange(N)
+    f = np.sin(1 * 2 * np.pi * k / N)
+    plot_vector(f, N, r"Sine: $\sin(2\pi i/N)$, $N=16$",
+                "params_sine_vector.png", smooth=True)
+    save_circuit(circuit, "params_sine_circuit.png", scale=1.0)
 
 
-def sec53_example2():
-    """Composite: [SINE(n=3), SINE(n=7), DISCRETE(k=32)]."""
-    print("\n--- Sec 5.3 Example 2: Composite ---")
-    # Build the composite vector for plotting
-    N = 64; k = np.arange(N)
-    f = (1.0 * np.sin(3 * np.pi * k / N)
-         + 0.5 * np.sin(7 * np.pi * k / N))
-    f[32] += 2.0
-
-    # Use encode_vector for the composite since encode_params
-    # with mixed types falls back to Shende
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        circuit, info = encode_params([
-            SINE(n=3, A=1.0),
-            SINE(n=7, A=0.5),
-            DISCRETE(k=32, P=2.0),
-        ], N=64)
+def sec53_cosine():
+    """COSINE(n=1, A=1.0), N=16."""
+    print("\n--- Sec 5.3: COSINE(n=1) ---")
+    circuit, info = encode_params(COSINE(n=1, A=1.0), N=16)
     print_info("encode_params", info)
 
+    N = 16; k = np.arange(N)
+    f = np.cos(1 * 2 * np.pi * k / N)
+    plot_vector(f, N, r"Cosine: $\cos(2\pi i/N)$, $N=16$",
+                "cosine_vector.png", smooth=True)
+    save_circuit(circuit, "cosine_circuit.png", scale=1.0)
+
+
+def sec53_multi_sine():
+    """MULTI_SINE."""
+    print("\n--- Sec 5.3: MULTI_SINE ---")
+    circuit, info = encode_params(
+        MULTI_SINE(modes=[SINE(n=1, A=2.0), SINE(n=3, A=1.0)]),
+        N=8,
+    )
+    print_info("encode_params", info)
+
+    N = 8; k = np.arange(N)
+    f = 2.0 * np.sin(2 * np.pi * 1 * k / N) + np.sin(2 * np.pi * 3 * k / N)
+    plot_vector(f, N, r"Multi-sine: $2\sin(2\pi i/N)+\sin(6\pi i/N)$, $N=8$",
+                "multi_sine_vector.png", smooth=True)
+    save_circuit(circuit, "multi_sine_circuit.png", scale=0.8)
+
+
+def sec53_composite():
+    """Multi-discrete via list: [DISCRETE(k=1), DISCRETE(k=6)]."""
+    print("\n--- Sec 5.3: Multi-discrete list ---")
+    N = 8
+
+    circuit, info = encode_params([
+            DISCRETE(k=1, P=3.0),
+            DISCRETE(k=6, P=4.0),
+        ], N=N)
+    print_info("encode_params", info)
+
+    f = np.zeros(N); f[1] = 3.0; f[6] = 4.0
     plot_vector(f, N,
-                r"Composite: sine + sine + discrete",
+                r"Multi-discrete: $f_1=3,\;f_6=4$, $N=8$",
                 "composite_vector.png")
-    save_shende_block(6, "composite_circuit.png")
+    save_circuit(circuit, "composite_circuit.png", scale=1.0)
 
 
 # ===================================================================
@@ -269,7 +334,7 @@ def sec61_hubbard():
     plot_vector(f, N_pauli,
                 r"Fermi-Hubbard: $t=1, U=4, L=8$",
                 "hubbard_vector.png")
-    save_shende_block(5, "hubbard_circuit.png")
+    save_circuit(circuit, "hubbard_circuit.png", scale=0.7)
 
 
 def sec62_poisson():
@@ -277,8 +342,8 @@ def sec62_poisson():
     print("\n--- Sec 6.2: 2D Poisson ---")
     N = 32; n_mode = 2; m_mode = 3
     k = np.arange(N)
-    u = np.sin(n_mode * np.pi * k / N)
-    v = np.sin(m_mode * np.pi * k / N)
+    u = np.sin(n_mode * 2 * np.pi * k / N)
+    v = np.sin(m_mode * 2 * np.pi * k / N)
     f_2d = np.outer(u, v)
 
     circ_x, info_x = encode_params(SINE(n=n_mode, A=1.0), N=N)
@@ -289,7 +354,7 @@ def sec62_poisson():
           f"total: {info_x.gate_count + info_y.gate_count} gates")
 
     plot_vector_2d(f_2d, N,
-                   r"$\sin(2\pi i/N)\sin(3\pi j/N)$",
+                   r"$\sin(4\pi i/N)\sin(6\pi j/N)$",
                    "poisson_vector.png")
     save_circuit(circuit, "poisson_circuit.png", scale=0.7)
 
@@ -297,10 +362,10 @@ def sec62_poisson():
 def sec63_finance():
     """Quantum finance: MULTI_DISCRETE for price distribution."""
     print("\n--- Sec 6.3: Quantum Finance ---")
-    N = 64
+    N = 8
     # Discretised distribution as weighted discrete vector
-    indices = [8, 16, 24, 32, 40, 48, 56]
-    weights = [0.05, 0.15, 0.25, 0.30, 0.15, 0.07, 0.03]
+    indices = [2, 4, 6]
+    weights = [0.25, 0.50, 0.25]
 
     circuit, info = encode_params(
         MULTI_DISCRETE(vectors=[
@@ -315,10 +380,10 @@ def sec63_finance():
     for k_i, w_i in zip(indices, weights):
         f[k_i] = w_i
     plot_vector(f, N,
-                "Price distribution (7 bins)",
+                "Price distribution (3 bins), $N=8$",
                 "finance_vector.png",
                 ylabel=r"$\sqrt{p_i}$")
-    save_circuit(circuit, "finance_circuit.png", scale=0.7, fold=10)
+    save_circuit(circuit, "finance_circuit.png", scale=1.0)
 
 
 # ===================================================================
@@ -393,12 +458,17 @@ if __name__ == "__main__":
     sec51_example3()
 
     # Section 5.2
-    sec52_example3()
+    sec52_uniform()
+    sec52_step()
+    sec52_square()
+    sec52_multi_discrete()
 
     # Section 5.3
     sec53_example1a()
-    sec53_example1b()
-    sec53_example2()
+    sec53_sine()
+    sec53_cosine()
+    sec53_multi_sine()
+    sec53_composite()
 
     # Section 6
     sec61_hubbard()

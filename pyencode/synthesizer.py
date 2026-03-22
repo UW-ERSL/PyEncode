@@ -11,6 +11,7 @@ derived from the structure of the load type.  Gate complexities:
   STEP_LOAD       :  O(m)       — H on lower qubits, conditional on upper bits
   SINUSOIDAL_LOAD :  O(m²)      — QFT-based, encodes sin(2πnk/N + φ)
   COSINE_LOAD     :  O(m²)      — QFT-based, encodes cos(2πnk/N + φ)
+
   MULTI_POINT_LOAD             :  O(m · L)      — binary-tree Ry, arbitrary weights
   MULTI_SIN_LOAD          :  O(m²)      — QFT + multi-amplitude encoding
   UNIFORM_SPIKE_LOAD          :  O(m)       — H^{⊗m} + multi-controlled Ry perturbation
@@ -241,10 +242,10 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_sinusoidal(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare (1/‖f‖) Σ_k sin(n π k / N + φ) |k⟩ using the quantum Fourier
+    Prepare (1/‖f‖) Σ_k sin(2π n k / N + φ) |k⟩ using the quantum Fourier
     transform.
 
-    The DFT of sin(n π k / N + φ) is a pair of delta functions at
+    The DFT of sin(2π n k / N + φ) is a pair of delta functions at
     frequencies ±n with complex amplitudes e^{±iφ}.  We:
       1. Prepare the frequency-domain state
              (e^{iφ}|n⟩ - e^{-iφ}|N-n⟩) / √2
@@ -577,7 +578,7 @@ def _synth_multi_sin_load(m: int, params: dict) -> QuantumCircuit:
     """
     Prepare a superposition of multiple sinusoidal modes.
 
-    Strategy: the DFT of sum_t A_t sin(n_t pi k/N) has 2T nonzero
+    Strategy: the DFT of sum_t A_t sin(2pi n_t k/N) has 2T nonzero
     entries at frequencies {n_t, N-n_t} with equal magnitudes |A_t|/2
     and phases -pi/2 (pos freq) and +pi/2 (neg freq).
 

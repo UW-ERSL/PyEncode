@@ -183,7 +183,7 @@ exploits this structure, wherever and however it is expressed.
 \vspace{4pt}
 
 For example, a sinusoidal source term on $N = 2^m$ nodes,
-written as \texttt{f = np.sin(np.pi * x / L)}, produces
+written as \texttt{f = np.sin(2*np.pi * x / L)}, produces
 an $N$-vector that general state preparation treats as an
 opaque array, applying a generic $\bigO{2^m}$-gate procedure
 and discarding the sine structure entirely. PyEncode
@@ -323,21 +323,21 @@ A fundamental design question for any structured amplitude encoding framework is
 \textbf{Pure Python-Based Encoding.}
 The most natural interface is to accept Python code directly and infer the vector type from the abstract syntax tree (AST) \cite{aho2006}. This requires no user annotation, but the recognizer matches specific code idioms. For example, we can design the analyzer to recognize a vectorized NumPy sine expression (the first instance below). But, the recognizer will not automatically recognize the sine pattern written as a \texttt{for} loop, or expressed as a list, i.e., we have to fall back to Shende's $\bigO{2^m}$ circuit.  Python's expressiveness means the space of syntactically distinct but semantically equivalent programs is unbounded; extending the recognizer to cover every idiom is an open-ended task.
 \begin{lstlisting}[style=python]
-f = np.sin(np.pi * x)
+f = np.sin(2*np.pi * x)
 for i in range(N):
-    f[i] = np.sin(np.pi*i/N)
-f = np.array([np.sin(np.pi*i/N) for i in range(N)])
-f = np.cos(np.pi * x - np.pi / 2)
+    f[i] = np.sin(2*np.pi*i/N)
+f = np.array([np.sin(2*np.pi*i/N) for i in range(N)])
+f = np.cos(2*np.pi * x - np.pi / 2)
 \end{lstlisting}
 
 
 \textbf{Pure Vector-Based Encoding}
 A natural alternative is to execute the code, obtain $\mathbf{f}$, and classify based on the vector alone. This appears tractable --- a sine vector has a sparse DFT, a discrete has a single nonzero entry --- but the inverse problem is unfortunately ill-posed. Consider:
 \begin{lstlisting}[style=python]
-f = np.sin(3*np.pi*x + np.pi/4)        # pure sinusoid
-f = np.sin(3*np.pi*x) + 0.1            # DC offset: different circuit
-f = np.sin(3*np.pi*x) * np.exp(-x)     # damped: DFT no longer sparse
-f = np.sin(3*np.pi*x) + np.sin(5*np.pi*x)  # two modes: different class
+f = np.sin(3*2*np.pi*x + np.pi/4)      # pure sinusoid
+f = np.sin(3*2*np.pi*x) + 0.1          # DC offset: different circuit
+f = np.sin(3*2*np.pi*x) * np.exp(-x)   # damped: DFT no longer sparse
+f = np.sin(3*2*np.pi*x) + np.sin(5*2*np.pi*x)  # two modes: different class
 \end{lstlisting}
 The DFT of the first vector has exactly two nonzero coefficients, from which frequency and phase are recovered unambiguously. The remaining three have DFTs that are shifted, spread, or multi-peaked. More fundamentally, \emph{the efficient circuit depends on the generating structure of $\mathbf{f}$, not just its values}: two numerically close vectors may require entirely different circuits, and classification from values alone cannot recover this structural information.
 
@@ -399,7 +399,7 @@ coefficient vector of the Fermi-Hubbard model.
 Pure sinusoidal vector with frequency $n$, amplitude $A$,
 and phase $\varphi$:
 \[
-  f_i = A\sin\!\left(\frac{n\pi i}{N} + \varphi\right)
+  f_i = A\sin\!\left(\frac{2\pi n i}{N} + \varphi\right)
 \]
 Constructor: \texttt{SINE(n, A, phi=0)}.
 Circuit complexity: $\mathcal{O}(m^2)$ via the Quantum
@@ -410,7 +410,7 @@ Fourier component in signal processing.
 \subsection*{Cosine}
 Pure cosinusoidal vector:
 \[
-  f_i = A\cos\!\left(\frac{n\pi i}{N} + \varphi\right)
+  f_i = A\cos\!\left(\frac{2\pi n i}{N} + \varphi\right)
 \]
 Constructor: \texttt{COSINE(n, A, phi=0)}.
 Circuit complexity: $\mathcal{O}(m^2)$.
@@ -435,7 +435,7 @@ sparse states.
 Superposition of $T$ pure sinusoidal modes:
 \[
   f_i = \sum_{t=1}^{T} A_t \sin\!\left(
-        \frac{n_t \pi i}{N} + \varphi_t\right)
+        \frac{2\pi n_t i}{N} + \varphi_t\right)
 \]
 Constructor:
 \texttt{MULTI\_SINE(modes=[SINE(...), ...])}.
@@ -458,10 +458,10 @@ Discrete         & \texttt{DISCRETE(k,P)}          & $P\delta_{ik}$             
 Uniform          & \texttt{UNIFORM(c)}              & $c$                                   & $\mathcal{O}(m)$   \\
 Step             & \texttt{STEP(k\_s,c)}            & $c\,\mathbf{1}[i \geq k_s]$          & $\mathcal{O}(m)$   \\
 Square           & \texttt{SQUARE(k1,k2,c)}         & $c\,\mathbf{1}[k_1\leq i<k_2]$       & $\mathcal{O}(m)$   \\
-Sine             & \texttt{SINE(n,A,phi)}           & $A\sin(n\pi i/N+\varphi)$             & $\mathcal{O}(m^2)$ \\
-Cosine           & \texttt{COSINE(n,A,phi)}         & $A\cos(n\pi i/N+\varphi)$             & $\mathcal{O}(m^2)$ \\
+Sine             & \texttt{SINE(n,A,phi)}           & $A\sin(2\pi n i/N+\varphi)$           & $\mathcal{O}(m^2)$ \\
+Cosine           & \texttt{COSINE(n,A,phi)}         & $A\cos(2\pi n i/N+\varphi)$           & $\mathcal{O}(m^2)$ \\
 Multi-discrete   & \texttt{MULTI\_DISCRETE(...)}    & $\sum_j P_j\delta_{ik_j}$             & $\mathcal{O}(|S|m)$\\
-Multi-sine       & \texttt{MULTI\_SINE(...)}        & $\sum_t A_t\sin(n_t\pi i/N+\varphi_t)$ & $\mathcal{O}(m^2)$ \\
+Multi-sine       & \texttt{MULTI\_SINE(...)}        & $\sum_t A_t\sin(2\pi n_t i/N+\varphi_t)$ & $\mathcal{O}(m^2)$ \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -513,9 +513,9 @@ constructing the vector:
 from pyencode import encode_python
 
 code = """
-N = 64
+N = 8
 f = np.zeros(N)
-f[20] = 1.0
+f[3] = 1.0
 """
 
 circuit, info = encode_python(code)
@@ -524,9 +524,9 @@ circuit, info = encode_python(code)
 \end{lstlisting}
 
 \loadfigs{discrete_vector.png}{discrete_circuit.png}
-  {Discrete vector: $f_{20}=1$, $N=64$}
+  {Discrete vector: $f_3=1$, $N=8$}
   {unused}
-  {1.0}{sec5_discrete}
+  {0.4}{sec5_discrete}
 
 
 \textbf{Example 2: Loop syntax with hint.}
@@ -538,10 +538,10 @@ classical validation is performed before synthesis:
 \begin{lstlisting}[style=python]
 code = """
 import numpy as np
-N = 64
+N = 8
 f = np.zeros(N)
 for i in range(N):
-    f[i] = np.sin(3 * np.pi * i / N)
+    f[i] = np.sin(1 * 2*np.pi * i / N)
 """
 
 circuit, info = encode_python(
@@ -550,37 +550,36 @@ circuit, info = encode_python(
 \end{lstlisting}
 
 \loadfigs{sine_loop_vector.png}{sine_loop_circuit.png}
-  {Sine vector: $\sin(3\pi i/N)$, $N=64$}
+  {Sine vector: $\sin(2\pi i/N)$, $N=8$}
   {unused}
   {1.0}{sec5_sine_loop}
 
-\textbf{Example 3: Checking for Shende fallback.}
+\textbf{Example 3: Shende fallback.}
 When the pattern is not recognised and no hint is
-provided, PyEncode falls back to Shende's general
-preparation and issues a warning. The \texttt{info}
-object allows the caller to detect this
-programmatically:
+provided, PyEncode automatically falls back to
+Shende's general preparation and issues a warning.
+The \texttt{info} object allows the caller to detect
+this programmatically via the complexity field:
 \begin{lstlisting}[style=python]
-import warnings
-
 code = """
 import numpy as np
-N = 64
+N = 8
 x = np.linspace(0, 1, N)
-f = np.sin(3*np.pi*x) * np.exp(-x)
+f = np.sin(3*2*np.pi*x) * np.exp(-x)
 """
 
 circuit, info = encode_python(code)
-if info.complexity == "O(2^m)":
-    warnings.warn(
-        f"Shende fallback: gate count "
-        f"{info.gate_count} for N=64")
+# PyEncode warns: "pattern not recognised...
+#   falling back to Shende's O(2^m)..."
+
+print(info.complexity)   # "O(2^m)"
+print(info.gate_count)   # 11
 \end{lstlisting}
 
 The damped sinusoid is not in PyEncode's pattern
-library; the warning alerts the user that the
-exponential-cost circuit was used and invites them
-to either supply a \texttt{vector\_type} hint or
+library; the automatic warning alerts the user that
+the exponential-cost circuit was used and invites
+them to either supply a \texttt{vector\_type} hint or
 switch to \texttt{encode\_vector}.
 
 \subsection{NumPy Vector: \texttt{encode\_vector}}
@@ -590,63 +589,83 @@ When \texttt{encode\_vector} is called without a declared type, PyEncode attempt
 
 A subtlety arises with sine and cosine vectors: since $\cos(x) \equiv \sin(x + \pi/2)$, the sine extractor always matches cosine vectors with phase $\varphi \approx \pi/2$. PyEncode disambiguates by trying both fits and preferring whichever form has $|\varphi|$ closer to zero --- the canonical representation.
 
-\textbf{Example 1: Auto-detection, unknown source.}
-A FEM-assembled vector passed directly. PyEncode tries
-each extractor in preference order and returns the
-best-matching pattern without the user needing to know
-PyEncode's vocabulary:
-\begin{lstlisting}[style=python]
-from pyencode import encode_vector
-
-f = assemble_vector(mesh)   # any FEM assembler
-circuit, info = encode_vector(f)
-print(info.vector_type)   # e.g. "SINE"
-print(info.complexity)    # e.g. "O(m^2)"
-\end{lstlisting}
-If no pattern matches, a \texttt{ValueError} is raised
-rather than silently falling back, prompting the user
-to switch to general state preparation explicitly.
-
-\textbf{Example 2: Declared type with verification.}
-The user believes the assembled vector is sinusoidal
-and requests a guarantee before synthesis. PyEncode
-fits frequency and phase from $\mathbf{f}$, verifies
-the residual, and raises an informative error if the
-check fails:
-\begin{lstlisting}[style=python]
-circuit, info = encode_vector(
-    f, vector_type="SINE")
-# classical validation:
-# ||f_hat - f_recon|| < 1e-6  -> synthesise
-# otherwise -> informative error
-\end{lstlisting}
-This is the \emph{correct by construction} path: a
-circuit is produced only when $\mathbf{f}$ provably
-matches the declared pattern.
-
-\textbf{Example 3: Multi-tone signal.}
-A signal processing application: a superposition of
-two pure tones sampled on $N$ points is passed as a
-vector. PyEncode's auto-detector tries the
-\texttt{MULTI\_SINE} extractor, fits the two
-frequencies and amplitudes, verifies the residual,
-and returns an $\bigO{m^2}$ circuit:
+\textbf{Example 1: Uniform vector.}
+All entries equal. PyEncode auto-detects the
+\texttt{UNIFORM} pattern and produces $m$ Hadamard gates:
 \begin{lstlisting}[style=python]
 from pyencode import encode_vector
 import numpy as np
 
-N = 64
-k = np.arange(N)
-f = 0.8*np.sin(3*np.pi*k/N) + 0.6*np.sin(7*np.pi*k/N)
-
+f = np.full(8, 3.0)
 circuit, info = encode_vector(f)
-# info.vector_type  -> "MULTI_SINE"
-# info.complexity   -> "O(m^2)"
+# info.vector_type -> "UNIFORM"
+# info.gate_count  -> 3
 \end{lstlisting}
 
-The same circuit would require $\bigO{2^m}$
-gates under Shende's general preparation for $N=64$;
-PyEncode produces it in $\bigO{m^2}$ gates.
+\loadfigs{uniform_vector.png}{uniform_circuit.png}
+  {Uniform: $f_i=3$, $N=8$}
+  {unused}
+  {0.4}{sec5_uniform}
+
+\textbf{Example 2: Step vector.}
+A prefix of constant values followed by zeros.
+Detected as \texttt{STEP}:
+\begin{lstlisting}[style=python]
+f = np.zeros(8); f[:4] = 2.0
+circuit, info = encode_vector(f)
+# info.vector_type -> "STEP"
+# info.gate_count  -> 2
+\end{lstlisting}
+
+\loadfigs{step_vector.png}{step_circuit.png}
+  {Step: $f_{[:4]}=2$, $N=8$}
+  {unused}
+  {0.4}{sec5_step}
+
+\textbf{Example 3: Square vector.}
+A contiguous block of constant values.
+Detected as \texttt{SQUARE}:
+\begin{lstlisting}[style=python]
+f = np.zeros(8); f[4:8] = 1.0
+circuit, info = encode_vector(f)
+# info.vector_type -> "SQUARE"
+# info.gate_count  -> 3
+\end{lstlisting}
+
+\loadfigs{square_vector.png}{square_circuit.png}
+  {Square: $f_{[4:8]}=1$, $N=8$}
+  {unused}
+  {0.4}{sec5_square}
+
+\textbf{Example 4: Multi-discrete auto-detection.}
+A sparse vector with two nonzero entries.
+PyEncode identifies the \texttt{MULTI\_DISCRETE}
+pattern and returns an $\bigO{|S|\,m}$ circuit:
+\begin{lstlisting}[style=python]
+f = np.zeros(8)
+f[1] = 3.0; f[6] = 4.0
+circuit, info = encode_vector(f)
+# info.vector_type -> "MULTI_DISCRETE"
+# info.gate_count  -> 5
+\end{lstlisting}
+
+\loadfigs{multi_discrete_vector.png}{multi_discrete_circuit.png}
+  {Multi-discrete: $f_1=3,\;f_6=4$, $N=8$ (auto-detected)}
+  {unused}
+  {1.0}{sec5_multi_discrete}
+
+\textbf{Example 5: Declared type with verification.}
+When the user provides a \texttt{vector\_type} hint,
+PyEncode extracts parameters for that type only and
+verifies the match. If the vector does not match,
+an informative error is raised rather than silently
+falling back:
+\begin{lstlisting}[style=python]
+circuit, info = encode_vector(
+    f, vector_type="SINE")
+# ||f_hat - f_recon|| < 1e-6 -> synthesise
+# otherwise -> informative error
+\end{lstlisting}
 
 \subsection{Parameters: \texttt{encode\_params}}
 \label{sec:params}
@@ -654,8 +673,8 @@ PyEncode produces it in $\bigO{m^2}$ gates.
 \texttt{encode\_params} is the most robust entry point
 and the only one viable at quantum scale. The user
 passes a typed constructor object --- such as
-\texttt{SINE(n=3, A=1.0)} or
-\texttt{DISCRETE(k=32, P=1.0)} --- together with the
+\texttt{SINE(n=1, A=1.0)} or
+\texttt{DISCRETE(k=5, P=1.0)} --- together with the
 vector length $N$. No code is parsed and no vector is
 ever materialised. Constructor names match
 \texttt{VectorType} enum values; missing or misspelled
@@ -690,41 +709,58 @@ from pyencode import DISCRETE, SINE, COSINE
 from pyencode import UNIFORM, SQUARE, STEP
 from pyencode import MULTI_DISCRETE, MULTI_SINE
 
-# Basis vector at index 32
+# Basis vector at index 5
 circuit, info = encode_params(
-    DISCRETE(k=32, P=1.0), N=64)
+    DISCRETE(k=5, P=1.0), N=8)
 # info.complexity -> "O(m)"
-# info.gate_count -> 1
+# info.gate_count -> 2
 \end{lstlisting}
 
 \loadfigs{params_discrete_vector.png}{params_discrete_circuit.png}
-  {Discrete: $f_{32}=1$, $N=64$}
+  {Discrete: $f_5=1$, $N=8$}
   {unused}
-  {1.0}{sec5_params_discrete}
+  {0.4}{sec5_params_discrete}
 
 \begin{lstlisting}[style=python]
-# Sinusoidal with phase
+# Sinusoidal mode
 circuit, info = encode_params(
-    SINE(n=3, A=2.0, phi=np.pi/4), N=64)
+    SINE(n=1, A=1.0), N=16)
 # info.complexity -> "O(m^2)"
 \end{lstlisting}
 
 \loadfigs{params_sine_vector.png}{params_sine_circuit.png}
-  {Sine: $2\sin(3\pi i/N + \pi/4)$, $N=64$}
+  {Sine: $\sin(2\pi i/N)$, $N=16$}
   {unused}
   {1.0}{sec5_params_sine}
 
+\begin{lstlisting}[style=python]
+# Cosine mode
+circuit, info = encode_params(
+    COSINE(n=1, A=1.0), N=16)
+# info.complexity -> "O(m^2)"
+\end{lstlisting}
+
+\loadfigs{cosine_vector.png}{cosine_circuit.png}
+  {Cosine: $\cos(2\pi i/N)$, $N=16$}
+  {unused}
+  {1.0}{sec5_cosine}
+
 \textbf{Example 2: Composite vector.}
-A superposition of two sine modes and a discrete vector, expressed as a list of
-constructor objects. Each component is synthesized
-independently:
+A list of constructor objects is passed directly.
+When all components share a type, PyEncode uses
+the corresponding multi-type synthesiser:
 \begin{lstlisting}[style=python]
 circuit, info = encode_params([
-    SINE(n=3, A=1.0),
-    SINE(n=7, A=0.5),
-    DISCRETE(k=32, P=2.0),
-], N=64)
+    DISCRETE(k=1, P=3.0),
+    DISCRETE(k=6, P=4.0),
+], N=8)
+# info.vector_type -> "MULTI_DISCRETE"
 \end{lstlisting}
+
+\loadfigs{composite_vector.png}{composite_circuit.png}
+  {Multi-discrete: $f_1=3,\;f_6=4$, $N=8$}
+  {unused}
+  {1.0}{sec5_composite}
 
 \textbf{Example 3: Statevector validation.}
 For development use, \texttt{validate=True}
@@ -737,7 +773,7 @@ available for \texttt{encode\_params} since no
 classical vector exists before synthesis:
 \begin{lstlisting}[style=python]
 circuit, info = encode_params(
-    SINE(n=3, A=1.0), N=64,
+    SINE(n=1, A=1.0), N=16,
     validate=True, tol=1e-6)
 # info.validated -> True
 \end{lstlisting}
@@ -848,6 +884,11 @@ circuit, info = encode_params([
 ], N=4*L)
 \end{lstlisting}
 
+\loadfigs{hubbard_vector.png}{hubbard_circuit.png}
+  {Fermi-Hubbard PREP coefficients ($t\!=\!1$, $U\!=\!4$, $L\!=\!8$)}
+  {unused}
+  {1.0}{sec6_hubbard}
+
 This yields an $\bigO{m}$ PREP circuit with
 $m = \lceil\log_2 4L\rceil$ qubits.
 
@@ -872,21 +913,20 @@ estimation~\cite{babbush2018}.
 The Poisson equation $-\nabla^2 u = f$ on the unit square
 with a separable sinusoidal source,
 \begin{equation}
-  f(x,y) = \sin(n\pi x)\sin(m\pi y),
+  f(x,y) = \sin(2\pi n x)\sin(2\pi p y),
 \end{equation}
-arises as the canonical test problem in elliptic PDE
-solvers and as an exact eigenfunction of the Laplacian
-under Dirichlet boundary conditions~\cite{strang2007}.
+arises naturally in elliptic PDE
+solvers when the source term is periodic~\cite{strang2007}.
 After discretisation on an $N\times N$ grid, the
 right-hand side vector has entries
-$f_{ij} = \sin(n\pi i/N)\sin(m\pi j/N)$ and length $N^2$.
+$f_{ij} = \sin(2\pi n i/N)\sin(2\pi p j/N)$ and length $N^2$.
 
 The key structural observation is that $\mathbf{f}$ is a
 tensor product:
 \begin{equation}
   \mathbf{f} = \mathbf{u} \otimes \mathbf{v}, \qquad
-  u_i = \sin(n\pi i/N), \quad
-  v_j = \sin(m\pi j/N).
+  u_i = \sin(2\pi n i/N), \quad
+  v_j = \sin(2\pi p j/N).
 \end{equation}
 A tensor product of two normalised states is a product
 state on the qubit register, so the $2m$-qubit encoding
@@ -906,7 +946,7 @@ circuit = circ_x.tensor(circ_y)
 \end{lstlisting}
 
 \loadfigs{poisson_vector.png}{poisson_circuit.png}
-  {2D Poisson source: $\sin(2\pi i/N)\sin(3\pi j/N)$}
+  {2D Poisson source: $\sin(4\pi i/N)\sin(6\pi j/N)$, $N=32$}
   {unused}
   {1.0}{sec6_poisson}
 
@@ -947,7 +987,7 @@ circuit, info = encode_params(
 \end{lstlisting}
 
 \loadfigs{finance_vector.png}{finance_circuit.png}
-  {Price distribution as MULTI\_DISCRETE ($|S|\!=\!7$, $N\!=\!64$)}
+  {Price distribution as MULTI\_DISCRETE ($|S|\!=\!3$, $N\!=\!8$)}
   {unused}
   {1.0}{sec6_finance}
 
