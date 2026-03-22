@@ -785,48 +785,49 @@ at large $N$.
 % ----------------------------------------------------------------
 \section{Gate Count}
 \label{sec:gateCount}
-Table~\ref{tab:gatecounts} summarizes primitive gate counts at
-$N = 64$ ($m = 6$ qubits), after transpilation to
-$\{$CX, U, X, H$\}$. The Shende column applies
-\texttt{StatePreparation}~\cite{shende2006} to the \emph{same}
-vector as PyEncode in each row.
+Table~\ref{tab:gatecounts} summarizes gate counts at
+$N = 64$ ($m = 6$ qubits). The ``raw'' columns show gate
+counts directly from PyEncode's synthesiser and from Qiskit's
+\texttt{StatePreparation}~\cite{shende2006} (applied to the same
+vector). The ``transpiled'' columns show the counts after
+Qiskit transpilation to $\{$CX, U, X, H$\}$ at
+optimisation level~2; transpilation further reduces PyEncode's
+circuits but cannot improve Shende's already-optimal decomposition.
 
 \begin{table}[ht]
 \centering
-\caption{Primitive gate counts at $N=64$ ($m=6$), after
-transpilation to $\{CX, U, X, H\}$ via Qiskit at
-optimisation level~2. The Shende column applies
-\texttt{StatePreparation}~\cite{shende2006} to the same
-vector as PyEncode in each row.}
+\caption{Gate counts at $N=64$ ($m=6$). Raw: direct output
+of each synthesiser. Transpiled: after Qiskit transpilation
+to $\{CX, U, X, H\}$ at optimisation level~2.}
 \label{tab:gatecounts}
-\setlength{\tabcolsep}{3pt}
+\setlength{\tabcolsep}{2.5pt}
 \renewcommand{\arraystretch}{1.15}
-\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}lrlrl@{}}
+\begin{tabular*}{\columnwidth}{@{\extracolsep{\fill}}lrrrlrl@{}}
 \toprule
- & \multicolumn{2}{c}{\textbf{PyEncode}}
- & \multicolumn{2}{c}{\textbf{Shende}} \\
-\cmidrule(lr){2-3}\cmidrule(lr){4-5}
-\textbf{Pattern} & Gates & $\mathcal{O}(\cdot)$
-                 & Gates & $\mathcal{O}(\cdot)$ \\
+ & \multicolumn{3}{c}{\textbf{PyEncode}}
+ & & \multicolumn{2}{c}{\textbf{Shende}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){6-7}
+\textbf{Pattern} & Raw & Transp. & $\mathcal{O}(\cdot)$
+                 & & Gates & $\mathcal{O}(\cdot)$ \\
 \midrule
 Discrete ($k\!=\!20$)
-    &   2 & $\mathcal{O}(m)$    &  18 & $\mathcal{O}(2^m)$ \\
+    &   2 &   2 & $\mathcal{O}(m)$    & &  18 & $\mathcal{O}(2^m)$ \\
 Uniform
-    &   6 & $\mathcal{O}(m)$    &   6 & $\mathcal{O}(2^m)$ \\
+    &   6 &   6 & $\mathcal{O}(m)$    & &   6 & $\mathcal{O}(2^m)$ \\
 Step ($k_s\!=\!4$)
-    &   2 & $\mathcal{O}(m)$    &  62 & $\mathcal{O}(2^m)$ \\
+    &   2 &   2 & $\mathcal{O}(m)$    & &  62 & $\mathcal{O}(2^m)$ \\
 Square ($[8,16)$)
-    &   4 & $\mathcal{O}(m)$    &  52 & $\mathcal{O}(2^m)$ \\
+    &   4 &   4 & $\mathcal{O}(m)$    & &  52 & $\mathcal{O}(2^m)$ \\
 Sin ($n\!=\!1$, $\varphi\!=\!0$)
-    & 100 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+    & 100 &  73 & $\mathcal{O}(m^2)$  & & 120 & $\mathcal{O}(2^m)$ \\
 Sin ($n\!=\!3$, $\varphi\!=\!\pi/4$)
-    & 102 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+    & 102 &  75 & $\mathcal{O}(m^2)$  & & 120 & $\mathcal{O}(2^m)$ \\
 Cos ($n\!=\!1$, $\varphi\!=\!0$)
-    & 100 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+    & 100 &  73 & $\mathcal{O}(m^2)$  & & 120 & $\mathcal{O}(2^m)$ \\
 Cos ($n\!=\!3$, $\varphi\!=\!\pi/4$)
-    & 102 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+    & 102 &  75 & $\mathcal{O}(m^2)$  & & 120 & $\mathcal{O}(2^m)$ \\
 Multi-discrete ($|S|\!=\!2$)
-    &   9 & $\mathcal{O}(|S|m)$ &  42 & $\mathcal{O}(2^m)$ \\
+    &   9 &   6 & $\mathcal{O}(|S|m)$ & &  42 & $\mathcal{O}(2^m)$ \\
 \bottomrule
 \end{tabular*}
 \end{table}
