@@ -11,6 +11,7 @@ derived from the structure of the load type.  Gate complexities:
   STEP_LOAD       :  O(m)       — H on lower qubits, conditional on upper bits
   SINUSOIDAL_LOAD :  O(m²)      — QFT-based, encodes sin(2πnk/N + φ)
   COSINE_LOAD     :  O(m²)      — QFT-based, encodes cos(2πnk/N + φ)
+
   MULTI_POINT_LOAD             :  O(m · L)      — binary-tree Ry, arbitrary weights
   MULTI_SIN_LOAD          :  O(m²)      — QFT + multi-amplitude encoding
   UNIFORM_SPIKE_LOAD          :  O(m)       — H^{⊗m} + multi-controlled Ry perturbation
@@ -32,7 +33,7 @@ from typing import Optional
 
 from qiskit import QuantumCircuit, QuantumRegister
 
-from .recognizer import LoadPattern, LoadType
+from .recognizer import LoadPattern, VectorType
 
 
 # ---------------------------------------------------------------------------
@@ -66,16 +67,16 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        LoadType.POINT_LOAD:        _synth_point_load,
-        LoadType.UNIFORM_LOAD:      _synth_uniform_load,
-        LoadType.STEP_LOAD:         _synth_step_load,
-        LoadType.SQUARE_LOAD:       _synth_square_load,
-        LoadType.SINUSOIDAL_LOAD:   _synth_sinusoidal,
-        LoadType.COSINE_LOAD:       _synth_cosine,
-        LoadType.MULTI_POINT_LOAD:  _synth_disjoint_point_load,
-        LoadType.MULTI_SIN_LOAD:    _synth_multi_sin_load,
-        LoadType.UNIFORM_SPIKE_LOAD: _synth_uniform_spike_load,
-        LoadType.UNKNOWN:           _synth_mottonen,
+        VectorType.DISCRETE:        _synth_point_load,
+        VectorType.UNIFORM:      _synth_uniform_load,
+        VectorType.STEP:         _synth_step_load,
+        VectorType.SQUARE:       _synth_square_load,
+        VectorType.SINE:   _synth_sinusoidal,
+        VectorType.COSINE:       _synth_cosine,
+        VectorType.MULTI_DISCRETE:  _synth_disjoint_point_load,
+        VectorType.MULTI_SINE:    _synth_multi_sin_load,
+        VectorType.UNIFORM_SPIKE: _synth_uniform_spike_load,
+        VectorType.UNKNOWN:           _synth_mottonen,
     }
 
     fn = dispatch.get(pattern.load_type, _synth_mottonen)
@@ -241,10 +242,10 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_sinusoidal(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare (1/‖f‖) Σ_k sin(n π k / N + φ) |k⟩ using the quantum Fourier
+    Prepare (1/‖f‖) Σ_k sin(2π n k / N + φ) |k⟩ using the quantum Fourier
     transform.
 
-    The DFT of sin(n π k / N + φ) is a pair of delta functions at
+    The DFT of sin(2π n k / N + φ) is a pair of delta functions at
     frequencies ±n with complex amplitudes e^{±iφ}.  We:
       1. Prepare the frequency-domain state
              (e^{iφ}|n⟩ - e^{-iφ}|N-n⟩) / √2
@@ -577,39 +578,50 @@ def _synth_multi_sin_load(m: int, params: dict) -> QuantumCircuit:
     """
     Prepare a superposition of multiple sinusoidal modes.
 
-    Strategy: encode all frequency-domain amplitudes, then apply QFT†.
-    The frequency-domain state has support at frequencies {±n_1, ±n_2, ...}.
+    Strategy: the DFT of sum_t A_t sin(2pi n_t k/N) has 2T nonzero
+    entries at frequencies {n_t, N-n_t} with equal magnitudes |A_t|/2
+    and phases -pi/2 (pos freq) and +pi/2 (neg freq).
 
-    Gate count: O(m²) dominated by QFT.
+    1. Use the Ry-tree point load synthesiser to prepare the
+       magnitude distribution over the 2T frequency entries.
+    2. Apply Z on the MSB to encode the relative phase between
+       positive (MSB=0) and negative (MSB=1) frequencies.
+    3. Apply QFT to transform frequency -> spatial domain.
+
+    Gate count: O(T*m) for Ry tree + O(m^2) for QFT = O(m^2).
+
+    Requires all mode frequencies n_t < N/2 (standard assumption).
     """
     modes = params["modes"]  # list of {"A": amplitude, "n": mode}
     N     = 2 ** m
 
     qc = QuantumCircuit(m, name="multi_sin_load")
 
-    # Build the target frequency-domain amplitude vector
-    freq_amps = np.zeros(N, dtype=complex)
+    # Build frequency-domain point loads (magnitudes only)
+    freq_loads = []
     for mode in modes:
         n = mode["n"]
-        A = mode["A"]
+        A = abs(mode["A"])
         if 0 < n < N:
-            freq_amps[n]   += A / (2j)    # positive frequency
-            freq_amps[N-n] -= A / (2j)    # negative frequency (conjugate)
+            freq_loads.append({"k": n,     "P": A})
+            freq_loads.append({"k": N - n, "P": A})
 
-    # Normalise
-    norm = np.linalg.norm(freq_amps)
-    if norm < 1e-12:
+    if not freq_loads:
         raise ValueError("All mode amplitudes are zero.")
-    freq_amps /= norm
 
-    # Prepare the frequency-domain state using Möttönen on the freq vector
-    # then apply QFT to get spatial domain
-    freq_circuit = _mottonen_from_vector(freq_amps, m)
+    # Step 1: Ry-tree to prepare magnitude distribution
+    freq_circuit = _synth_disjoint_point_load(m, {"loads": freq_loads})
     qc.compose(freq_circuit, inplace=True)
 
+    # Step 2: Phase correction — Z on MSB gives relative phase pi
+    # between positive-freq entries (MSB=0, n_t < N/2) and
+    # negative-freq entries (MSB=1, N-n_t >= N/2).
+    # This encodes the sin antisymmetry: (|n> - |N-n>)/sqrt(2).
+    qc.z(m - 1)
+
+    # Step 3: QFT to transform frequency -> spatial domain
     from qiskit.circuit.library import QFTGate
-    qft_gate = QFTGate(num_qubits=m)
-    qc.append(qft_gate, qargs=list(range(m)))
+    qc.append(QFTGate(num_qubits=m), qargs=list(range(m)))
 
     return qc
 

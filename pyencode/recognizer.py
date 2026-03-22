@@ -38,17 +38,20 @@ from typing import Optional
 # Data structures
 # ---------------------------------------------------------------------------
 
-class LoadType(Enum):
-    POINT_LOAD      = auto()
-    UNIFORM_LOAD    = auto()
-    STEP_LOAD       = auto()
-    SQUARE_LOAD     = auto()   # f[k1:k2] = c  (interior segment)
-    SINUSOIDAL_LOAD = auto()
-    COSINE_LOAD     = auto()
-    MULTI_POINT_LOAD   = auto()   # L >= 2 point loads, arbitrary weights
-    MULTI_SIN_LOAD  = auto()   # sum of sinusoidal modes
-    UNIFORM_SPIKE_LOAD = auto()   # uniform + point perturbation
+class VectorType(Enum):
+    DISCRETE        = auto()
+    UNIFORM         = auto()
+    STEP            = auto()
+    SQUARE          = auto()   # f[k1:k2] = c  (interior segment)
+    SINE            = auto()
+    COSINE          = auto()
+    MULTI_DISCRETE  = auto()   # L >= 2 point loads, arbitrary weights
+    MULTI_SINE      = auto()   # sum of sinusoidal modes
+    UNIFORM_SPIKE   = auto()   # uniform + point perturbation (internal)
     UNKNOWN         = auto()   # fallback to Mottonen
+
+# Backward-compatible alias
+LoadType = VectorType
 
 
 @dataclass
@@ -84,7 +87,7 @@ def recognise(code: str) -> LoadPattern:
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return LoadPattern(LoadType.UNKNOWN, N=0)
+        return LoadPattern(VectorType.UNKNOWN, N=0)
 
     ctx = _ExecutionContext(code)
 
@@ -94,7 +97,7 @@ def recognise(code: str) -> LoadPattern:
     N = ctx.N
     if N is None or N == 0 or (N & (N - 1)) != 0:
         # N unknown or not a power of two — cannot encode
-        return LoadPattern(LoadType.UNKNOWN, N=N or 0)
+        return LoadPattern(VectorType.UNKNOWN, N=N or 0)
 
     # Try patterns in order of specificity
     for recogniser_fn in [
@@ -112,7 +115,7 @@ def recognise(code: str) -> LoadPattern:
         if result is not None:
             return result
 
-    return LoadPattern(LoadType.UNKNOWN, N=N)
+    return LoadPattern(VectorType.UNKNOWN, N=N)
 
 
 # ---------------------------------------------------------------------------
@@ -390,7 +393,7 @@ def _try_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k >= N:
         return None
 
-    return LoadPattern(LoadType.POINT_LOAD, N=N, params={"k": k, "P": P})
+    return LoadPattern(VectorType.DISCRETE, N=N, params={"k": k, "P": P})
 
 
 def _try_uniform_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -423,12 +426,12 @@ def _try_uniform_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
         elif right and right.get("kind") == "ones":
             c = left.get("value") if left else 1.0
         if c is not None and ctx.N:
-            return LoadPattern(LoadType.UNIFORM_LOAD, N=ctx.N,
+            return LoadPattern(VectorType.UNIFORM, N=ctx.N,
                                params={"c": float(c)})
 
     # bare ones(N)
     if last.get("kind") == "ones" and ctx.N:
-        return LoadPattern(LoadType.UNIFORM_LOAD, N=ctx.N, params={"c": 1.0})
+        return LoadPattern(VectorType.UNIFORM, N=ctx.N, params={"c": 1.0})
 
     return None
 
@@ -462,7 +465,7 @@ def _try_step_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k_s > N:
         return None
 
-    return LoadPattern(LoadType.STEP_LOAD, N=N, params={"k_s": int(k_s), "c": c})
+    return LoadPattern(VectorType.STEP, N=N, params={"k_s": int(k_s), "c": c})
 
 
 def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -500,7 +503,7 @@ def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k2 > N or k1 >= k2:
         return None
 
-    return LoadPattern(LoadType.SQUARE_LOAD, N=N,
+    return LoadPattern(VectorType.SQUARE, N=N,
                        params={"k1": int(k1), "k2": int(k2), "c": c})
 
 
@@ -549,7 +552,7 @@ def _try_sinusoidal_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None:
         return None
 
-    return LoadPattern(LoadType.SINUSOIDAL_LOAD, N=N,
+    return LoadPattern(VectorType.SINE, N=N,
                        params={"n": n, "A": A, "phi": phi})
 
 
@@ -703,7 +706,7 @@ def _try_cosine_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None:
         return None
 
-    return LoadPattern(LoadType.COSINE_LOAD, N=N,
+    return LoadPattern(VectorType.COSINE, N=N,
                        params={"n": n, "A": A, "phi": phi})
 
 def _try_multi_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -735,7 +738,7 @@ def _try_multi_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     loads = [{"k": int(a["index"]["value"]), "P": float(a["value"]["value"])}
              for a in subscript_assigns]
 
-    return LoadPattern(LoadType.MULTI_POINT_LOAD, N=N, params={"loads": loads})
+    return LoadPattern(VectorType.MULTI_DISCRETE, N=N, params={"loads": loads})
 
 
 def _try_multi_sin_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -762,7 +765,7 @@ def _try_multi_sin_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None:
         return None
 
-    return LoadPattern(LoadType.MULTI_SIN_LOAD, N=N, params={"modes": modes})
+    return LoadPattern(VectorType.MULTI_SINE, N=N, params={"modes": modes})
 
 
 def _collect_sin_sum(desc, ctx: _ExecutionContext) -> Optional[list]:
@@ -842,5 +845,5 @@ def _try_uniform_spike_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k >= N:
         return None
 
-    return LoadPattern(LoadType.UNIFORM_SPIKE_LOAD, N=N,
+    return LoadPattern(VectorType.UNIFORM_SPIKE, N=N,
                        params={"c": c, "k": k, "delta": delta})

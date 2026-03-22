@@ -1,0 +1,1517 @@
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{cite}
+\usepackage{mdframed}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{caption}
+\usepackage{tikz}
+\usepackage{soul}
+\usepackage{caption}
+\setlength{\belowcaptionskip}{6pt} % Adjust 10pt to your needs
+\usetikzlibrary{shapes.geometric, arrows.meta, positioning}
+\geometry{margin=1.8cm, top=2cm, bottom=2cm}
+\titlespacing*{\section}{0pt}{8pt}{4pt}
+\titlespacing*{\subsection}{0pt}{4pt}{3pt}
+\titlespacing*{\subsubsection}{0pt}{3pt}{3pt}
+\setlength{\parskip}{0pt}
+
+\definecolor{codeblue}{rgb}{0.13,0.29,0.53}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codegreen}{rgb}{0.0,0.45,0.0}
+\definecolor{codeback}{rgb}{0.97,0.97,0.97}
+\definecolor{highlightblue}{rgb}{0.88,0.93,0.98}
+\definecolor{boxborder}{rgb}{0.6,0.6,0.8}
+\definecolor{synthback}{rgb}{0.93,0.97,0.93}
+
+\lstdefinestyle{python}{
+    backgroundcolor=\color{codeback},
+    commentstyle=\color{codegreen}\itshape,
+    keywordstyle=\color{codeblue}\bfseries,
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    keepspaces=true,
+    numbers=none,
+    showstringspaces=false,
+    language=Python,
+    frame=single,
+    framesep=2pt,
+    rulecolor=\color{codegray},
+    xleftmargin=4pt,
+    xrightmargin=4pt,
+    aboveskip=3pt,
+    belowskip=3pt,
+}
+
+\lstdefinestyle{synth}{
+    backgroundcolor=\color{synthback},
+    commentstyle=\color{codegreen}\itshape,
+    keywordstyle=\color{codeblue}\bfseries,
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    keepspaces=true,
+    numbers=none,
+    showstringspaces=false,
+    language=Python,
+    frame=single,
+    framesep=2pt,
+    rulecolor=\color{codegreen!60},
+    xleftmargin=4pt,
+    xrightmargin=4pt,
+    aboveskip=3pt,
+    belowskip=3pt,
+}
+
+\newcommand{\ket}[1]{|#1\rangle}
+\newcommand{\bigO}[1]{\mathcal{O}(#1)}
+\newcommand{\norm}[1]{\|#1\|}
+
+\hypersetup{colorlinks=true, linkcolor=codeblue,
+            citecolor=codegreen, urlcolor=codeblue}
+
+% \loadfigs{load.png}{circuit.png}{load caption}{circuit caption}{circuit scale}
+\newcommand{\loadfigs}[6]{%
+  \vspace{4pt}
+  \noindent
+  \begin{minipage}[c]{0.47\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/#1}
+  \end{minipage}
+  \hfill
+  \begin{minipage}[c]{0.47\linewidth}
+    \centering
+    \includegraphics[width=#5\linewidth]{figures/#2}
+  \end{minipage}
+  \captionof{figure}{\textit{Left:} #3\quad\textit{Right:} PyEncode circuit.}
+  \label{fig:#6}
+}
+
+\title{\textbf{PyEncode: A Multi-Strategy Framework for Structured Quantum State Preparation}}
+\author{Krishnan Suresh\\
+\small University of Wisconsin--Madison\\
+\small \texttt{ksuresh@wisc.edu}}
+\date{}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+Quantum algorithms require encoding classical vectors as quantum states --- a step known as
+amplitude encoding. General-purpose state preparation routines such
+as Shende decomposition accept any input vector of length $N = 2^m$
+and produce circuits with up to $\bigO{2^m}$ gates. In practice, classical vectors
+often exhibit mathematical patterns (discrete, uniform, step, sine) that are
+concisely described by a small number of parameters, defined either explicitly or via code.
+
+We introduce \textbf{PyEncode}, a structured amplitude encoding framework that exploits this regularity through
+three entry points: \texttt{encode\_python}, which compiles a Python code snippet
+constructing the vector; \texttt{encode\_vector}, which accepts a
+NumPy array and identifies the best-matching pattern numerically; and
+\texttt{encode\_params}, which accepts a vector type and explicit parameters directly,
+requiring no code parsing or no vector interpretation. All three entry points
+dispatch to the same library of closed-form circuit synthesizers. Vectors such as
+discrete, uniform, step, and multi-discrete require only $\bigO{m}$ gates, while
+sine and cosine vectors require $\bigO{m^2}$ gates via the Quantum Fourier
+Transform --- both exponentially fewer than the $\bigO{2^m}$ cost of general
+state preparation. Unrecognized patterns fall back to Shende decomposition
+automatically. PyEncode is deterministic, provably correct, and immediately
+deployable via Qiskit.
+\end{abstract}
+
+% ----------------------------------------------------------------
+\section{Motivation}
+\label{sec:motivation}
+Quantum linear solvers such as HHL~\cite{harrow2009} and
+QSVT~\cite{gilyen2019quantum,martyn2021grand} promise exponential
+speedup for solving $Au = f$, but require the right-hand side $f$
+to be loaded as a quantum state $\ket{\psi_f}$. This state
+preparation is a well-known bottleneck~\cite{aaronson2015}: for a vector  of length $2^m$,
+general state preparation requires gate count of $\bigO{2^m}$,
+erasing any algorithmic speedup of downstream linear solvers.
+
+The same bottleneck appears across a broad range of quantum
+algorithms. In quantum chemistry, fault-tolerant phase estimation
+requires the PREP oracle to amplitude-encode the Pauli coefficient
+vector $\boldsymbol{\alpha}$ of the Hamiltonian~\cite{childs2018};
+the cost of this oracle directly determines the total $T$-gate
+count~\cite{babbush2018}. In quantum Monte Carlo, amplitude
+estimation achieves a quadratic speedup over classical sampling
+only if the probability distribution can be loaded
+efficiently~\cite{montanaro2015}; a general $\bigO{2^m}$
+preparation destroys the speedup entirely~\cite{Herbert2022}.
+In each case, the state preparation circuit is not an
+implementation detail --- it is a critical path component whose
+gate complexity determines whether the quantum algorithm
+retains its advantage.
+
+What is common to all of these settings is that the vector
+to be encoded is rarely arbitrary. In computational mechanics,
+$\mathbf{f}$ is a discretized load or source term with a
+known mathematical form --- a sinusoidal mode, a uniform
+pressure, a point force. In quantum chemistry, the Pauli
+coefficient vector of a translationally invariant Hamiltonian
+takes only two distinct values. In quantum finance, the
+discretised probability distribution is piecewise constant.
+In each case the vector's structure is not incidental: it is
+a direct consequence of the physics, chemistry, or model
+that generated it.
+
+\begin{mdframed}[backgroundcolor=highlightblue,
+                 linecolor=codeblue, linewidth=0.8pt,
+                 innertopmargin=4pt, innerbottommargin=4pt,
+                 innerleftmargin=6pt, innerrightmargin=6pt]
+\small
+The central observation of this paper is simple: classical
+vectors $\mathbf{f}$ arising in quantum computing pipelines
+often exhibit mathematical patterns --- discrete, uniform,
+sinusoidal, multi-discrete --- that can be exploited to produce
+circuits exponentially more efficient than general state
+preparation. PyEncode is a framework that identifies and
+exploits this structure, wherever and however it is expressed.
+\end{mdframed}
+\vspace{4pt}
+
+For example, a sinusoidal source term on $N = 2^m$ nodes,
+written as \texttt{f = np.sin(2*np.pi * x / L)}, produces
+an $N$-vector that general state preparation treats as an
+opaque array, applying a generic $\bigO{2^m}$-gate procedure
+and discarding the sine structure entirely. PyEncode
+recognises this structure --- whether from the Python source
+code, a materialised numerical vector, or an explicit
+parameter declaration --- and synthesises an exact
+$\bigO{m^2}$ circuit via the Quantum Fourier Transform.
+For simpler patterns such as uniform or discrete vectors,
+the gate count drops further to $\bigO{m}$. The reduction
+is exponential and exact: no approximation is introduced.
+
+% ----------------------------------------------------------------
+\section{Prior Work}
+\label{sec:priorwork}
+
+\paragraph{General-purpose state preparation.}
+The problem of preparing an arbitrary $N = 2^m$-dimensional quantum
+state has been studied extensively.
+Shende, Bullock, and Markov~\cite{shende2006} established the
+$\mathcal{O}(2^m)$ lower bound on gate count and gave an explicit
+constructive procedure; this circuit serves as the automatic fallback
+in PyEncode whenever no structured pattern is identified.
+Araujo et al.~\cite{araujo2021divide} reduce circuit \emph{depth} to
+$\mathcal{O}(\log^2 N)$ via a divide-and-conquer strategy, at the cost
+of $\mathcal{O}(N)$ ancilla qubits and an entangled output state.
+More recently, Gui et al.~\cite{gui2024spacetime} propose a
+deterministic $\mathcal{O}(\log N)$-depth protocol with optimal
+spacetime allocation $\mathcal{O}(N)$, demonstrated on HHL-style
+linear solvers and quantum machine learning.
+All of these methods treat the input vector as an opaque array and do
+not exploit any structure in the amplitudes.
+\emph{PyEncode's contribution:} for vectors that exhibit mathematical
+regularity, PyEncode achieves comparable or better gate counts and
+depth exactly, without ancilla overhead, by recognising and exploiting
+that structure.
+
+\paragraph{Approximate state preparation for smooth functions.}
+Several methods achieve sub-exponential complexity by allowing a
+controlled approximation error.
+Welch et al.~\cite{welch2014} established the connection between Walsh
+functions and diagonal unitary circuits, showing that a truncated
+Walsh--Fourier series for a function $f(x)$ yields an
+approximately minimal-depth circuit for the diagonal unitary
+$e^{if(\hat{x})}$; this construction underpins the QFT-based circuit
+synthesis used in PyEncode's \texttt{SINE} and \texttt{COSINE}
+synthesizers.
+Holmes and Matsuura~\cite{holmes2020} showed that smooth,
+differentiable functions admit linear-depth circuits via matrix product
+state (MPS) approximations, working from the materialised numerical
+vector.
+Marin-Sanchez et al.~\cite{marinsanchez2023} reduce the
+Gr\"{o}ver--Rudolph circuit complexity from $\mathcal{O}(2^n)$ to
+$\mathcal{O}(2^{k_0(\epsilon)})$ for smooth, real-valued functions,
+where $k_0(\epsilon)$ is asymptotically independent of $n$; a
+variational extension handles functions beyond the smoothness
+conditions.
+Melnikov et al.~\cite{melnikov2023quantum} encode vectors with low MPS rank
+using variational hardware-efficient circuits optimized via Riemannian
+gradient descent on tensor networks, achieving $>99.9\%$ fidelity with
+$\mathcal{O}(\mathrm{poly}(\log N))$ depth.
+Zylberman and Debbasch~\cite{zylberman2024walsh} introduce the Walsh
+Series Loader (WSL), which achieves circuit depth
+$\mathcal{O}(1/\sqrt{\epsilon})$ independent of the number of qubits
+$n$, at the cost of an $\mathcal{O}(\epsilon)$ infidelity and a
+repeat-until-success success probability $P = \Theta(\epsilon)$;
+amplitude amplification can raise $P$ to $\Theta(1)$ but reintroduces
+$n$-dependence in depth.
+\emph{PyEncode's contribution:} all of the above methods are
+approximate and work from either the numerical vector or a smoothness
+assumption.  PyEncode targets the complementary regime: vectors whose
+structure is known \emph{a priori} (from source code, vector fitting,
+or explicit declaration), for which it produces \emph{exact},
+closed-form circuits with zero approximation error.
+
+\paragraph{Structure-exploiting state preparation.}
+A smaller body of work exploits specific structural properties of the
+input vector to reduce gate complexity below the general $\mathcal{O}(2^m)$
+bound.
+Grover and Rudolph~\cite{grover2002} showed that quantum states
+encoding efficiently integrable probability distributions (such as
+log-concave functions) can be prepared in polynomial depth by
+classically computing conditional probabilities; this is the
+foundational structured-encoding result, though it requires
+classical numerical integration and yields approximate circuits.
+Gleinig and Hoefler~\cite{gleinig2021} give an exact
+$\mathcal{O}(|S|n)$-gate algorithm for sparse states with $|S|$
+nonzero coefficients.
+Gonzalez-Conde et al.~\cite{gonzalezconde2024} exploit Fourier-series
+structure to encode polynomial functions efficiently, closely related
+to PyEncode's QFT-based sine synthesizer.
+Moosa et al.~\cite{moosa2024} introduce the Fourier Series Loader
+(FSL), which prepares truncated Fourier-series approximations of
+arbitrary functions using linear-depth circuits of $\mathcal{O}(n^2)$
+gates; the FSL loads $2^{m+1}$ Fourier coefficients into a sparse
+state via classical compilation and then applies the inverse QFT,
+achieving exponentially decaying truncation error with $m$.
+O'Brien and S\"{u}nderhauf~\cite{obrien2025} achieve efficient state
+preparation for piecewise-defined functions via quantum singular value
+transformation (QSVT).
+\emph{PyEncode's contribution:}
+sparsity-based methods (Gleinig--Hoefler) handle discrete structure
+but not smooth patterns; Fourier/FSL methods handle smooth functions
+but require classical optimisation or introduce truncation error;
+QSVT methods handle piecewise functions approximately.
+PyEncode provides a unified, exact framework across a library of
+practically relevant vector types --- discrete, uniform, step, square,
+sinusoidal, multi-tone --- matching or beating each specialist method
+within its own domain, and without ancilla overhead.
+Specifically, PyEncode's \texttt{MULTI\_DISCRETE} synthesizer matches
+the $\mathcal{O}(|S|n)$ complexity of~\cite{gleinig2021} for sparse
+vectors; its \texttt{SINE} and \texttt{MULTI\_SINE} synthesizers cover
+the exactly representable subset of the FSL --- pure sinusoidal and
+multi-tone vectors --- producing closed-form $\mathcal{O}(m^2)$
+circuits with no classical optimisation overhead and zero approximation
+error; and its $\mathcal{O}(m)$ synthesizers (discrete, uniform, step,
+square) have no analogue in any prior structured method.
+
+\paragraph{Related work: matrix encoding and open problems.}
+Recent work has focused on encoding the stiffness
+matrix~\cite{sunderhauf2024block,deiml2024,arora2024} rather than the
+right-hand-side force vector; PyEncode is complementary, targeting the
+state-preparation step for the right-hand side $\mathbf{f}$ of the
+linear system $A\mathbf{u} = \mathbf{f}$.
+
+To our knowledge, no prior work provides a structured framework that
+exploits vector regularity --- whether identified from source code,
+numerical fitting, or explicit parameter declaration --- to produce
+exact, closed-form circuits across a library of practically relevant
+vector types.  This is the central contribution of PyEncode.
+
+% ----------------------------------------------------------------
+\section{Structured Encoding Strategies}
+\label{sec:strategies}
+
+A fundamental design question for any structured amplitude encoding framework is: what information should the user provide, and in what form? To answer this, it helps to understand why a single approach is insufficient.
+
+\textbf{Pure Python-Based Encoding.}
+The most natural interface is to accept Python code directly and infer the vector type from the abstract syntax tree (AST) \cite{aho2006}. This requires no user annotation, but the recognizer matches specific code idioms. For example, we can design the analyzer to recognize a vectorized NumPy sine expression (the first instance below). But, the recognizer will not automatically recognize the sine pattern written as a \texttt{for} loop, or expressed as a list, i.e., we have to fall back to Shende's $\bigO{2^m}$ circuit.  Python's expressiveness means the space of syntactically distinct but semantically equivalent programs is unbounded; extending the recognizer to cover every idiom is an open-ended task.
+\begin{lstlisting}[style=python]
+f = np.sin(2*np.pi * x)
+for i in range(N):
+    f[i] = np.sin(2*np.pi*i/N)
+f = np.array([np.sin(2*np.pi*i/N) for i in range(N)])
+f = np.cos(2*np.pi * x - np.pi / 2)
+\end{lstlisting}
+
+
+\textbf{Pure Vector-Based Encoding}
+A natural alternative is to execute the code, obtain $\mathbf{f}$, and classify based on the vector alone. This appears tractable --- a sine vector has a sparse DFT, a discrete has a single nonzero entry --- but the inverse problem is unfortunately ill-posed. Consider:
+\begin{lstlisting}[style=python]
+f = np.sin(3*2*np.pi*x + np.pi/4)      # pure sinusoid
+f = np.sin(3*2*np.pi*x) + 0.1          # DC offset: different circuit
+f = np.sin(3*2*np.pi*x) * np.exp(-x)   # damped: DFT no longer sparse
+f = np.sin(3*2*np.pi*x) + np.sin(5*2*np.pi*x)  # two modes: different class
+\end{lstlisting}
+The DFT of the first vector has exactly two nonzero coefficients, from which frequency and phase are recovered unambiguously. The remaining three have DFTs that are shifted, spread, or multi-peaked. More fundamentally, \emph{the efficient circuit depends on the generating structure of $\mathbf{f}$, not just its values}: two numerically close vectors may require entirely different circuits, and classification from values alone cannot recover this structural information.
+
+\section{Recognized Vector Patterns}
+\label{sec:patterns}
+
+PyEncode organizes amplitude-encoded classical vectors into a
+library of structured patterns. Each pattern is parameterized
+by a small number of real values, admits a closed-form quantum
+circuit, and is identified by a named constructor. All three
+entry points --- \texttt{encode\_python}, \texttt{encode\_vector},
+and \texttt{encode\_params} --- dispatch to the same synthesizers
+for these patterns. Vectors that do not match any recognized
+pattern fall back to Shende's general state preparation
+automatically.
+
+\subsection*{Discrete}
+A single nonzero amplitude at index $k$:
+\[
+  f_i = P\,\delta_{ik}
+\]
+Constructor: \texttt{DISCRETE(k, P)}.
+Circuit complexity: $\mathcal{O}(m)$.
+Arises as a point load or point source in FEM, and as a
+single Pauli basis vector in quantum chemistry.
+
+\subsection*{Uniform}
+Constant amplitude across all $N$ indices:
+\[
+  f_i = c
+\]
+Constructor: \texttt{UNIFORM(c)}.
+Circuit complexity: $\mathcal{O}(m)$ ($m$ Hadamard gates).
+Arises as a uniform load in structural mechanics, a uniform
+prior in quantum Monte Carlo, and a Heisenberg spin-chain
+coefficient vector.
+
+\subsection*{Step}
+Constant amplitude $c$ for $i \geq k_s$, zero otherwise:
+\[
+  f_i = c\,\mathbf{1}[i \geq k_s]
+\]
+Constructor: \texttt{STEP(k\_s, c)}.
+Circuit complexity: $\mathcal{O}(m)$.
+Arises as a one-sided load distribution in structural mechanics.
+
+\subsection*{Square}
+Constant amplitude $c$ on an interval $[k_1, k_2)$, zero
+otherwise:
+\[
+  f_i = c\,\mathbf{1}[k_1 \leq i < k_2]
+\]
+Constructor: \texttt{SQUARE(k1, k2, c)}.
+Circuit complexity: $\mathcal{O}(m)$.
+Arises as a uniform patch load and as the two-valued Pauli
+coefficient vector of the Fermi-Hubbard model.
+
+\subsection*{Sine}
+Pure sinusoidal vector with frequency $n$, amplitude $A$,
+and phase $\varphi$:
+\[
+  f_i = A\sin\!\left(\frac{2\pi n i}{N} + \varphi\right)
+\]
+Constructor: \texttt{SINE(n, A, phi=0)}.
+Circuit complexity: $\mathcal{O}(m^2)$ via the Quantum
+Fourier Transform.
+Arises as a sinusoidal load or eigenmode in FEM and as a
+Fourier component in signal processing.
+
+\subsection*{Cosine}
+Pure cosinusoidal vector:
+\[
+  f_i = A\cos\!\left(\frac{2\pi n i}{N} + \varphi\right)
+\]
+Constructor: \texttt{COSINE(n, A, phi=0)}.
+Circuit complexity: $\mathcal{O}(m^2)$.
+Special case of \texttt{SINE} with phase $\varphi + \pi/2$;
+PyEncode disambiguates by preferring the form with
+$|\varphi|$ closer to zero.
+
+\subsection*{Multi-Discrete}
+Superposition of $|S|$ point masses at explicitly declared
+indices:
+\[
+  f_i = P_j\,\delta_{i,k_j}, \quad j = 1,\ldots,|S|
+\]
+Constructor:
+\texttt{MULTI\_DISCRETE(vectors=[DISCRETE(...), ...])}.
+Circuit complexity: $\mathcal{O}(|S|\,m)$.
+Generalizes \texttt{DISCRETE} to sparse vectors. Reduces
+to Gleinig--Hoefler~\cite{gleinig2021} for equal-amplitude
+sparse states.
+
+\subsection*{Multi-Sine}
+Superposition of $T$ pure sinusoidal modes:
+\[
+  f_i = \sum_{t=1}^{T} A_t \sin\!\left(
+        \frac{2\pi n_t i}{N} + \varphi_t\right)
+\]
+Constructor:
+\texttt{MULTI\_SINE(modes=[SINE(...), ...])}.
+Circuit complexity: $\mathcal{O}(m^2)$.
+Arises as a multi-tone signal in signal processing and as
+a multi-mode load in structural dynamics.
+
+Table~\ref{tab:patterns} lists all vector types recognized by PyEncode; every entry point dispatches to the corresponding closed-form synthesizer for these patterns, falling back to Shende's general preparation~\cite{shende2006} for unrecognized inputs.
+
+\begin{table*}
+\centering
+\caption{Recognized vector patterns in PyEncode.}
+\label{tab:patterns}
+\begin{tabular}{llll}
+\toprule
+\textbf{Pattern} & \textbf{Constructor} &
+\textbf{Form} & $\mathcal{O}(\cdot)$ \\
+\midrule
+Discrete         & \texttt{DISCRETE(k,P)}          & $P\delta_{ik}$                        & $\mathcal{O}(m)$   \\
+Uniform          & \texttt{UNIFORM(c)}              & $c$                                   & $\mathcal{O}(m)$   \\
+Step             & \texttt{STEP(k\_s,c)}            & $c\,\mathbf{1}[i \geq k_s]$          & $\mathcal{O}(m)$   \\
+Square           & \texttt{SQUARE(k1,k2,c)}         & $c\,\mathbf{1}[k_1\leq i<k_2]$       & $\mathcal{O}(m)$   \\
+Sine             & \texttt{SINE(n,A,phi)}           & $A\sin(2\pi n i/N+\varphi)$           & $\mathcal{O}(m^2)$ \\
+Cosine           & \texttt{COSINE(n,A,phi)}         & $A\cos(2\pi n i/N+\varphi)$           & $\mathcal{O}(m^2)$ \\
+Multi-discrete   & \texttt{MULTI\_DISCRETE(...)}    & $\sum_j P_j\delta_{ik_j}$             & $\mathcal{O}(|S|m)$\\
+Multi-sine       & \texttt{MULTI\_SINE(...)}        & $\sum_t A_t\sin(2\pi n_t i/N+\varphi_t)$ & $\mathcal{O}(m^2)$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\section{PyEncode Framework}
+
+Neither pure AST inference nor pure vector inference is sufficient to recognize these patterns. PyEncode therefore provides three entry points, \texttt{encode\_python}, \texttt{encode\_vector} and \texttt{encode\_params}, each suited to a different level of user knowledge; see Table \ref{tab:encoding_strategies}. These three are discussed and illustrated in the remainder of this section. The full specification of each entry point is provided as Appendix \ref{sec:Appendix}.
+
+Each recognized vector type is mapped to a closed-form circuit template parameterized by $m$ and the vector parameters. For unrecognized patterns, the fallback is Qiskit \texttt{StatePreparation} (Shende/Bullock/Markov~\cite{shende2006}). An optional validation mode (\texttt{validate=True}) runs the synthesized circuit on Qiskit's statevector simulator and checks that the $\ell_2$ distance between the prepared state and the target normalized vector is below a user-specified tolerance (default $10^{-6}$). Validation is disabled by default, since statevector simulation requires $\bigO{2^m}$ memory and becomes infeasible for large $m$.
+
+\begin{table*}[h!]
+\centering
+\small
+\caption{PyEncode entry points ordered by increasing user burden and decreasing compiler inference.}
+\label{tab:encoding_strategies}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{lp{1.8cm}p{3.8cm}p{3.8cm}p{3.0cm}}
+\hline
+\textbf{Function} & \textbf{User provides} & \textbf{Example} & \textbf{Strengths} & \textbf{Weaknesses} \\
+\hline
+\texttt{encode\_python} &
+Python code (optional hint) &
+\texttt{encode\_python(code)} \newline \texttt{encode\_python(code,} \texttt{vector\_type=...)} &
+No annotation needed; hint makes recognition syntax-agnostic &
+AST fragility without hint; composite vectors not recognized \\
+\texttt{encode\_vector} &
+Vector $\mathbf{f}$ (optional hint) &
+\texttt{encode\_vector(f)} \newline \texttt{encode\_vector(f,} \texttt{vector\_type=...)} &
+Works for any source (FEM, Pauli decomposition); auto-detection or verified mode &
+Requires $\bigO{2^m}$ classical memory \\
+\texttt{encode\_params} &
+Vector type + parameters &
+\texttt{encode\_params( DISCRETE(k=32, P=1.0), N=64)} &
+Fully robust; no parsing; no classical vector required; natural for composite vectors \\
+\hline
+\end{tabular}
+\end{table*}
+
+\subsection{Python Code: \texttt{encode\_python}}
+The simplest case is when the user provides the Python code for constructing the vector. The AST recognizer common pattern types infers certain types of code pattern. As discussed earlier, covering all types of patterns is open-ended.  Therefore, the user can optionally provides a \texttt{vector\_type} hint. The code is executed and parameters are extracted numerically, making recognition fully syntax-agnostic.
+
+\textbf{Example 1: Vectorised code, no hint.}
+The most natural use case. PyEncode's AST recogniser
+identifies the discrete pattern directly from the
+source and synthesizes an $\bigO{m}$ circuit without
+constructing the vector:
+\begin{lstlisting}[style=python]
+from pyencode import encode_python
+
+code = """
+N = 8
+f = np.zeros(N)
+f[3] = 1.0
+"""
+
+circuit, info = encode_python(code)
+# info.vector_type   -> "DISCRETE"
+# info.complexity    -> "O(m)"
+\end{lstlisting}
+
+\loadfigs{discrete_vector.png}{discrete_circuit.png}
+  {Discrete vector: $f_3=1$, $N=8$}
+  {unused}
+  {0.4}{sec5_discrete}
+
+
+\textbf{Example 2: Loop syntax with hint.}
+The AST recogniser cannot parse a \texttt{for} loop body.
+Providing a \texttt{vector\_type} hint bypasses AST
+recognition: the code is executed, $\mathbf{f}$ is
+constructed, parameters are extracted numerically, and
+classical validation is performed before synthesis:
+\begin{lstlisting}[style=python]
+code = """
+import numpy as np
+N = 8
+f = np.zeros(N)
+for i in range(N):
+    f[i] = np.sin(1 * 2*np.pi * i / N)
+"""
+
+circuit, info = encode_python(
+    code, vector_type="SINE")
+# classical validation passed -> O(m^2) circuit
+\end{lstlisting}
+
+\loadfigs{sine_loop_vector.png}{sine_loop_circuit.png}
+  {Sine vector: $\sin(2\pi i/N)$, $N=8$}
+  {unused}
+  {1.0}{sec5_sine_loop}
+
+\textbf{Example 3: Shende fallback.}
+When the pattern is not recognised and no hint is
+provided, PyEncode automatically falls back to
+Shende's general preparation and issues a warning.
+The \texttt{info} object allows the caller to detect
+this programmatically via the complexity field:
+\begin{lstlisting}[style=python]
+code = """
+import numpy as np
+N = 8
+x = np.linspace(0, 1, N)
+f = np.sin(3*2*np.pi*x) * np.exp(-x)
+"""
+
+circuit, info = encode_python(code)
+# PyEncode warns: "pattern not recognised...
+#   falling back to Shende's O(2^m)..."
+
+print(info.complexity)   # "O(2^m)"
+print(info.gate_count)   # 11
+\end{lstlisting}
+
+The damped sinusoid is not in PyEncode's pattern
+library; the automatic warning alerts the user that
+the exponential-cost circuit was used and invites
+them to either supply a \texttt{vector\_type} hint or
+switch to \texttt{encode\_vector}.
+
+\subsection{NumPy Vector: \texttt{encode\_vector}}
+\texttt{encode\_vector}: the user provides $\mathbf{f}$ explicitly, assembled by any means, and the compiler either auto-detects the best-matching pattern or verifies against a declared type. \texttt{encode\_params} eliminates inference entirely: the user specifies the vector type and its parameters directly, and the synthesizer proceeds without code parsing or vector materialization.
+
+When \texttt{encode\_vector} is called without a declared type, PyEncode attempts to classify the vector by trying each extraction algorithm in a fixed preference order: discrete, uniform, step, square, sine, cosine, multi-discrete, multi-sine. Simpler patterns (lower gate complexity) are tried first. For each candidate, the extractor fits parameters from $\mathbf{f}$, reconstructs the expected vector, and checks that the normalized residual $\|\hat{\mathbf{f}} - \hat{\mathbf{f}}_{\text{recon}}\|$ falls within tolerance. The first match is returned; if no type matches, a \texttt{ValueError} is raised and the caller may fall back to general state preparation explicitly.
+
+A subtlety arises with sine and cosine vectors: since $\cos(x) \equiv \sin(x + \pi/2)$, the sine extractor always matches cosine vectors with phase $\varphi \approx \pi/2$. PyEncode disambiguates by trying both fits and preferring whichever form has $|\varphi|$ closer to zero --- the canonical representation.
+
+\textbf{Example 1: Uniform vector.}
+All entries equal. PyEncode auto-detects the
+\texttt{UNIFORM} pattern and produces $m$ Hadamard gates:
+\begin{lstlisting}[style=python]
+from pyencode import encode_vector
+import numpy as np
+
+f = np.full(8, 3.0)
+circuit, info = encode_vector(f)
+# info.vector_type -> "UNIFORM"
+# info.gate_count  -> 3
+\end{lstlisting}
+
+\loadfigs{uniform_vector.png}{uniform_circuit.png}
+  {Uniform: $f_i=3$, $N=8$}
+  {unused}
+  {0.4}{sec5_uniform}
+
+\textbf{Example 2: Step vector.}
+A prefix of constant values followed by zeros.
+Detected as \texttt{STEP}:
+\begin{lstlisting}[style=python]
+f = np.zeros(8); f[:4] = 2.0
+circuit, info = encode_vector(f)
+# info.vector_type -> "STEP"
+# info.gate_count  -> 2
+\end{lstlisting}
+
+\loadfigs{step_vector.png}{step_circuit.png}
+  {Step: $f_{[:4]}=2$, $N=8$}
+  {unused}
+  {0.4}{sec5_step}
+
+\textbf{Example 3: Square vector.}
+A contiguous block of constant values.
+Detected as \texttt{SQUARE}:
+\begin{lstlisting}[style=python]
+f = np.zeros(8); f[4:8] = 1.0
+circuit, info = encode_vector(f)
+# info.vector_type -> "SQUARE"
+# info.gate_count  -> 3
+\end{lstlisting}
+
+\loadfigs{square_vector.png}{square_circuit.png}
+  {Square: $f_{[4:8]}=1$, $N=8$}
+  {unused}
+  {0.4}{sec5_square}
+
+\textbf{Example 4: Multi-discrete auto-detection.}
+A sparse vector with two nonzero entries.
+PyEncode identifies the \texttt{MULTI\_DISCRETE}
+pattern and returns an $\bigO{|S|\,m}$ circuit:
+\begin{lstlisting}[style=python]
+f = np.zeros(8)
+f[1] = 3.0; f[6] = 4.0
+circuit, info = encode_vector(f)
+# info.vector_type -> "MULTI_DISCRETE"
+# info.gate_count  -> 5
+\end{lstlisting}
+
+\loadfigs{multi_discrete_vector.png}{multi_discrete_circuit.png}
+  {Multi-discrete: $f_1=3,\;f_6=4$, $N=8$ (auto-detected)}
+  {unused}
+  {1.0}{sec5_multi_discrete}
+
+\textbf{Example 5: Declared type with verification.}
+When the user provides a \texttt{vector\_type} hint,
+PyEncode extracts parameters for that type only and
+verifies the match. If the vector does not match,
+an informative error is raised rather than silently
+falling back:
+\begin{lstlisting}[style=python]
+circuit, info = encode_vector(
+    f, vector_type="SINE")
+# ||f_hat - f_recon|| < 1e-6 -> synthesise
+# otherwise -> informative error
+\end{lstlisting}
+
+\subsection{Parameters: \texttt{encode\_params}}
+\label{sec:params}
+
+\texttt{encode\_params} is the most robust entry point
+and the only one viable at quantum scale. The user
+passes a typed constructor object --- such as
+\texttt{SINE(n=1, A=1.0)} or
+\texttt{DISCRETE(k=5, P=1.0)} --- together with the
+vector length $N$. No code is parsed and no vector is
+ever materialised. Constructor names match
+\texttt{VectorType} enum values; missing or misspelled
+parameters are caught at construction time. For
+composite vectors, a list of constructor objects is
+passed; each component is synthesised independently.
+Constructor parameters for each type are listed in
+the Appendix (Section~\ref{app:encode_params}).
+
+\texttt{encode\_params} and \texttt{encode\_vector} are
+complementary. \texttt{encode\_vector} is a
+\emph{bridge for the current era}: classical hardware
+is powerful enough to assemble $\mathbf{f}$ explicitly,
+and the $\bigO{2^m}$ memory cost is acceptable at
+problem sizes tractable today. \texttt{encode\_params}
+is the \emph{long-term solution}: at quantum scale
+$\mathbf{f}$ can never be materialised classically,
+and the only path to an efficient circuit is a
+compact parameter-level description. Declaring the
+structure rather than the data is therefore not merely
+a convenience but a necessity.
+
+
+\textbf{Example 1: Single type, direct synthesis.}
+The user declares the vector type and parameters
+directly; no vector is constructed and no pattern
+recognition is performed. This is the only entry
+point viable at quantum scale:
+\begin{lstlisting}[style=python]
+from pyencode import encode_params
+from pyencode import DISCRETE, SINE, COSINE
+from pyencode import UNIFORM, SQUARE, STEP
+from pyencode import MULTI_DISCRETE, MULTI_SINE
+
+# Basis vector at index 5
+circuit, info = encode_params(
+    DISCRETE(k=5, P=1.0), N=8)
+# info.complexity -> "O(m)"
+# info.gate_count -> 2
+\end{lstlisting}
+
+\loadfigs{params_discrete_vector.png}{params_discrete_circuit.png}
+  {Discrete: $f_5=1$, $N=8$}
+  {unused}
+  {0.4}{sec5_params_discrete}
+
+\begin{lstlisting}[style=python]
+# Sinusoidal mode
+circuit, info = encode_params(
+    SINE(n=1, A=1.0), N=16)
+# info.complexity -> "O(m^2)"
+\end{lstlisting}
+
+\loadfigs{params_sine_vector.png}{params_sine_circuit.png}
+  {Sine: $\sin(2\pi i/N)$, $N=16$}
+  {unused}
+  {1.0}{sec5_params_sine}
+
+\begin{lstlisting}[style=python]
+# Cosine mode
+circuit, info = encode_params(
+    COSINE(n=1, A=1.0), N=16)
+# info.complexity -> "O(m^2)"
+\end{lstlisting}
+
+\loadfigs{cosine_vector.png}{cosine_circuit.png}
+  {Cosine: $\cos(2\pi i/N)$, $N=16$}
+  {unused}
+  {1.0}{sec5_cosine}
+
+\textbf{Example 2: Composite vector.}
+A list of constructor objects is passed directly.
+When all components share a type, PyEncode uses
+the corresponding multi-type synthesiser:
+\begin{lstlisting}[style=python]
+circuit, info = encode_params([
+    DISCRETE(k=1, P=3.0),
+    DISCRETE(k=6, P=4.0),
+], N=8)
+# info.vector_type -> "MULTI_DISCRETE"
+\end{lstlisting}
+
+\loadfigs{composite_vector.png}{composite_circuit.png}
+  {Multi-discrete: $f_1=3,\;f_6=4$, $N=8$}
+  {unused}
+  {1.0}{sec5_composite}
+
+\textbf{Example 3: Statevector validation.}
+For development use, \texttt{validate=True}
+constructs $\mathbf{f}$ from the parameters,
+simulates the circuit on Qiskit's statevector
+simulator, and verifies
+$\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_\mathrm{sim}\|_2
+< \varepsilon$. This is the only validation path
+available for \texttt{encode\_params} since no
+classical vector exists before synthesis:
+\begin{lstlisting}[style=python]
+circuit, info = encode_params(
+    SINE(n=1, A=1.0), N=16,
+    validate=True, tol=1e-6)
+# info.validated -> True
+\end{lstlisting}
+Statevector validation is disabled by default
+because it requires $\bigO{2^m}$ memory and
+defeats the purpose of \texttt{encode\_params}
+at large $N$.
+
+% ----------------------------------------------------------------
+\section{Gate Count}
+\label{sec:gateCount}
+Table~\ref{tab:gatecounts} summarizes gate counts at
+$N = 64$ ($m = 6$ qubits). For each pattern, we report
+the raw gate count from PyEncode's synthesiser, the
+count after Qiskit transpilation to $\{$CX, U, X, H$\}$
+at optimisation level~2, and the transpiled Shende
+\texttt{StatePreparation}~\cite{shende2006} count on the
+same vector.
+
+\begin{table*}[ht]
+\centering
+\caption{Gate counts at $N=64$ ($m=6$). PyEncode columns show raw synthesiser output and
+after Qiskit transpilation to $\{CX,U,X,H\}$ (opt.\ level~2).
+Shende applies \texttt{StatePreparation}~\cite{shende2006} to the same vector, transpiled identically.}
+\label{tab:gatecounts}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lcccrr}
+\toprule
+ & \multicolumn{3}{c}{\textbf{PyEncode}}
+ & \multicolumn{2}{c}{\textbf{Shende}} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-6}
+\textbf{Pattern} & Raw & Transpiled & $\mathcal{O}(\cdot)$
+                 & Transpiled & $\mathcal{O}(\cdot)$ \\
+\midrule
+Discrete ($k\!=\!20$)
+    &   2 &   2 & $\mathcal{O}(m)$    &  18 & $\mathcal{O}(2^m)$ \\
+Uniform
+    &   6 &   6 & $\mathcal{O}(m)$    &   6 & $\mathcal{O}(2^m)$ \\
+Step ($k_s\!=\!4$)
+    &   2 &   2 & $\mathcal{O}(m)$    &  62 & $\mathcal{O}(2^m)$ \\
+Square ($[8,16)$)
+    &   4 &   4 & $\mathcal{O}(m)$    &  52 & $\mathcal{O}(2^m)$ \\
+Sin ($n\!=\!1$, $\varphi\!=\!0$)
+    & 100 &  73 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+Sin ($n\!=\!3$, $\varphi\!=\!\pi/4$)
+    & 102 &  75 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+Cos ($n\!=\!1$, $\varphi\!=\!0$)
+    & 100 &  73 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+Cos ($n\!=\!3$, $\varphi\!=\!\pi/4$)
+    & 102 &  75 & $\mathcal{O}(m^2)$  & 120 & $\mathcal{O}(2^m)$ \\
+Multi-discrete ($|S|\!=\!2$)
+    &   9 &   6 & $\mathcal{O}(|S|m)$ &  42 & $\mathcal{O}(2^m)$ \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+
+\section{Applications}
+\label{sec:applications}
+
+PyEncode was motivated by structural mechanics, but the
+patterns in its library are mathematical objects with no
+intrinsic domain affiliation. This section demonstrates the
+breadth of the framework through three applications drawn
+from distinct fields: quantum chemistry, computational
+mechanics, and quantum finance. In each case the vector to
+be encoded arises from a different source, yet falls
+exactly within PyEncode's pattern library.
+
+% ----------------------------------------------------------------
+\subsection{Quantum Chemistry}
+\label{sec:app_chemistry}
+
+Fault-tolerant quantum algorithms for chemistry represent
+the molecular Hamiltonian as a linear combination of
+unitaries (LCU), $H = \sum_j \alpha_j \hat{P}_j$, where
+each $\hat{P}_j$ is a Pauli string~\cite{cao2019}. This
+requires two oracles: SELECT, which applies $\hat{P}_j$
+controlled on an index register, and PREP, which prepares
+$|\boldsymbol{\alpha}\rangle \propto \sum_j
+\sqrt{|\alpha_j|}\,|j\rangle$~\cite{childs2018}. PREP is
+precisely amplitude encoding of the coefficient vector
+$\boldsymbol{\alpha}$, and its gate cost directly affects
+the total $T$-gate count~\cite{babbush2018}.
+
+For a generic dense molecule $\boldsymbol{\alpha}$ is
+unstructured, and general state preparation is unavoidable.
+However, two model classes most relevant to near-term
+fault-tolerant hardware produce coefficient vectors that
+fall exactly within PyEncode's library.
+
+\textbf{Fermi-Hubbard model.}
+After a Jordan-Wigner transformation on an $L$-site
+chain~\cite{hubbard1963,jordan1928}, the Pauli coefficient
+vector takes exactly two distinct values: the hopping
+amplitude $t$ repeated $2L$ times and the on-site
+interaction $U$ repeated $L$ times. The PREP state is
+therefore a composite \texttt{SQUARE} vector:
+\begin{lstlisting}[style=python]
+from pyencode import encode_params, SQUARE
+import numpy as np
+
+L = 8;  t = 1.0;  U = 4.0
+circuit, info = encode_params([
+    SQUARE(k1=0,   k2=2*L, c=t),
+    SQUARE(k1=2*L, k2=3*L, c=U),
+], N=4*L)
+\end{lstlisting}
+
+\loadfigs{hubbard_vector.png}{hubbard_circuit.png}
+  {Fermi-Hubbard PREP coefficients ($t\!=\!1$, $U\!=\!4$, $L\!=\!8$)}
+  {unused}
+  {1.0}{sec6_hubbard}
+
+This yields an $\bigO{m}$ PREP circuit with
+$m = \lceil\log_2 4L\rceil$ qubits.
+
+\textbf{Heisenberg spin chain.}
+For translationally invariant nearest-neighbour
+Hamiltonians ($XXZ$, Ising), all exchange coefficients
+are equal, giving a \texttt{UNIFORM} vector --- the
+simplest case in the library:
+\begin{lstlisting}[style=python]
+circuit, info = encode_params(UNIFORM(c=J), N=L)
+\end{lstlisting}
+In both cases the gate saving over Shende's general
+preparation is exponential, and it compounds over the
+many PREP--SELECT repetitions required by phase
+estimation~\cite{babbush2018}.
+
+
+% ----------------------------------------------------------------
+\subsection{Computational Mechanics}
+\label{sec:app_poisson}
+
+The Poisson equation $-\nabla^2 u = f$ on the unit square
+with a separable sinusoidal source,
+\begin{equation}
+  f(x,y) = \sin(2\pi n x)\sin(2\pi p y),
+\end{equation}
+arises naturally in elliptic PDE
+solvers when the source term is periodic~\cite{strang2007}.
+After discretisation on an $N\times N$ grid, the
+right-hand side vector has entries
+$f_{ij} = \sin(2\pi n i/N)\sin(2\pi p j/N)$ and length $N^2$.
+
+The key structural observation is that $\mathbf{f}$ is a
+tensor product:
+\begin{equation}
+  \mathbf{f} = \mathbf{u} \otimes \mathbf{v}, \qquad
+  u_i = \sin(2\pi n i/N), \quad
+  v_j = \sin(2\pi p j/N).
+\end{equation}
+A tensor product of two normalised states is a product
+state on the qubit register, so the $2m$-qubit encoding
+circuit separates exactly into two independent $m$-qubit
+\texttt{SINE} circuits acting on disjoint qubit sets:
+\begin{lstlisting}[style=python]
+from pyencode import encode_params, SINE
+
+# x-register: m qubits
+circ_x, _ = encode_params(
+    SINE(n=2, A=1.0), N=32)
+# y-register: m qubits
+circ_y, _ = encode_params(
+    SINE(n=3, A=1.0), N=32)
+# full circuit: tensor product
+circuit = circ_x.tensor(circ_y)
+\end{lstlisting}
+
+\loadfigs{poisson_vector.png}{poisson_circuit.png}
+  {2D Poisson source: $\sin(4\pi i/N)\sin(6\pi j/N)$, $N=32$}
+  {unused}
+  {1.0}{sec6_poisson}
+
+The total gate count is $2\times\bigO{m^2}$ for $2m$
+qubits encoding $N^2$ amplitudes, compared to
+$\bigO{2^{2m}} = \bigO{N^2}$ for general state
+preparation.
+
+% ----------------------------------------------------------------
+\subsection{Quantum Finance}
+\label{sec:app_finance}
+
+Quantum amplitude estimation (QAE) offers a quadratic
+speedup over classical Monte Carlo for computing
+expectations $\mathbb{E}[f(X)]$~\cite{montanaro2015}.
+The algorithm requires encoding the probability
+distribution of $X$ as a quantum state
+$|\psi\rangle = \sum_x \sqrt{p(x)}\,|x\rangle$,
+a step whose gate cost determines whether the
+quadratic speedup survives end-to-end~\cite{Herbert2022}.
+
+For the standard option pricing model, $X$ follows a
+discretised log-normal distribution. A common and
+practically important special case is a \emph{piecewise
+constant} approximation: the price range is partitioned
+into bins of varying weight, giving a
+\texttt{MULTI\_DISCRETE} vector:
+\begin{lstlisting}[style=python]
+from pyencode import encode_params
+from pyencode import MULTI_DISCRETE, DISCRETE
+
+circuit, info = encode_params(
+    MULTI_DISCRETE(vectors=[
+        DISCRETE(k=k_i, P=w_i)
+        for k_i, w_i in zip(indices, weights)
+    ]),
+    N=N)
+\end{lstlisting}
+
+\loadfigs{finance_vector.png}{finance_circuit.png}
+  {Price distribution as MULTI\_DISCRETE ($|S|\!=\!3$, $N\!=\!8$)}
+  {unused}
+  {1.0}{sec6_finance}
+
+Since QAE applies the state preparation oracle
+$\bigO{1/\varepsilon}$ times to achieve error
+$\varepsilon$~\cite{montanaro2015}, a reduction in
+preparation depth from $\bigO{2^m}$ to $\bigO{|S|m}$
+reduces the total circuit depth substantially.
+
+% ----------------------------------------------------------------
+\section{Conclusions}
+\label{sec:conclusions}
+
+PyEncode does \emph{not} provide any new mathematical insight into the amplitude encoding problem. Instead, it provides a practical framework that exploits the regularity of structured vectors --- whether that regularity is identified from source code, from a materialised vector, or declared explicitly by the user --- to produce quantum circuits that are exponentially more efficient than general state preparation.
+
+The current limitations are worth noting:
+\begin{itemize}
+    \item \textbf{Composability.} Superposition of quantum states does not compose as circuit concatenation, so combinations with overlapping support from different pattern classes fall back to Shende's general state preparation.
+    \item \textbf{Unstructured vectors.} Several vector types common in practice --- including ramp, quadratic, and hat (tent) functions --- do not admit exact sparse representations and therefore fall outside the pattern library. Approximate encoding via piecewise polynomial methods~\cite{obrien2025} or smooth-function circuits~\cite{holmes2020} would be required. The current philosophy of PyEncode is to provide only exact circuit mappings, leaving approximation-based extensions to future work.
+\end{itemize}
+
+More broadly, characterizing which classes of vectors admit $\bigO{\mathrm{poly}(m)}$ exact circuits remains an open and potentially rich research question.
+
+
+
+\section*{Acknowledgments}
+The author would like to acknowledge the Vilas Associate Grant from the University of Wisconsin Graduate School.
+
+\section*{Declarations}
+The author declares no conflict of interest.
+
+\section*{Code reproducibility and availability }
+
+The code developed in this work is available at \url{https://github.com/UW-ERSL/PyEncode.git}
+and will be made public upon publication.
+
+% ----------------------------------------------------------------
+\bibliographystyle{unsrt}
+\bibliography{references}
+
+\appendix
+\section{PyEncode Full Specification}
+\label{sec:Appendix}
+
+\subsection{Entry Point: \texttt{encode\_python}}
+\label{app:encode_python}
+
+\subsubsection*{Signature}
+
+\begin{quote}
+\texttt{encode\_python(code, vector\_type=None, N=None, validate=False, tol=1e-6)}
+\end{quote}
+
+\subsubsection*{Execution Flow}
+
+\begin{figure*}[ht]
+\centering
+\tikzset{
+  block/.style    = {rectangle, rounded corners, draw,
+                     text width=4.0cm, align=center,
+                     minimum height=0.7cm, font=\small},
+  decision/.style = {rectangle, rounded corners=2pt, draw,
+                     fill=yellow!25, text width=3.8cm, align=center,
+                     minimum height=0.7cm, font=\small\itshape},
+  arr/.style      = {-{Stealth[length=5pt]}, thick},
+  note/.style     = {font=\footnotesize\itshape}
+}
+\begin{tikzpicture}[x=1cm, y=1cm, scale=0.88, transform shape]
+
+  % ---- shared top nodes ----
+  \node[block, fill=gray!15, text width=6.0cm] at (0, 0)      (in)
+    {\texttt{encode\_python(code, vector\_type)}};
+
+  \node[block, text width=6.0cm] at (0, -1.4)                 (src)
+    {Callable? $\Rightarrow$ \texttt{inspect.getsource}\\[2pt]
+     String?~$\Rightarrow$ use directly};
+
+  \node[decision] at (0, -2.9)              (hint)
+    {\texttt{vector\_type} provided?};
+
+  % ---- Path 1: left branch ----
+  \node[block, fill=blue!8]  at (-5, -4.5)  (ast)
+    {AST recognition\\(vectorised idioms)};
+
+  \node[decision] at (-5, -5.9)             (match)
+    {Pattern matched?};
+
+  \node[block, fill=green!10] at (-7.5, -7.6) (synth1)
+    {Closed-form synthesiser\\$\bigO{m}$ or $\bigO{m^2}$};
+
+  \node[block, fill=orange!15] at (-2.5, -7.6) (shende1)
+    {Shende fallback\\$\bigO{2^m}$ + warning};
+
+  % ---- Path 2: right branch ----
+  \node[block, fill=blue!8]  at (5, -4.5)   (exec)
+    {Execute code,\\construct $\mathbf{f}$};
+
+  \node[block] at (5, -5.9)                 (extract)
+    {Extract parameters from $\mathbf{f}$};
+
+  \node[block] at (5, -7.3)                 (val)
+    {Classical validation:\\
+     $\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_{\mathrm{recon}}\|<\varepsilon$};
+
+  \node[decision] at (5, -8.9)              (pass)
+    {Validation passed?};
+
+  \node[block, fill=green!10] at (2.5, -10.6) (synth2)
+    {Closed-form synthesiser};
+
+  \node[block, fill=red!12]   at (7.5, -10.6) (err)
+    {Raise informative error};
+
+  % ---- Arrows: top ----
+  \draw[arr] (in)  -- (src);
+  \draw[arr] (src) -- (hint);
+  \draw[arr] (hint.west) -- node[above,note]{No}
+             (-5, -2.9) -- (ast);
+  \draw[arr] (hint.east) -- node[above,note]{Yes}
+             ( 5, -2.9) -- (exec);
+
+  % ---- Arrows: Path 1 ----
+  \draw[arr] (ast) -- (match);
+  \draw[arr] (match.west) -| (synth1);
+  \draw[arr] (match.east) -| (shende1);
+  \node[note] at (-7.4, -5.7) {Yes};
+  \node[note] at (-2.6, -5.7) {No};
+
+  % ---- Arrows: Path 2 ----
+  \draw[arr] (exec)    -- (extract);
+  \draw[arr] (extract) -- (val);
+  \draw[arr] (val)     -- (pass);
+  \draw[arr] (pass.west) -| (synth2);
+  \draw[arr] (pass.east) -| (err);
+  \node[note] at (2.6,  -8.7) {Yes};
+  \node[note] at (7.4,  -8.7) {No};
+
+\end{tikzpicture}
+\caption{Execution flow of \texttt{encode\_python}.
+         Left branch: AST recognition (no hint).
+         Right branch: numerical extraction (hint provided).}
+\label{fig:encode_python_flow}
+\end{figure*}
+
+
+\noindent\textbf{Arguments.}
+\texttt{code} accepts a string of valid Python source or a
+callable; in the latter case the source is retrieved
+automatically via \texttt{inspect.getsource} (reliable for
+\texttt{.py} files; unreliable in notebooks and unsupported
+in a REPL). \texttt{vector\_type} accepts a \texttt{VectorType}
+enum value or a case-insensitive string (e.g.\ \texttt{"SINE"});
+if omitted, Path~1 is taken.
+
+\subsubsection*{Execution Paths}
+
+\textbf{Path~1: No hint.}
+The AST recogniser pattern-matches against supported
+vectorised idioms: \texttt{np.sin}, \texttt{np.cos},
+\texttt{np.ones}, \texttt{np.zeros} with a single nonzero
+entry, and linear combinations thereof. Loop bodies and
+list comprehensions are not recognised. On failure PyEncode
+issues a warning and falls back to Shende's $\bigO{2^m}$
+circuit --- valid but suboptimal.
+
+\textbf{Path~2: Hint provided.}
+The code is executed to construct $\mathbf{f}$ ($\bigO{2^m}$
+memory cost --- bridge-era only). Parameters are extracted
+numerically and the classical validation check
+$\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_{\mathrm{recon}}\|_2 <
+\varepsilon$ (default $\varepsilon=10^{-6}$) is performed
+before synthesis. Failure raises an informative error rather
+than silently falling back.
+
+\subsubsection*{Validation}
+
+Two independent checks operate at different stages:
+\begin{itemize}[leftmargin=1.4em,itemsep=2pt]
+\item \textbf{Classical} (Path~2, mandatory): verifies
+      $\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_{\mathrm{recon}}\|_2
+      < \varepsilon$ before synthesis. A circuit is
+      produced only when $\mathbf{f}$ provably matches the
+      declared pattern.
+\item \textbf{Statevector} (both paths, optional,
+      \texttt{validate=True}): runs the synthesised circuit
+      on Qiskit's statevector simulator and checks
+      $\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_{\mathrm{sim}}\|_2
+      < \varepsilon$. Disabled by default; requires
+      $\bigO{2^m}$ memory.
+\end{itemize}
+
+\subsection*{Return Value}
+
+Returns \texttt{(circuit, info)} where \texttt{info}
+contains: \texttt{vector\_type}, extracted parameters,
+gate count, complexity class, \texttt{validated} flag,
+and \texttt{circuit\_code} --- a standalone executable
+Python script that reproduces the circuit, including
+the validation step if \texttt{validate=True} was
+requested. \texttt{circuit\_code} is always returned;
+no flag is required.
+
+The complexity class supports programmatic fallback
+detection, and \texttt{circuit\_code} allows the
+synthesised circuit to be used independently of
+PyEncode:
+\begin{lstlisting}[style=python]
+circuit, info = encode_python(code)
+
+# Check whether an efficient circuit was produced
+if info.complexity == "O(2^m)":
+    warnings.warn("Shende fallback used.")
+
+# Standalone script: runs without PyEncode
+print(info.circuit_code)
+# from qiskit import QuantumCircuit
+# from qiskit.circuit.library import QFT
+# import numpy as np
+# # SINE encoding: n=3, A=1.0, N=64
+# qc = QuantumCircuit(6)
+# ...
+\end{lstlisting}
+
+% ----------------------------------------------------------------
+\subsection{Entry Point: \texttt{encode\_vector}}
+\label{app:encode_vector}
+
+\subsubsection*{Signature}
+
+\begin{quote}
+\texttt{encode\_vector(f, vector\_type=None, validate=False, tol=1e-6)}
+\end{quote}
+
+\subsubsection*{Execution Flow}
+
+\begin{figure*}[ht]
+\centering
+\tikzset{
+  block/.style    = {rectangle, rounded corners, draw,
+                     text width=4.0cm, align=center,
+                     minimum height=0.7cm, font=\small},
+  decision/.style = {rectangle, rounded corners=2pt, draw,
+                     fill=yellow!25, text width=3.8cm, align=center,
+                     minimum height=0.7cm, font=\small\itshape},
+  arr/.style      = {-{Stealth[length=5pt]}, thick},
+  note/.style     = {font=\footnotesize\itshape}
+}
+\begin{tikzpicture}[x=1cm, y=1cm, scale=0.88, transform shape]
+
+  % ---- top node ----
+  \node[block, fill=gray!15, text width=6.0cm] at (0, 0) (in)
+    {\texttt{encode\_vector(f, vector\_type)}};
+
+  \node[decision] at (0, -1.5) (hint)
+    {\texttt{vector\_type} provided?};
+
+  % ---- Path 1: left (auto-detect) ----
+  \node[block, fill=blue!8] at (-5, -3.2) (auto)
+    {Try each extractor\\in preference order};
+
+  \node[decision] at (-5, -4.7) (match)
+    {Pattern matched?};
+
+  \node[block, fill=green!10] at (-7.5, -6.4) (synth1)
+    {Closed-form synthesiser\\$\bigO{m}$ or $\bigO{m^2}$};
+
+  \node[block, fill=orange!15] at (-2.5, -6.4) (err1)
+    {Raise \texttt{ValueError}\\(no pattern found)};
+
+  % ---- Path 2: right (hint provided) ----
+  \node[block, fill=blue!8] at (5, -3.2) (extract)
+    {Extract parameters\\from $\mathbf{f}$};
+
+  \node[block] at (5, -4.7) (val)
+    {Classical validation:\\
+     $\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_{\mathrm{recon}}\|<\varepsilon$};
+
+  \node[decision] at (5, -6.3) (pass)
+    {Validation passed?};
+
+  \node[block, fill=green!10] at (2.5, -8.0) (synth2)
+    {Closed-form synthesiser};
+
+  \node[block, fill=red!12] at (7.5, -8.0) (err2)
+    {Raise informative error};
+
+  % ---- Arrows: top ----
+  \draw[arr] (in)  -- (hint);
+  \draw[arr] (hint.west) -- node[above,note]{No}
+             (-5, -1.5) -- (auto);
+  \draw[arr] (hint.east) -- node[above,note]{Yes}
+             ( 5, -1.5) -- (extract);
+
+  % ---- Arrows: Path 1 ----
+  \draw[arr] (auto) -- (match);
+  \draw[arr] (match.west) -| (synth1);
+  \draw[arr] (match.east) -| (err1);
+  \node[note] at (-7.4, -4.5) {Yes};
+  \node[note] at (-2.6, -4.5) {No};
+
+  % ---- Arrows: Path 2 ----
+  \draw[arr] (extract) -- (val);
+  \draw[arr] (val)     -- (pass);
+  \draw[arr] (pass.west) -| (synth2);
+  \draw[arr] (pass.east) -| (err2);
+  \node[note] at (2.6, -6.1) {Yes};
+  \node[note] at (7.4, -6.1) {No};
+
+\end{tikzpicture}
+\caption{Execution flow of \texttt{encode\_vector}.
+         Left branch: auto-detection (no hint).
+         Right branch: verified synthesis (hint provided).}
+\label{fig:encode_vector_flow}
+\end{figure*}
+
+\noindent\textbf{Arguments.}
+\texttt{f} is a NumPy array of length $N = 2^m$; it must
+be materialised classically, so this function has
+$\bigO{N}$ memory cost on all paths. \texttt{vector\_type}
+accepts a \texttt{VectorType} enum value or a
+case-insensitive string; if omitted, Path~1 is taken.
+
+\subsubsection*{Execution Paths}
+
+\textbf{Path~1: No hint (auto-detection).}
+PyEncode tries each pattern extractor in preference
+order --- \texttt{DISCRETE}, \texttt{UNIFORM},
+\texttt{SQUARE}, \texttt{SINE}, \texttt{COSINE},
+\texttt{MULTI\_DISCRETE}, \texttt{MULTI\_SINE} ---
+fitting parameters from $\mathbf{f}$ and checking the
+residual $\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_\mathrm{recon}\|
+< \varepsilon$ for each. The first match is returned.
+If no pattern matches, a \texttt{ValueError} is raised;
+the caller may then fall back to general state
+preparation explicitly.
+
+\textbf{Path~2: Hint provided.}
+Parameter extraction and classical validation are
+performed for the declared type only. A circuit is
+synthesised only when validation passes; otherwise an
+informative error identifies the mismatch. This path
+is \emph{correct by construction}: it never silently
+produces a suboptimal circuit.
+
+\subsubsection*{Validation}
+
+Identical to \texttt{encode\_python}: classical
+validation (mandatory on Path~2) checks
+$\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_\mathrm{recon}\|_2
+< \varepsilon$ before synthesis; statevector validation
+(\texttt{validate=True}, optional) checks the circuit
+output against $\mathbf{f}$ using Qiskit's simulator.
+
+\subsubsection*{Return Value}
+
+Returns \texttt{(circuit, info)} with the same
+\texttt{info} fields as \texttt{encode\_python}:
+\texttt{vector\_type}, extracted parameters, gate count,
+complexity class, \texttt{validated} flag and \texttt{circuit\_code}.
+
+% ----------------------------------------------------------------
+\subsection{Entry Point: \texttt{encode\_params}}
+\label{app:encode_params}
+
+\subsubsection*{Signature}
+
+\begin{quote}
+\texttt{encode\_params(VectorObj, N, validate=False, tol=1e-6)}
+\end{quote}
+where \texttt{VectorObj} is a typed constructor such as
+\texttt{SINE(n=3, A=1.0)} or \texttt{DISCRETE(k=32, P=1.0)}.
+For composite vectors:
+\begin{quote}
+\texttt{encode\_params([VectorObj\_1, VectorObj\_2, \ldots], N, validate=False, tol=1e-6)}
+\end{quote}
+
+\subsubsection*{Execution Flow}
+
+\begin{figure*}[ht]
+\centering
+\tikzset{
+  block/.style    = {rectangle, rounded corners, draw,
+                     text width=4.0cm, align=center,
+                     minimum height=0.7cm, font=\small},
+  decision/.style = {rectangle, rounded corners=2pt, draw,
+                     fill=yellow!25, text width=3.8cm, align=center,
+                     minimum height=0.7cm, font=\small\itshape},
+  arr/.style      = {-{Stealth[length=5pt]}, thick},
+  note/.style     = {font=\footnotesize\itshape}
+}
+\begin{tikzpicture}[x=1cm, y=1cm, scale=0.88, transform shape]
+
+  % ---- top node ----
+  \node[block, fill=gray!15, text width=7.0cm] at (0, 0) (in)
+    {\texttt{encode\_params(VectorObj, N)}};
+
+  \node[decision] at (0, -1.6) (comp)
+    {Composite? (list input)};
+
+  % ---- Path 1: left (single type) ----
+  \node[block, fill=blue!8] at (-4.5, -3.3) (lookup)
+    {Look up closed-form\\synthesiser for type};
+
+  \node[decision] at (-4.5, -4.8) (valid1)
+    {Required params\\present?};
+
+  \node[block, fill=green!10] at (-4.5, -6.5) (synth1)
+    {Synthesize circuit\\$\bigO{m}$ or $\bigO{m^2}$};
+
+  \node[block, fill=red!12] at (-4.5, -8.0) (opt1)
+    {Statevector check\\(\texttt{validate=True})};
+
+  % ---- Path 2: right (composite) ----
+  \node[block, fill=blue!8] at (4.5, -3.3) (each)
+    {Synthesize each\\component circuit};
+
+  \node[block] at (4.5, -4.8) (super)
+    {Superpose via\\LCU combination};
+
+  \node[block, fill=green!10] at (4.5, -6.5) (synth2)
+    {Return combined\\circuit};
+
+  \node[block, fill=red!12] at (4.5, -8.0) (opt2)
+    {Statevector check\\(\texttt{validate=True})};
+
+  % ---- error node ----
+  \node[block, fill=orange!15] at (-9.0, -6.5) (err)
+    {Raise \texttt{TypeError}:\\missing parameter};
+
+  % ---- Arrows: top ----
+  \draw[arr] (in) -- (comp);
+  \draw[arr] (comp.west) -- node[above,note]{No}
+             (-4.5, -1.6) -- (lookup);
+  \draw[arr] (comp.east) -- node[above,note]{Yes}
+             ( 4.5, -1.6) -- (each);
+
+  % ---- Arrows: Path 1 ----
+  \draw[arr] (lookup) -- (valid1);
+  \draw[arr] (valid1.south) -- node[right,note]{Yes} (synth1);
+  \draw[arr] (valid1.west)  -| node[above,note,pos=0.2]{No} (err);
+  \draw[arr] (synth1) -- (opt1);
+
+  % ---- Arrows: Path 2 ----
+  \draw[arr] (each)  -- (super);
+  \draw[arr] (super) -- (synth2);
+  \draw[arr] (synth2) -- (opt2);
+
+\end{tikzpicture}
+\caption{Execution flow of \texttt{encode\_params}.
+         Left branch: single vector type.
+         Right branch: composite (list of types).
+         No vector is ever materialized.}
+\label{fig:encode_params_flow}
+\end{figure*}
+
+\noindent\textbf{Arguments.}
+The first argument is a typed constructor object such
+as \texttt{SINE(n=3, A=1.0)} or
+\texttt{DISCRETE(k=32, P=1.0)}. Constructor names
+match \texttt{VectorType} enum values and are imported
+directly from \texttt{pyencode}. This design catches
+missing or misspelled parameters at construction time
+rather than at circuit synthesis time, and is fully
+supported by IDE autocompletion and static analysis.
+For composite vectors, the first argument is a list
+of constructor objects. \texttt{N} is the vector
+length and must be a power of~2. Constructor parameters for each type are given
+below. \textbf{No vector is
+materialised on any path}: this is the only entry
+point viable at quantum scale.
+
+\noindent\textbf{Constructor signatures:}
+\begin{quote}\small
+\texttt{DISCRETE(k, P)} \quad
+\texttt{UNIFORM(c)} \quad
+\texttt{STEP(k\_s, c)} \quad
+\texttt{SQUARE(k1, k2, c)}\\[2pt]
+\texttt{SINE(n, A, phi=0)} \quad
+\texttt{COSINE(n, A, phi=0)}\\[2pt]
+\texttt{MULTI\_DISCRETE(vectors=[DISCRETE(\ldots), \ldots])}\\[2pt]
+\texttt{MULTI\_SINE(modes=[SINE(\ldots), \ldots])}
+\end{quote}
+\textbf{No vector is materialised on any path}: this is the only entry
+point viable at quantum scale.
+
+\subsubsection*{Execution Paths}
+
+\textbf{Single type.}
+PyEncode looks up the closed-form synthesiser for the
+declared type, checks that all required parameters are
+present (raising a \texttt{TypeError} if not), and
+directly produces the circuit. No pattern recognition
+and no vector construction are performed.
+
+\textbf{Composite (list input).}
+Each component is synthesised independently via its
+own closed-form circuit. The components are combined
+via linear combination, with normalisation handled
+automatically. Composite synthesis is only valid when
+component supports are disjoint or the superposition
+is explicitly structured; overlapping supports fall
+back to Shende with a warning.
+
+\subsubsection*{Validation}
+
+No classical vector validation is performed --- there
+is no vector to validate. The optional statevector
+check (\texttt{validate=True}) constructs
+$\mathbf{f}$ from the supplied parameters, runs the
+circuit on Qiskit's statevector simulator, and verifies
+$\|\hat{\mathbf{f}}-\hat{\mathbf{f}}_\mathrm{sim}\|_2
+< \varepsilon$. This is the only validation available
+and is disabled by default due to its $\bigO{2^m}$
+memory cost.
+
+\subsection*{Return Value}
+
+Returns \texttt{(circuit, info)} with the same
+\texttt{info} fields as \texttt{encode\_python}:
+\texttt{vector\_type}, supplied parameters, gate count,
+complexity class, \texttt{validated} flag and
+\texttt{circuit\_code}. Since no vector is materialized,
+\texttt{circuit\_code} is the only human-readable record
+of the synthesis and serves as a standalone verified
+implementation independent of PyEncode.
+
+\end{document}

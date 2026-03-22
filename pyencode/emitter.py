@@ -25,7 +25,7 @@ import math
 import numpy as np
 from typing import Optional
 
-from .recognizer import LoadPattern, LoadType
+from .recognizer import LoadPattern, VectorType
 
 
 # ---------------------------------------------------------------------------
@@ -58,16 +58,16 @@ def emit_code(pattern: LoadPattern) -> str:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        LoadType.POINT_LOAD:        _emit_point_load,
-        LoadType.UNIFORM_LOAD:      _emit_uniform_load,
-        LoadType.STEP_LOAD:         _emit_step_load,
-        LoadType.SQUARE_LOAD:       _emit_square_load,
-        LoadType.SINUSOIDAL_LOAD:   _emit_sinusoidal,
-        LoadType.COSINE_LOAD:       _emit_cosine,
-        LoadType.MULTI_POINT_LOAD:  _emit_multi_point_load,
-        LoadType.MULTI_SIN_LOAD:    _emit_multi_sin_load,
-        LoadType.UNIFORM_SPIKE_LOAD: _emit_uniform_spike,
-        LoadType.UNKNOWN:           _emit_mottonen,
+        VectorType.DISCRETE:        _emit_point_load,
+        VectorType.UNIFORM:      _emit_uniform_load,
+        VectorType.STEP:         _emit_step_load,
+        VectorType.SQUARE:       _emit_square_load,
+        VectorType.SINE:   _emit_sinusoidal,
+        VectorType.COSINE:       _emit_cosine,
+        VectorType.MULTI_DISCRETE:  _emit_multi_point_load,
+        VectorType.MULTI_SINE:    _emit_multi_sin_load,
+        VectorType.UNIFORM_SPIKE: _emit_uniform_spike,
+        VectorType.UNKNOWN:           _emit_mottonen,
     }
 
     fn = dispatch.get(pattern.load_type, _emit_mottonen)
