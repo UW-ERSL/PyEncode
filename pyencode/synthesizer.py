@@ -127,33 +127,101 @@ def _synth_uniform_load(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_step_load(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare (1/√k_s) Σ_{j=0}^{k_s-1} |j⟩.
+    Prepare (1/√M) Σ_{j=0}^{M-1} |j⟩  for any M in [1, 2^m].
 
-    Strategy
-    --------
-    STEP(k_s) is the special case of SQUARE(k1=0, k2=k_s).
-    Delegates directly to _square_ry_decompose, which implements the
-    correct O(m) window-tracking Ry decomposition for all k_s values.
+    Algorithm
+    ---------
+    Implements Algorithm 1 of Shukla & Vedula, *Quantum Information
+    Processing* 23:38, 2024.  DOI: 10.1007/s11128-024-04258-4.
 
-    Gate count: O(m).
+    Write M in binary as M = 2^{l_0} + 2^{l_1} + ... + 2^{l_k}
+    with 0 ≤ l_0 < l_1 < ... < l_k ≤ m−1 (positions of 1-bits, LSB first).
+
+    Steps:
+      1. X on qubits l_1, ..., l_k  (flip the upper boundary bits)
+      2. H on qubits 0..l_0−1       (uniform over lowest block)
+      3. R_Y(θ_0) on q_{l_1}        (split amplitude: lower / upper)
+      4. CH(ctrl=q_{l_1}, active-low) on q_{l_0}..q_{l_1−1}
+      5. Repeat with CRY + CH for each subsequent 1-bit
+
+    Gate count: exactly Σ l_j gates = O(m log m) worst case, O(m) typical.
+    No ancilla qubits. No multi-controlled gates. Each gate has at most
+    one control qubit.
+
+    Reference
+    ---------
+    Shukla, A. & Vedula, P. (2024). An efficient quantum algorithm for
+    preparation of uniform quantum superposition states.
+    Quantum Inf. Process. 23, 38.
     """
-    k_s = params["k_s"]
-    N   = 2 ** m
-    if k_s <= 0 or k_s > N:
-        raise ValueError(f"k_s={k_s} out of range [1, {N}]")
+    M = params["k_s"]
+    N = 2 ** m
+    if M <= 0 or M > N:
+        raise ValueError(f"k_s={M} out of range [1, {N}]")
 
     qc = QuantumCircuit(m, name="step_load")
 
-    if k_s & (k_s - 1) == 0:
-        # Power of 2: pure H gates on the p lowest qubits
-        p = int(round(math.log2(k_s)))
+    # Power-of-2 special case: pure H gates
+    if M & (M - 1) == 0:
+        p = int(round(math.log2(M)))
         for q in range(p):
             qc.h(q)
         return qc
 
-    # General case: STEP is SQUARE with k1=0; reuse the verified decomposition
-    _square_ry_decompose(qc, 0, k_s, m - 1, ctrl_qubits=[], ctrl_vals=[])
+    # Find l_j: positions of 1-bits in M, ascending (LSB first)
+    ls = [i for i in range(m) if (M >> i) & 1]
+    k  = len(ls) - 1   # index of highest 1-bit entry
+
+    # Step 4: X on qubits l_1 ... l_k (all 1-bit positions except the lowest)
+    for lj in ls[1:]:
+        qc.x(lj)
+
+    # Step 5: M_0 = 2^{l_0}
+    M_prev = 2 ** ls[0]
+
+    # Steps 6-7: if l_0 > 0, H on qubits 0 .. l_0-1
+    for q in range(ls[0]):
+        qc.h(q)
+
+    # Step 8: R_Y(θ_0) on q_{l_1}, θ_0 = -2 arccos(sqrt(M_0 / M))
+    theta0 = -2.0 * math.acos(math.sqrt(M_prev / M))
+    qc.ry(theta0, ls[1])
+
+    # Step 9: controlled-H on q_{l_0} .. q_{l_1 - 1}, conditioned on q_{l_1} = 0
+    # (active-low: X before and after CH)
+    for q in range(ls[0], ls[1]):
+        qc.x(ls[1])
+        qc.ch(ls[1], q)
+        qc.x(ls[1])
+
+    # Steps 10-13: loop over remaining 1-bits
+    for idx in range(1, k):
+        lm      = ls[idx]       # current bit position
+        lm_next = ls[idx + 1]   # next bit position
+
+        # M_{m} = M_{m-1} + 2^{l_m}  (already computed as M_prev + 2^{lm})
+        M_cur = M_prev + 2 ** lm
+
+        # Step 11: CRY(θ_m) on q_{l_{m+1}}, conditioned on q_{l_m} = 0
+        theta_m = -2.0 * math.acos(math.sqrt(2 ** lm / (M - M_prev)))
+        qc.x(lm)
+        qc.cry(theta_m, lm, lm_next)
+        qc.x(lm)
+
+        # Step 12: controlled-H on q_{l_m} .. q_{l_{m+1} - 1},
+        # conditioned on q_{l_{m+1}} = 0  (active-low)
+        for q in range(lm, lm_next):
+            qc.x(lm_next)
+            qc.ch(lm_next, q)
+            qc.x(lm_next)
+
+        # Step 13: update M_prev
+        M_prev = M_cur
+
     return qc
+
+
+
 
 
 
