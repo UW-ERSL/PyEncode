@@ -14,6 +14,7 @@ from qiskit import QuantumCircuit
 from .recognizer import VectorType, LoadPattern
 from .synthesizer import synthesize
 from .emitter import emit_code
+from .config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 from .types import (
     _VectorObj, DISCRETE, SINE,
     MULTI_DISCRETE, MULTI_SINE,
@@ -59,7 +60,7 @@ _OLD_NAME_MAP = {
 }
 
 
-def _normalise_vector_type(vector_type: Union[VectorType, str]) -> VectorType:
+def _normalize_vector_type(vector_type: Union[VectorType, str]) -> VectorType:
     """Convert string to VectorType enum; reject UNKNOWN."""
     if isinstance(vector_type, str):
         upper = vector_type.upper()
@@ -196,7 +197,7 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
 # Shared synthesis + info builder
 # -------------------------------------------------------------------
 
-def _synthesise_and_build_info(
+def _synthesize_and_build_info(
     pattern: LoadPattern,
     fallback_vector: Optional[np.ndarray],
     validate: bool,
@@ -215,13 +216,12 @@ def _synthesise_and_build_info(
 
     try:
         from qiskit import transpile as qk_transpile
-        circuit = circuit.decompose(reps = 3)
-        t = qk_transpile(circuit,
-                         basis_gates=['cx', 'u', 'x', 'h', 'ry', 'rz', 'rx', 'p'],
-                         optimization_level=0)
-        total_gates = sum(t.count_ops().values())
+        # Count raw logical gates (before decomposition).
+        # This matches the "Raw" column in the paper's gate count table.
+        # mcry, ccx, cry etc. are counted as single gates at this level.
+        total_gates = sum(circuit.count_ops().values())
     except Exception:
-        total_gates = sum(circuit.decompose(reps=10).count_ops().values())
+        total_gates = sum(circuit.count_ops().values())
 
     complexity = _COMPLEXITY.get(pattern.load_type, "unknown")
 
@@ -388,7 +388,7 @@ def _encode_composite(
         )
         validated_params = _validate_params(VectorType.MULTI_DISCRETE, N, combined.params)
         pattern = LoadPattern(VectorType.MULTI_DISCRETE, N=N, params=validated_params)
-        return _synthesise_and_build_info(
+        return _synthesize_and_build_info(
             pattern, fallback_vector=None,
             validate=validate, tol=tol,
         )
@@ -399,12 +399,12 @@ def _encode_composite(
         )
         validated_params = _validate_params(VectorType.MULTI_SINE, N, combined.params)
         pattern = LoadPattern(VectorType.MULTI_SINE, N=N, params=validated_params)
-        return _synthesise_and_build_info(
+        return _synthesize_and_build_info(
             pattern, fallback_vector=None,
             validate=validate, tol=tol,
         )
 
-    # General composite: synthesise each component independently,
+    # General composite: synthesize each component independently,
     # combine via LCU (linear combination of unitaries).
     from .synthesizer import synthesize as _synthesize
 
@@ -437,7 +437,7 @@ def _encode_composite(
     # If only 1 component, just return it
     if K == 1:
         info_pattern = component_patterns[0]
-        return _synthesise_and_build_info(
+        return _synthesize_and_build_info(
             info_pattern, fallback_vector=None,
             validate=validate, tol=tol,
         )
@@ -508,7 +508,7 @@ def _prepare_amplitude_ancilla(
 ):
     """Prepare ancilla register with amplitude distribution using Ry gates.
 
-    For K components with normalised weights w_0..w_{K-1}, prepares:
+    For K components with normalized weights w_0..w_{K-1}, prepares:
         |psi_anc> = sum_i w_i |i>
     on n_anc = ceil(log2(K)) qubits using a binary Ry tree.
     """
@@ -558,3 +558,12 @@ def _apply_anc_ry(qc, node_norm, node, depth, n_anc, anc_qubits, ctrl_path):
                   ctrl_path + [(target, 0)])
     _apply_anc_ry(qc, node_norm, 2 * node + 1, depth + 1, n_anc, anc_qubits,
                   ctrl_path + [(target, 1)])
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases (British → American spelling)
+# These are kept so that any external code importing the private helpers
+# directly does not break immediately.  They will be removed in v0.5.
+# ---------------------------------------------------------------------------
+_normalise_vector_type = _normalize_vector_type          # noqa: E305
+_synthesise_and_build_info = _synthesize_and_build_info  # noqa: E305

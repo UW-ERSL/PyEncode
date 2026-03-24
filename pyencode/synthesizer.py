@@ -1,7 +1,7 @@
 """
 pyencode.synthesizer
 ======================
-Maps a recognised LoadPattern to an efficient Qiskit QuantumCircuit.
+Maps a recognized LoadPattern to an efficient Qiskit QuantumCircuit.
 
 Each synthesis function implements the analytical circuit construction
 derived from the structure of the load type.  Gate complexities:
@@ -16,13 +16,13 @@ derived from the structure of the load type.  Gate complexities:
   MULTI_SIN_LOAD          :  O(m²)      — QFT + multi-amplitude encoding
   UNIFORM_SPIKE_LOAD          :  O(m)       — H^{⊗m} + multi-controlled Ry perturbation
 
-The Möttönen fallback is provided for UNKNOWN patterns and uses the
-general state-preparation routine shipped with Qiskit.
+The Qiskit StatePreparation fallback is provided for UNKNOWN patterns
+and uses the general state-preparation routine shipped with Qiskit.
 
 References
 ----------
-  Möttönen et al., Quantum Inf. Comput. 5(6), 467-473, 2005.
   Shende, Markov, Bullock, IEEE TCAD 25(6), 1000-1010, 2006.
+  Gleinig & Hoefler, DAC 2021.
   Coppersmith, "An approximate Fourier transform useful in quantum
     factoring", IBM Research Report RC19642, 1994.
 """
@@ -76,10 +76,10 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.MULTI_DISCRETE:  _synth_disjoint_point_load,
         VectorType.MULTI_SINE:    _synth_multi_sin_load,
         VectorType.UNIFORM_SPIKE: _synth_uniform_spike_load,
-        VectorType.UNKNOWN:           _synth_mottonen,
+        VectorType.UNKNOWN:           _synth_qiskit_fallback,
     }
 
-    fn = dispatch.get(pattern.load_type, _synth_mottonen)
+    fn = dispatch.get(pattern.load_type, _synth_qiskit_fallback)
     return fn(m, pattern.params)
 
 
@@ -127,11 +127,13 @@ def _synth_uniform_load(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_step_load(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare (1/√k_s) Σ_{j=0}^{k_s - 1} |j⟩.
+    Prepare (1/√k_s) Σ_{j=0}^{k_s-1} |j⟩.
 
-    Strategy: if k_s = 2^p (power of 2), apply H to the p lowest qubits
-    and leave the rest as |0⟩.  For general k_s we use a binary-tree
-    Ry decomposition.
+    Strategy
+    --------
+    STEP(k_s) is the special case of SQUARE(k1=0, k2=k_s).
+    Delegates directly to _square_ry_decompose, which implements the
+    correct O(m) window-tracking Ry decomposition for all k_s values.
 
     Gate count: O(m).
     """
@@ -142,58 +144,19 @@ def _synth_step_load(m: int, params: dict) -> QuantumCircuit:
 
     qc = QuantumCircuit(m, name="step_load")
 
-    # Special case: k_s is a power of 2
     if k_s & (k_s - 1) == 0:
+        # Power of 2: pure H gates on the p lowest qubits
         p = int(round(math.log2(k_s)))
         for q in range(p):
             qc.h(q)
         return qc
 
-    # General case: binary-tree Ry encoding
-    # We encode k_s as a superposition over all indices < k_s.
-    # Use recursive amplitude encoding on the address register.
-    _uniform_superposition(qc, k_s, m)
+    # General case: STEP is SQUARE with k1=0; reuse the verified decomposition
+    _square_ry_decompose(qc, 0, k_s, m - 1, ctrl_qubits=[], ctrl_vals=[])
     return qc
 
 
-def _uniform_superposition(qc: QuantumCircuit, k: int, m: int):
-    """
-    Recursively prepare (1/√k) Σ_{j=0}^{k-1} |j⟩ on m qubits.
-    Uses a top-down Ry decomposition (qubit m-1 is MSB).
-    """
-    # Represent k in binary; use amplitude tree
-    # High qubit controls how many basis states are in the "left" half
-    N = 2 ** m
-    if k == N:
-        for q in range(m):
-            qc.h(q)
-        return
-    if k == 1:
-        return  # |0...0⟩ already prepared
-    if m == 1:
-        # Single qubit: |0⟩ with amplitude sqrt((N-k)/N) ... simplified
-        theta = 2 * math.acos(math.sqrt((N - k) / N))
-        qc.ry(theta, 0)
-        return
 
-    half = N // 2
-    if k <= half:
-        # All states in the lower half; MSB stays |0⟩
-        _uniform_superposition(qc, k, m - 1)
-    else:
-        # Some states in upper half
-        k_upper = k - half
-        # Amplitude for MSB = 0 is sqrt(half/k), for MSB = 1 is sqrt(k_upper/k)
-        theta = 2 * math.acos(math.sqrt(half / k))
-        qc.ry(theta, m - 1)
-        # Lower half: apply H to all lower qubits (unconditionally for the |0⟩ branch)
-        for q in range(m - 1):
-            qc.h(q)
-        # Upper branch: controlled uniform superposition over k_upper states
-        # Approximate with Ry on lower qubits conditioned on MSB=1
-        if k_upper < half:
-            theta2 = 2 * math.acos(math.sqrt(k_upper / half))
-            qc.cry(theta2, m - 1, m - 2)
 
 
 # ---------------------------------------------------------------------------
@@ -202,27 +165,45 @@ def _uniform_superposition(qc: QuantumCircuit, k: int, m: int):
 
 def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare (1/sqrt(k2-k1)) * sum_{j=k1}^{k2-1} |j>.
+    Prepare (1/√w) Σ_{j=k1}^{k2-1} |j⟩  where w = k2 - k1.
 
-    Strategy: use StatePreparation on the sparse binary vector.
-    For power-of-2 aligned segments this reduces to a simple
-    H-gate circuit; the general case uses the Shende fallback.
+    Strategy
+    --------
+    A square block [k1, k2) is the difference of two step prefixes:
 
-    Gate count: O(m) for aligned segments, O(2^m) general.
+        1[k1 ≤ j < k2] = 1[j < k2] - 1[j < k1]
+
+    In amplitude encoding:
+
+        √w |ψ_sq⟩ = √k2 |ψ_step(k2)⟩ - √k1 |ψ_step(k1)⟩
+
+    We therefore build |ψ_sq⟩ by combining two STEP circuits via a
+    single Ry rotation on an ancilla-free register:
+
+      1. Ry(α) on qubit m-1 splits amplitude: cos(α/2)→lower, sin(α/2)→upper
+         where α = 2 arccos(√(k1/w_total)), w_total = k1+k2... 
+
+    Simpler direct construction
+    ---------------------------
+    We use the same top-down controlled-Ry recursion as STEP, but now
+    the "active window" starts at k1 instead of 0.
+
+    At each qubit level (MSB first), we track the window [lo, hi) of
+    indices still to be covered.  Qubits outside the window stay |0⟩;
+    qubits at the boundary get a (controlled) Ry to split correctly.
+
+    Gate count: O(m) — at most one (C)Ry per qubit level.
     """
     k1 = params["k1"]
     k2 = params["k2"]
     N  = 2 ** m
-    w  = k2 - k1   # width of segment
+    w  = k2 - k1
 
     qc = QuantumCircuit(m, name="square_load")
 
-    # Special case: width and start are both powers of 2
-    # e.g. f[16:48] on N=64: k1=16=2^4, w=32=2^5
-    # H-gate circuit: width is a power of 2 AND segment is w-aligned (k1 % w == 0)
+    # Special case: w-aligned power-of-2 block → X gates + H gates
     if (w & (w - 1)) == 0 and (k1 % w == 0):
-        p = int(round(math.log2(w)))       # H on p lower qubits
-        # Encode k1 on all bits (upper bits identify the aligned block)
+        p = int(round(math.log2(w)))
         for bit in range(m):
             if (k1 >> bit) & 1:
                 qc.x(bit)
@@ -230,10 +211,84 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
             qc.h(q)
         return qc
 
-    # General case: Shende on sparse vector
-    f = np.zeros(N)
-    f[k1:k2] = 1.0
-    return _mottonen_from_vector(f.astype(complex), m, name="square_load")
+    # General case: top-down window-tracking Ry decomposition
+    _square_ry_decompose(qc, k1, k2, m - 1, ctrl_qubits=[], ctrl_vals=[])
+    return qc
+
+
+def _apply_controlled_ry(qc: QuantumCircuit,
+                          theta: float,
+                          ctrl_qubits: list,
+                          ctrl_vals: list,
+                          target: int) -> None:
+    """
+    Apply Ry(theta) on `target`, controlled on ctrl_qubits == ctrl_vals.
+    Active-low controls are handled by flanking X gates.
+    Uses a single CRy for one control, mcry for multiple.
+    """
+    if not ctrl_qubits:
+        qc.ry(theta, target)
+        return
+    flip = [q for q, v in zip(ctrl_qubits, ctrl_vals) if v == 0]
+    for q in flip:
+        qc.x(q)
+    if len(ctrl_qubits) == 1:
+        qc.cry(theta, ctrl_qubits[0], target)
+    else:
+        qc.mcry(theta, ctrl_qubits, target)
+    for q in flip:
+        qc.x(q)
+
+
+def _square_ry_decompose(qc: QuantumCircuit,
+                          lo: int, hi: int,
+                          qubit: int,
+                          ctrl_qubits: list,
+                          ctrl_vals: list) -> None:
+    """
+    Recursively prepare the uniform superposition over indices [lo, hi)
+    on qubits 0..qubit, conditioned on ctrl_qubits == ctrl_vals.
+
+    At each level we split the address space into lower and upper halves.
+    The window [lo, hi) may fall entirely in one half, or straddle both.
+    Gate count: O(m) (C)Ry gates at the circuit level.
+    """
+    slots = hi - lo
+    if slots <= 0 or qubit < 0:
+        return
+
+    half = 1 << qubit
+
+    block_size = 1 << (qubit + 1)
+    boundary   = (lo // block_size) * block_size + half
+
+    lower_lo = lo;          lower_hi = min(hi, boundary)
+    upper_lo = max(lo, boundary);   upper_hi = hi
+
+    lower_slots = max(0, lower_hi - lower_lo)
+    upper_slots = max(0, upper_hi - upper_lo)
+
+    if upper_slots == 0:
+        if qubit > 0:
+            _square_ry_decompose(qc, lower_lo, lower_hi, qubit - 1,
+                                 ctrl_qubits, ctrl_vals)
+        return
+
+    if lower_slots == 0:
+        _apply_controlled_ry(qc, math.pi, ctrl_qubits, ctrl_vals, qubit)
+        if qubit > 0:
+            _square_ry_decompose(qc, upper_lo, upper_hi, qubit - 1,
+                                 ctrl_qubits + [qubit], ctrl_vals + [1])
+        return
+
+    theta = 2.0 * math.acos(math.sqrt(lower_slots / slots))
+    _apply_controlled_ry(qc, theta, ctrl_qubits, ctrl_vals, qubit)
+
+    if qubit > 0:
+        _square_ry_decompose(qc, lower_lo, lower_hi, qubit - 1,
+                             ctrl_qubits + [qubit], ctrl_vals + [0])
+        _square_ry_decompose(qc, upper_lo, upper_hi, qubit - 1,
+                             ctrl_qubits + [qubit], ctrl_vals + [1])
 
 
 # ---------------------------------------------------------------------------
@@ -349,203 +404,357 @@ def _encode_index_controlled(qc: QuantumCircuit, idx: int, m: int,
 
 
 # ---------------------------------------------------------------------------
-# Case A: multi-point loads  (arbitrary L ≥ 2, arbitrary weights)
+# Case A: sparse point loads — Gleinig-Hoefler algorithm
 # ---------------------------------------------------------------------------
 
 def _synth_disjoint_point_load(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare a weighted superposition of L ≥ 2 point loads with arbitrary
-    non-negative magnitudes:
+    Prepare a weighted superposition of L ≥ 1 point loads:
 
-        |ψ⟩ = (1/‖a‖) Σ_{i=1}^{L} a_i |k_i⟩,   a_i = |P_i|
+        |ψ⟩ = (1/‖a‖) Σ_i a_i |k_i⟩,   a_i = |P_i|
 
-    Algorithm: binary-tree Ry decomposition (Mottonen et al., 2005;
-    Plesch & Brukner, PRA 83, 2011).
+    Algorithm: Gleinig & Hoefler, DAC 2021.
 
-    The L normalised amplitudes are arranged as the leaves of a complete
-    binary tree of depth ⌈log₂ L⌉.  Each internal node j holds the
-    partial norm of its subtree; the Ry rotation angle at node j is
+    The circuit is built by inverting the "disentangling" direction:
+    Algorithm 2 repeatedly calls Algorithm 1, which reduces an L-sparse
+    state to an (L-1)-sparse state using O(n) CNOT gates per call.
+    Total gate count: O(L·n).
 
-        θ_j = 2 arcsin( ‖right subtree‖ / ‖node‖ )
-
-    so that the amplitude is correctly split between the left (|0⟩) and
-    right (|1⟩) children.
-
-    After the Ry tree has distributed amplitudes, X-gate sequences encode
-    each target index k_i onto the qubits, controlled on the binary path
-    through the tree that selected leaf i.
-
-    Gate count
-    ----------
-    - Ry tree     : L − 1  Ry gates
-    - Index encoding : O(m · L) CX + X gates
-    - Total : O(m · L)
-
-    This reduces exactly to the hand-crafted two-point circuit for L = 2,
-    and for all L is strictly cheaper than the Shende O(2^m) fallback
-    whenever L ≪ 2^m.
+    This is correct for ALL index patterns — including clustered indices
+    (e.g. k=1,4,7 in N=2^20) that defeated the earlier Ry-tree approach.
 
     References
     ----------
-    Mottonen et al., Quantum Inf. Comput. 5(6), 467–473, 2005.
-    Plesch & Brukner, Phys. Rev. A 83, 032302, 2011.
-    Shende, Markov, Bullock, IEEE TCAD 25(6), 1000–1010, 2006.
+    Gleinig & Hoefler, "An Efficient Algorithm for Sparse Quantum State
+      Preparation", DAC 2021.  O(|S|·n) CNOT, O(|S| log|S| + n) 1-qubit.
     """
     loads = params["loads"]
     L     = len(loads)
 
-    # Normalise amplitudes
+    # Normalise amplitudes (use absolute values; signs absorbed into phase)
     amps = np.array([abs(load["P"]) for load in loads], dtype=float)
     norm = np.linalg.norm(amps)
     if norm < 1e-14:
         raise ValueError("All point-load magnitudes are zero.")
     amps = amps / norm
 
-    indices = [load["k"] for load in loads]
+    indices = [int(load["k"]) for load in loads]
 
-    qc = QuantumCircuit(m, name="multi_point_load")
-    _ry_tree_encode(qc, amps, indices, m)
-    return qc
-
-
-def _ry_tree_encode(qc: QuantumCircuit,
-                    amps: np.ndarray,
-                    indices: list,
-                    m: int) -> None:
-    """
-    Binary-tree Ry encoding.
-
-    Path-qubit design
-    -----------------
-    We use d path qubits (qubits m-d..m-1, root = qubit m-1).  The Ry
-    tree routes amplitude to leaf i by setting path_qubits[j] = (i>>j)&1.
-    For this to correctly encode index k_i, the d-bit *top prefix* of k_i
-    (bits m-d..m-1) must equal the leaf index i.  This requires:
-
-      1. d ≥ ceil(log2(L))  (enough leaves)
-      2. All d-bit top prefixes of the L indices are DISTINCT.
-
-    We choose the smallest d satisfying both constraints.  If no d ≤ m
-    works, we fall back to Shende's general state preparation.
-
-    After the Ry tree, the low (m-d) bits of each k_i are encoded onto
-    data qubits (0..m-d-1) via controlled-X gates.
-    """
-    L = len(amps)
     if L == 1:
+        qc = QuantumCircuit(m, name="sparse_load")
         for bit in range(m):
             if (indices[0] >> bit) & 1:
                 qc.x(bit)
-        return
+        return qc
 
-    # Find minimum d such that all top-d-bit prefixes are distinct
-    d_min = math.ceil(math.log2(L))
-    d = None
-    for d_try in range(d_min, m + 1):
-        prefixes = [(k >> (m - d_try)) for k in indices]
-        if len(set(prefixes)) == L:
-            d = d_try
-            break
-
-    if d is None or d > m:
-        # Fallback: Shende on sparse vector
-        N = 2 ** m
-        f = np.zeros(N, dtype=complex)
-        for a, k in zip(amps, indices):
-            f[k] = a
-        norm = np.linalg.norm(f)
-        if norm > 1e-14:
-            f /= norm
-        from qiskit.circuit.library import StatePreparation
-        sp = StatePreparation(f, label="multi_point_load")
-        qc.append(sp, range(m))
-        qc.decompose(inplace=True)
-        return
-
-    path_qubits = list(range(m - d, m))   # [m-d, ..., m-1]; path_qubits[d-1] = root
-    data_qubits = list(range(0, m - d))   # [0, ..., m-d-1]
-
-    # Each index k_i has a unique d-bit top prefix: prefix_i = k_i >> (m-d).
-    # We assign k_i to leaf number prefix_i.  This ensures that after the
-    # Ry tree, path_qubits are in state = bits m-d..m-1 of k_i.
-    num_leaves = 1 << d
-    amps_padded    = np.zeros(num_leaves)
-    indices_padded = [0] * num_leaves
-
-    for a, k in zip(amps, indices):
-        leaf_i = k >> (m - d)           # d-bit top prefix of k
-        amps_padded[leaf_i]    = a
-        indices_padded[leaf_i] = k
-
-    # Build partial-norm heap (1-indexed)
-    node_norm = np.zeros(2 * num_leaves + 1)
-    for i in range(num_leaves):
-        node_norm[num_leaves + i] = amps_padded[i]
-    for node in range(num_leaves - 1, 0, -1):
-        node_norm[node] = math.sqrt(node_norm[2 * node] ** 2 +
-                                     node_norm[2 * node + 1] ** 2)
-
-    # Apply Ry tree on path_qubits
-    _apply_ry_subtree(qc, node_norm, node=1, depth=0, d=d,
-                      path_qubits=path_qubits, ctrl_path=[])
-
-    # For each real leaf i, encode data bits of k_i controlled on path.
-    # After the Ry tree, path_qubits[j] = (i >> j) & 1 = (k >> (m-d+j)) & 1 ✓
-    for i in range(num_leaves):
-        if amps_padded[i] < 1e-14:
-            continue
-        k = indices_padded[i]
-        path_state = [(i >> j) & 1 for j in range(d)]
-
-        for b in range(m - d):
-            if (k >> b) & 1:
-                _controlled_x(qc, path_qubits, path_state, data_qubits[b])
+    # Build circuit via Gleinig Algorithm 2
+    qc = QuantumCircuit(m, name="sparse_load")
+    _gleinig_encode(qc, dict(zip(
+        [_int_to_bits(k, m) for k in indices],
+        amps.tolist()
+    )), m)
+    return qc
 
 
-def _apply_ry_subtree(qc: QuantumCircuit,
-                      node_norm: np.ndarray,
-                      node: int,
-                      depth: int,
-                      d: int,
-                      path_qubits: list,
-                      ctrl_path: list) -> None:
+# ---------------------------------------------------------------------------
+# Gleinig-Hoefler implementation
+# ---------------------------------------------------------------------------
+
+def _int_to_bits(k: int, n: int) -> tuple:
+    """Convert integer k to an n-bit tuple (LSB first)."""
+    return tuple((k >> i) & 1 for i in range(n))
+
+
+def _bits_to_int(bits: tuple) -> int:
+    """Convert n-bit tuple (LSB first) back to integer."""
+    return sum(b << i for i, b in enumerate(bits))
+
+
+def _gleinig_encode(qc: QuantumCircuit,
+                    state: dict,
+                    n: int) -> None:
     """
-    Recursively apply Ry rotations for the subtree rooted at `node`.
-    path_qubits[d-1] is the root qubit (MSB); path_qubits[0] is deepest.
-    Node at `depth` acts on path_qubits[d-1-depth].
+    Algorithm 2 (Gleinig & Hoefler, DAC 2021).
+
+    Takes a sparse quantum state represented as
+        state: dict mapping n-bit tuple -> amplitude (real, normalized)
+    and appends gates to qc that prepare that state from |0^n>.
+
+    Works by repeatedly calling _gleinig_reduce (Algorithm 1) which
+    merges two basis states into one, until a single basis state remains,
+    then adds X gates to map that state to |0^n>.  The circuit is then
+    inverted so it maps |0^n> -> target state.
     """
-    num_leaves = 1 << d
-    if node >= num_leaves:
-        return
+    gates_forward = []   # list of (gate_type, args) to be inverted
 
-    norm_node  = node_norm[node]
-    norm_right = node_norm[2 * node + 1]
+    current_state = dict(state)
 
-    if norm_node < 1e-14:
-        return
+    while len(current_state) > 1:
+        new_gates = _gleinig_reduce(current_state, n)
+        gates_forward.extend(new_gates)
+        # Apply each gate classically to track state transformation
+        for gate in new_gates:
+            _apply_gate_to_state(current_state, gate, n)
 
-    theta = 2.0 * math.asin(min(norm_right / norm_node, 1.0))
-    target_qubit = path_qubits[d - 1 - depth]   # root → top qubit
+    # Now current_state has one basis state: add X gates to map it to |0^n>
+    assert len(current_state) == 1
+    remaining_bits = list(current_state.keys())[0]
+    for i, b in enumerate(remaining_bits):
+        if b:
+            gates_forward.append(('x', i))
 
-    if not ctrl_path:
-        qc.ry(theta, target_qubit)
+    # Invert: reverse gate list and invert each gate
+    for gate in reversed(gates_forward):
+        gtype = gate[0]
+        if gtype == 'x':
+            qc.x(gate[1])
+        elif gtype == 'cx':
+            qc.cx(gate[1], gate[2])
+        elif gtype == 'cry':
+            # Inverse of CRy(theta) is CRy(-theta)
+            # ctrl == -1 means unconditional Ry
+            if gate[2] == -1:
+                qc.ry(-gate[1], gate[3])
+            else:
+                qc.cry(-gate[1], gate[2], gate[3])
+        elif gtype == 'mcry':
+            # Inverse of MCRy(theta) is MCRy(-theta)
+            _mcry(qc, -gate[1], gate[2], gate[3], gate[4])
+
+
+def _gleinig_reduce(state: dict, n: int) -> list:
+    """
+    Algorithm 1 (Gleinig & Hoefler, DAC 2021).
+
+    Given a sparse state dict (bits_tuple -> amplitude), find two basis
+    states x1, x2 that can be merged using O(n) CNOT gates and one
+    multi-controlled Ry.  Returns a list of gates as (type, *args) tuples.
+
+    After applying the returned gates to `state`, the state will have
+    one fewer basis state.
+    """
+    S = list(state.keys())
+    gates = []
+
+    # --- Find x1, x2 and the distinguishing control bits ---
+    # Use the two-WHILE-loop procedure from Algorithm 1.
+    # dif_qubits/dif_vals identify the unique path to x1 in the tree.
+
+    T = list(S)
+    dif_qubits = []
+    dif_vals   = []
+
+    # First WHILE: narrow T to a single element x1
+    while len(T) > 1:
+        # Find qubit b that splits T as unevenly as possible (neither set empty)
+        best_b = None
+        best_imbalance = -1
+        for b in range(n):
+            t0 = [x for x in T if x[b] == 0]
+            t1 = [x for x in T if x[b] == 1]
+            if t0 and t1:
+                imbalance = abs(len(t0) - len(t1))
+                if imbalance > best_imbalance:
+                    best_imbalance = imbalance
+                    best_b = b
+                    best_T0, best_T1 = t0, t1
+
+        b = best_b
+        dif_qubits.append(b)
+        if len(best_T0) < len(best_T1):
+            T = best_T0
+            dif_vals.append(0)
+        else:
+            T = best_T1
+            dif_vals.append(1)
+
+    x1 = T[0]
+
+    # Pop the last entry to get 'dif' qubit
+    dif = dif_qubits.pop()
+    dif_vals.pop()
+
+    # Second WHILE: find x2 — the unique other element sharing the path prefix
+    T2 = [x for x in S if x != x1
+          and all(x[dif_qubits[i]] == dif_vals[i] for i in range(len(dif_qubits)))]
+
+    while len(T2) > 1:
+        best_b = None
+        best_imbalance = -1
+        for b in range(n):
+            t0 = [x for x in T2 if x[b] == 0]
+            t1 = [x for x in T2 if x[b] == 1]
+            if t0 and t1:
+                imbalance = abs(len(t0) - len(t1))
+                if imbalance > best_imbalance:
+                    best_imbalance = imbalance
+                    best_b = b
+                    best_T0, best_T1 = t0, t1
+
+        b = best_b
+        dif_qubits.append(b)
+        if len(best_T0) < len(best_T1):
+            T2 = best_T0
+            dif_vals.append(0)
+        else:
+            T2 = best_T1
+            dif_vals.append(1)
+
+    x2 = T2[0]
+
+    # --- Ensure x1[dif] == 1 (swap labels if needed) ---
+    if x1[dif] != 1:
+        x1, x2 = x2, x1
+
+    # --- CNOT gates: make x1 and x2 differ only on qubit `dif` ---
+    # For each bit b != dif where x1[b] != x2[b]:
+    #   add CNOT(dif -> b), which flips x2[b] (since x2[dif]=0, CNOT targets b)
+    for b in range(n):
+        if b != dif and x1[b] != x2[b]:
+            gates.append(('cx', dif, b))
+
+    # --- NOT gates on dif_qubits to set control state to all-1 ---
+    flip_bits = [dif_qubits[i] for i in range(len(dif_qubits))
+                 if x2[dif_qubits[i]] != 1]
+    for b in flip_bits:
+        gates.append(('x', b))
+
+    # --- Multi-controlled Ry to merge x1 and x2 ---
+    # G gate: maps  cx1|1> + cx2|0>  ->  e^{i*lambda}|0>
+    # which is CRy(2*arccos(cx2 / norm)) controlled on dif_qubits=1
+    # (after the NOT gates above, control is all-1 for both x1 and x2)
+    cx1 = state[x1]
+    cx2 = state[x2]
+    norm_pair = math.sqrt(cx1**2 + cx2**2)
+    # We need Ry(theta) to map  cx1|1> + cx2|0>  ->  norm|0>
+    # Standard Ry: |0>->cos(θ/2)|0>+sin(θ/2)|1>, |1>->-sin(θ/2)|0>+cos(θ/2)|1>
+    # Requiring the |1> coefficient to vanish: cx1*cos(θ/2) + cx2*sin(θ/2) = 0
+    # => theta = -2*arctan(cx1/cx2)  [negative angle]
+    theta = -2.0 * math.atan2(cx1, cx2)
+
+    if not dif_qubits:
+        gates.append(('cry', theta, -1, dif))  # unconditional Ry (no controls)
+    elif len(dif_qubits) == 1:
+        gates.append(('cry', theta, dif_qubits[0], dif))
     else:
-        ctrl_q = [cp[0] for cp in ctrl_path]
-        ctrl_v = [cp[1] for cp in ctrl_path]
-        _controlled_ry(qc, theta, ctrl_q, ctrl_v, target_qubit)
+        gates.append(('mcry', theta, list(dif_qubits), list(dif_vals), dif))
 
-    _apply_ry_subtree(qc, node_norm, 2 * node,     depth + 1, d, path_qubits,
-                      ctrl_path + [(target_qubit, 0)])
-    _apply_ry_subtree(qc, node_norm, 2 * node + 1, depth + 1, d, path_qubits,
-                      ctrl_path + [(target_qubit, 1)])
+    # --- Unflip NOT gates ---
+    for b in flip_bits:
+        gates.append(('x', b))
+
+    return gates
 
 
-def _controlled_ry(qc, theta, ctrl_qubits, ctrl_vals, target):
-    """Multi-controlled Ry with active-low controls handled via X flanking."""
+def _apply_gate_to_state(state: dict, gate: tuple, n: int) -> None:
+    """
+    Apply a gate (classically) to the sparse state dict in-place.
+    Used to track how the state transforms as gates are added.
+    """
+    gtype = gate[0]
+    keys = list(state.keys())
+
+    if gtype == 'x':
+        b = gate[1]
+        new_state = {}
+        for bits, amp in state.items():
+            new_bits = list(bits)
+            new_bits[b] ^= 1
+            new_state[tuple(new_bits)] = amp
+        state.clear()
+        state.update(new_state)
+
+    elif gtype == 'cx':
+        ctrl, tgt = gate[1], gate[2]
+        new_state = {}
+        for bits, amp in state.items():
+            new_bits = list(bits)
+            if new_bits[ctrl] == 1:
+                new_bits[tgt] ^= 1
+            new_state[tuple(new_bits)] = amp
+        state.clear()
+        state.update(new_state)
+
+    elif gtype == 'cry':
+        theta, ctrl, tgt = gate[1], gate[2], gate[3]
+        c, s = math.cos(theta / 2), math.sin(theta / 2)
+        new_state = dict(state)
+        processed = set()
+        for bits in list(state.keys()):
+            if bits in processed:
+                continue
+            # Only act on basis states where control is satisfied
+            if ctrl != -1 and bits[ctrl] != 1:
+                continue
+            # Build the partner (same bits except tgt flipped)
+            partner = list(bits); partner[tgt] ^= 1; partner = tuple(partner)
+            processed.add(bits)
+            processed.add(partner)
+            # Identify which is the |0> and which is the |1> component on tgt
+            if bits[tgt] == 0:
+                b0, b1 = bits, partner
+            else:
+                b0, b1 = partner, bits
+            a0 = state.get(b0, 0.0)   # amplitude of tgt=0 component
+            a1 = state.get(b1, 0.0)   # amplitude of tgt=1 component
+            # Ry(theta): |0>->c|0>+s|1>,  |1>->-s|0>+c|1>
+            new_a0 = c * a0 - s * a1
+            new_a1 = s * a0 + c * a1
+            if abs(new_a0) > 1e-14:
+                new_state[b0] = new_a0
+            else:
+                new_state.pop(b0, None)
+            if abs(new_a1) > 1e-14:
+                new_state[b1] = new_a1
+            else:
+                new_state.pop(b1, None)
+        state.clear()
+        state.update(new_state)
+
+    elif gtype == 'mcry':
+        theta, ctrl_list, ctrl_vals, tgt = gate[1], gate[2], gate[3], gate[4]
+        c, s = math.cos(theta / 2), math.sin(theta / 2)
+        new_state = dict(state)
+        processed = set()
+        for bits in list(state.keys()):
+            if bits in processed:
+                continue
+            # All controls must be 1 (X-flanking is applied separately as 'x' gates)
+            if not all(bits[q] == 1 for q in ctrl_list):
+                continue
+            partner = list(bits); partner[tgt] ^= 1; partner = tuple(partner)
+            processed.add(bits)
+            processed.add(partner)
+            if bits[tgt] == 0:
+                b0, b1 = bits, partner
+            else:
+                b0, b1 = partner, bits
+            a0 = state.get(b0, 0.0)
+            a1 = state.get(b1, 0.0)
+            new_a0 = c * a0 - s * a1
+            new_a1 = s * a0 + c * a1
+            if abs(new_a0) > 1e-14:
+                new_state[b0] = new_a0
+            else:
+                new_state.pop(b0, None)
+            if abs(new_a1) > 1e-14:
+                new_state[b1] = new_a1
+            else:
+                new_state.pop(b1, None)
+        state.clear()
+        state.update(new_state)
+
+
+def _mcry(qc: QuantumCircuit, theta: float,
+          ctrl_qubits: list, ctrl_vals: list, target: int) -> None:
+    """Multi-controlled Ry with active-low controls via X flanking."""
     flip = [q for q, v in zip(ctrl_qubits, ctrl_vals) if v == 0]
     for q in flip:
         qc.x(q)
-    qc.mcry(theta, ctrl_qubits, target)
+    if len(ctrl_qubits) == 1:
+        qc.cry(theta, ctrl_qubits[0], target)
+    else:
+        qc.mcry(theta, ctrl_qubits, target)
     for q in flip:
         qc.x(q)
 
@@ -565,11 +774,6 @@ def _controlled_x(qc, ctrl_qubits, ctrl_vals, target):
         qc.x(q)
 
 
-def _encode_index_on_path(qc, k, m, d, ctrl_qubits, path):
-    """Kept for compatibility; superseded by inline logic in _ry_tree_encode."""
-    pass
-
-
 # ---------------------------------------------------------------------------
 # Case B: sum of sinusoidal modes
 # ---------------------------------------------------------------------------
@@ -582,7 +786,7 @@ def _synth_multi_sin_load(m: int, params: dict) -> QuantumCircuit:
     entries at frequencies {n_t, N-n_t} with equal magnitudes |A_t|/2
     and phases -pi/2 (pos freq) and +pi/2 (neg freq).
 
-    1. Use the Ry-tree point load synthesiser to prepare the
+    1. Use the Ry-tree point load synthesizer to prepare the
        magnitude distribution over the 2T frequency entries.
     2. Apply Z on the MSB to encode the relative phase between
        positive (MSB=0) and negative (MSB=1) frequencies.
@@ -640,14 +844,13 @@ def _synth_uniform_spike_load(m: int, params: dict) -> QuantumCircuit:
     Ry-tree circuit with O(m) rotation gates and O(m²) CX gates
     (reducible to O(m) with ancilla qubits; see Nielsen & Chuang §4.5).
 
-    Crossover vs Shende: the Ry-tree outperforms StatePreparation for m ≥ 4.
-    For m ∈ {2, 3} Shende is equally compact and is used here for simplicity.
+    Crossover vs Qiskit StatePreparation: the Ry-tree outperforms it for m ≥ 4.
+    For m ∈ {2, 3} Qiskit StatePreparation is equally compact.
 
     Implementation: uses Qiskit StatePreparation (Shende/Bullock/Markov, 2006)
-    on the sparse structured vector.  The hand-crafted Ry-tree circuit is
-    provided as a theoretical result in the accompanying paper.
+    on the sparse structured vector.
 
-    Gate count: O(2^m) [Shende, current implementation].
+    Gate count: O(2^m) [current implementation].
     Analytical circuit: O(m²) without ancillas, O(m) with ancillas.
     """
     c, k, delta = params["c"], params["k"], params["delta"]
@@ -656,22 +859,22 @@ def _synth_uniform_spike_load(m: int, params: dict) -> QuantumCircuit:
     norm_f = np.linalg.norm(f)
     if norm_f < 1e-14:
         raise ValueError("Load vector is the zero vector.")
-    return _mottonen_from_vector(f / norm_f, m, name="uniform_spike_load")
+    return _state_preparation_from_vector(f / norm_f, m, name="uniform_spike_load")
 
 
 # ---------------------------------------------------------------------------
-# Möttönen fallback (general state preparation)
+# Qiskit StatePreparation fallback (general state preparation)
 # ---------------------------------------------------------------------------
 
-def _synth_mottonen(m: int, params: dict) -> QuantumCircuit:
+def _synth_qiskit_fallback(m: int, params: dict) -> QuantumCircuit:
     """
-    Fallback: Möttönen general state preparation.
+    Fallback: Qiskit StatePreparation for UNKNOWN patterns.
     Requires the amplitude vector to be supplied in params["amplitudes"].
     If not present, returns an identity circuit (placeholder).
 
-    Gate count: O(4^m).
+    Gate count: O(2^m) — exponential in the number of qubits.
 
-    Reference: Möttönen et al., Quantum Inf. Comput. 5(6), 2005.
+    Reference: Shende, Markov, Bullock, IEEE TCAD 25(6), 2006.
     """
     if "amplitudes" not in params:
         qc = QuantumCircuit(m, name="mottonen_placeholder")
@@ -683,10 +886,10 @@ def _synth_mottonen(m: int, params: dict) -> QuantumCircuit:
         raise ValueError("Amplitude vector is zero.")
     amplitudes /= norm
 
-    return _mottonen_from_vector(amplitudes, m, name="mottonen")
+    return _state_preparation_from_vector(amplitudes, m, name="mottonen")
 
 
-def _mottonen_from_vector(amplitudes: np.ndarray, m: int,
+def _state_preparation_from_vector(amplitudes: np.ndarray, m: int,
                            name: str = "state_prep") -> QuantumCircuit:
     """
     Build a Qiskit StatePreparation circuit from a complex amplitude vector.

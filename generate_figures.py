@@ -16,6 +16,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 
+from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 from pyencode import (
     encode_params, encode_vector, encode_python,
     DISCRETE, UNIFORM, STEP, SQUARE,
@@ -398,7 +399,7 @@ def gate_count_table():
     from qiskit.circuit.library import StatePreparation
     from qiskit import transpile
 
-    def shende_gates(f_vec):
+    def qiskit_gates(f_vec):
         """Gate count for Shende StatePreparation on same vector."""
         norm = np.linalg.norm(f_vec)
         if norm < 1e-14:
@@ -409,8 +410,8 @@ def gate_count_table():
         qc = QuantumCircuit(int(np.log2(N)))
         qc.append(sp, range(qc.num_qubits))
         qc = qc.decompose()
-        t = transpile(qc, basis_gates=['cx', 'u', 'x', 'h', 'ry', 'rz', 'rx', 'p'],
-                       optimization_level=2)
+        t = transpile(qc, basis_gates=BASIS_GATES,
+                       optimization_level=OPTIMIZATION_LEVEL)
         return sum(t.count_ops().values())
 
     cases = [
@@ -440,7 +441,7 @@ def gate_count_table():
     for name, vobj, f_fn in cases:
         circuit, info = encode_params(vobj, N=N)
         f_vec = f_fn()
-        sg = shende_gates(f_vec)
+        sg = qiskit_gates(f_vec)
         print(f"{name:<30} {info.gate_count:>10} {sg:>10} {info.complexity:<15}")
 
 

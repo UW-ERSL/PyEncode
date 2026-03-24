@@ -11,9 +11,9 @@ from qiskit import QuantumCircuit
 from .recognizer import VectorType, LoadPattern
 from .types import _VectorObj, EncodingInfo
 from ._helpers import (
-    _normalise_vector_type,
+    _normalize_vector_type,
     _validate_params,
-    _synthesise_and_build_info,
+    _synthesize_and_build_info,
     _encode_composite,
 )
 
@@ -60,7 +60,7 @@ def encode_params(
         vtype = vector_obj.vector_type
         validated_params = _validate_params(vtype, N, vector_obj.params)
         pattern = LoadPattern(vtype, N=N, params=validated_params)
-        return _synthesise_and_build_info(
+        return _synthesize_and_build_info(
             pattern, fallback_vector=None,
             validate=validate, tol=tol,
         )
@@ -70,10 +70,10 @@ def encode_params(
         return _encode_composite(vector_obj, N, validate=validate, tol=tol)
 
     # Backward compat: string or VectorType enum
-    vtype = _normalise_vector_type(vector_obj)
+    vtype = _normalize_vector_type(vector_obj)
     validated_params = _validate_params(vtype, N, params)
     pattern = LoadPattern(vtype, N=N, params=validated_params)
-    return _synthesise_and_build_info(
+    return _synthesize_and_build_info(
         pattern, fallback_vector=None,
         validate=validate, tol=tol,
     )

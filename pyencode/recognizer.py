@@ -67,7 +67,7 @@ class LoadPattern:
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def recognise(code: str) -> LoadPattern:
+def recognize(code: str) -> LoadPattern:
     """
     Parse *code* and return the best-matching LoadPattern.
 
@@ -80,8 +80,8 @@ def recognise(code: str) -> LoadPattern:
     Returns
     -------
     LoadPattern
-        If recognised, load_type is one of the structured types and
-        params carries the extracted parameters.  If not recognised,
+        If recognized, load_type is one of the structured types and
+        params carries the extracted parameters.  If not recognized,
         load_type is UNKNOWN and params is empty.
     """
     try:
@@ -100,7 +100,7 @@ def recognise(code: str) -> LoadPattern:
         return LoadPattern(VectorType.UNKNOWN, N=N or 0)
 
     # Try patterns in order of specificity
-    for recogniser_fn in [
+    for recognizer_fn in [
         _try_uniform_spike_load,          # must come before point load (also has subscript assign)
         _try_point_load,
         _try_uniform_load,
@@ -111,11 +111,15 @@ def recognise(code: str) -> LoadPattern:
         _try_multi_point_load,
         _try_multi_sin_load,
     ]:
-        result = recogniser_fn(ctx)
+        result = recognizer_fn(ctx)
         if result is not None:
             return result
 
     return LoadPattern(VectorType.UNKNOWN, N=N)
+
+
+# Backward-compatible alias (British spelling kept for v0.4 compatibility)
+recognise = recognize  # noqa: E305
 
 
 # ---------------------------------------------------------------------------
@@ -565,7 +569,7 @@ def _extract_sin_mode_and_phase(arg_desc, ctx: _ExecutionContext) -> Optional[tu
       - An Add/Sub binop     n * pi * x / L ± phi     -> (n, ±phi)
 
     phi is a constant (float, possibly involving pi, e.g. np.pi/4).
-    Returns None if the frequency part cannot be recognised.
+    Returns None if the frequency part cannot be recognized.
     """
     if arg_desc is None:
         return None

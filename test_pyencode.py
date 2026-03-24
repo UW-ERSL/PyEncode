@@ -46,7 +46,7 @@ def statevector(circuit):
 
 
 def assert_encodes(circuit, expected_f, tol=1e-5):
-    """Assert that circuit prepares the normalised version of expected_f."""
+    """Assert that circuit prepares the normalized version of expected_f."""
     sv = statevector(circuit)
     norm = np.linalg.norm(expected_f)
     assert norm > 1e-12, "Reference vector is zero"

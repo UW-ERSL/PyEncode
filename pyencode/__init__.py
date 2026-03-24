@@ -3,7 +3,7 @@ pyencode
 ==========
 A toolkit for quantum amplitude encoding of structured load vectors.
 
-PyEncode synthesises efficient Qiskit quantum circuits for structured
+PyEncode synthesizes efficient Qiskit quantum circuits for structured
 state vectors (point loads, sinusoidal modes, step functions, etc.)
 using closed-form circuit templates instead of general O(2^m) routines.
 
@@ -36,17 +36,17 @@ Supported vector patterns
   SQUARE         :  f[k1:k2] = c
   SINE           :  f = A * sin(n * pi * k / N + phi)
   COSINE         :  f = A * cos(n * pi * k / N + phi)
-  MULTI_DISCRETE :  multiple disjoint point loads
+  MULTI_DISCRETE :  multiple disjoint point loads (Gleinig-Hoefler O(L·n))
   MULTI_SINE     :  sum of sinusoidal modes
 
 References
 ----------
-  Mottonen et al., Quantum Inf. Comput. 5(6), 467-473, 2005.
   Shende, Markov, Bullock, IEEE TCAD 25(6), 1000-1010, 2006.
+  Gleinig & Hoefler, DAC 2021.
   Harrow, Hassidim, Lloyd, Phys. Rev. Lett. 103, 150502, 2009.
 """
 
-from .recognizer import VectorType, LoadPattern
+from .recognizer import VectorType, LoadPattern, recognize, recognise
 from .types import (
     LoadType,
     _VectorObj,
@@ -71,6 +71,8 @@ __all__ = [
     "EncodingInfo",
     "VectorType",
     "LoadType",
+    "recognize",
+    "recognise",   # backward-compatible alias
     # Constructor classes
     "DISCRETE",
     "UNIFORM",
@@ -81,4 +83,4 @@ __all__ = [
     "MULTI_DISCRETE",
     "MULTI_SINE",
 ]
-__version__ = "0.4.0"
+__version__ = "0.5.0"

@@ -13,8 +13,8 @@ from .recognizer import VectorType, LoadPattern
 from .extractor import extract, auto_detect
 from .types import EncodingInfo
 from ._helpers import (
-    _normalise_vector_type,
-    _synthesise_and_build_info,
+    _normalize_vector_type,
+    _synthesize_and_build_info,
     _build_expected_vector,
 )
 
@@ -60,7 +60,7 @@ def encode_vector(
 
     if vector_type is not None:
         # Declared type: extract params for that specific type
-        vector_type = _normalise_vector_type(vector_type)
+        vector_type = _normalize_vector_type(vector_type)
         params = extract(f, vector_type, tol=tol)
     else:
         # Auto-detect
@@ -78,11 +78,11 @@ def encode_vector(
             if diff > tol:
                 raise ValueError(
                     f"Verification failed for vector_type={vector_type.name}: "
-                    f"||f_normalised - f_reconstructed|| = {diff:.2e} > "
+                    f"||f_normalized - f_reconstructed|| = {diff:.2e} > "
                     f"tol={tol}.  The vector may not match the declared type."
                 )
 
-    return _synthesise_and_build_info(
+    return _synthesize_and_build_info(
         pattern, fallback_vector=None,
         validate=validate, tol=tol,
     )

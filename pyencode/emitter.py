@@ -2,7 +2,7 @@
 pyencode.emitter
 =================
 Generates standalone, human-readable Qiskit Python code for each
-recognised load pattern.  The emitted code:
+recognized load pattern.  The emitted code:
 
   - imports only what it needs (QuantumCircuit, QFTGate, etc.)
   - uses meaningful variable names and inline comments
@@ -398,7 +398,7 @@ def _emit_multi_point_load(m: int, params: dict) -> str:
         _header(m, f"MULTI_POINT_LOAD  L={L}"),
         f"import math",
         f"",
-        f"# Load points (index, normalised amplitude):",
+        f"# Load points (index, normalized amplitude):",
     ]
     for i, (k, a) in enumerate(zip(indices, amps_n)):
         lines.append(f"#   leaf {i}: |{k}>  amplitude = {a:.6f}")
@@ -556,7 +556,7 @@ def _emit_multi_sin_load(m: int, params: dict) -> str:
             f"freq_amps[{N-n}]  -= {A} / (2j)   # negative frequency (conjugate)",
         ]
     lines += [
-        f"freq_amps /= np.linalg.norm(freq_amps)  # normalise",
+        f"freq_amps /= np.linalg.norm(freq_amps)  # normalize",
         f"",
         f"# ── Step 2: prepare frequency-domain state via StatePreparation ───",
         f"# Tweak: replace StatePreparation with a hand-crafted circuit",
@@ -625,8 +625,8 @@ def _emit_mottonen(m: int, params: dict) -> str:
         f"from qiskit import QuantumCircuit",
         f"from qiskit.circuit.library import StatePreparation",
         f"",
-        f"# Pattern not recognised by PyEncode.",
-        f"# Replace 'amplitudes' with your actual normalised amplitude vector.",
+        f"# Pattern not recognized by PyEncode.",
+        f"# Replace 'amplitudes' with your actual normalized amplitude vector.",
         f"# amplitudes = np.array([...], dtype=complex)",
         f"# amplitudes /= np.linalg.norm(amplitudes)",
         f"",

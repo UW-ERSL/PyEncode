@@ -114,7 +114,7 @@ class EncodingInfo:
     Attributes
     ----------
     vector_type : str
-        Name of the recognised vector pattern.
+        Name of the recognized vector pattern.
     N : int
         Number of vector components (must be a power of 2).
     m : int

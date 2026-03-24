@@ -12,13 +12,13 @@ from typing import Optional, Union
 import numpy as np
 from qiskit import QuantumCircuit
 
-from .recognizer import recognise, VectorType, LoadPattern
+from .recognizer import recognize, VectorType, LoadPattern
 from .extractor import extract
 from .types import EncodingInfo
 from ._helpers import (
     _execute_code,
-    _normalise_vector_type,
-    _synthesise_and_build_info,
+    _normalize_vector_type,
+    _synthesize_and_build_info,
     _build_expected_vector,
 )
 
@@ -38,7 +38,7 @@ def encode_python(
     in the latter case the source is retrieved automatically via
     ``inspect.getsource``.
 
-    If ``vector_type`` is not given, the AST recogniser infers the
+    If ``vector_type`` is not given, the AST recognizer infers the
     pattern from the code structure.  If ``vector_type`` is given,
     the code is *executed* to produce a vector, then parameters
     are extracted numerically.
@@ -82,7 +82,7 @@ def encode_python(
 
     if vector_type is not None:
         # Path 2: Execute code -> get vector -> extract params
-        vector_type = _normalise_vector_type(vector_type)
+        vector_type = _normalize_vector_type(vector_type)
         f = _execute_code(code)
 
         vec_N = len(f)
@@ -107,21 +107,21 @@ def encode_python(
                         f"Verification failed for vector_type={vector_type.name}: "
                         f"the executed code does not produce a vector "
                         f"matching the declared type "
-                        f"(normalised diff = {diff:.2e})."
+                        f"(normalized diff = {diff:.2e})."
                     )
 
-        return _synthesise_and_build_info(
+        return _synthesize_and_build_info(
             pattern, fallback_vector=None,
             validate=validate, tol=tol,
         )
 
     # Path 1: AST recognition (no vector_type hint)
-    pattern: LoadPattern = recognise(code)
+    pattern: LoadPattern = recognize(code)
 
     if pattern.load_type == VectorType.UNKNOWN:
         # Fallback: execute the code to get the vector, use Shende
         warnings.warn(
-            "PyEncode: pattern not recognised by the AST recogniser. "
+            "PyEncode: pattern not recognized by the AST recognizer. "
             "Falling back to Shende's O(2^m) general state preparation.",
             stacklevel=2,
         )
@@ -137,13 +137,13 @@ def encode_python(
             pattern.params = {"amplitudes": f.astype(complex)}
         except Exception as e:
             raise RuntimeError(
-                "PyEncode: load pattern not recognised and code execution "
+                "PyEncode: load pattern not recognized and code execution "
                 f"failed: {e}\n"
                 "Either restructure the code to match a supported "
                 "pattern or use vector_type= to declare the pattern."
             ) from e
 
-    return _synthesise_and_build_info(
+    return _synthesize_and_build_info(
         pattern, fallback_vector=None,
         validate=validate, tol=tol,
     )
