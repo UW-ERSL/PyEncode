@@ -215,6 +215,7 @@ def _synthesise_and_build_info(
 
     try:
         from qiskit import transpile as qk_transpile
+        circuit = circuit.decompose(reps = 3)
         t = qk_transpile(circuit,
                          basis_gates=['cx', 'u', 'x', 'h', 'ry', 'rz', 'rx', 'p'],
                          optimization_level=0)
