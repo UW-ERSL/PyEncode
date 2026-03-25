@@ -77,6 +77,9 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.MULTI_SINE:    _synth_multi_sin_load,
         VectorType.UNIFORM_SPIKE: _synth_uniform_spike_load,
         VectorType.UNKNOWN:           _synth_qiskit_fallback,
+        # New unified types (paper API) — delegate to existing synthesizers
+        VectorType.SPARSE:            _synth_sparse,
+        VectorType.FOURIER:           _synth_fourier,
     }
 
     fn = dispatch.get(pattern.load_type, _synth_qiskit_fallback)
@@ -979,3 +982,38 @@ def _state_preparation_from_vector(amplitudes: np.ndarray, m: int,
     qc = QuantumCircuit(m, name=name)
     qc.append(sp, range(m))
     return qc.decompose()
+
+# ---------------------------------------------------------------------------
+# New unified synthesizers — thin wrappers for the paper API
+# ---------------------------------------------------------------------------
+
+def _synth_sparse(m: int, params: dict) -> QuantumCircuit:
+    """
+    SPARSE: delegate to the Gleinig-Hoefler disjoint-point-load synthesizer.
+
+    For s=1 this reduces to _synth_point_load (X gates only).
+    For s>1 the full Gleinig-Hoefler O(s*m) construction is used.
+    """
+    loads = params["loads"]
+    if len(loads) == 1:
+        return _synth_point_load(m, loads[0])
+    return _synth_disjoint_point_load(m, params)
+
+
+def _synth_fourier(m: int, params: dict) -> QuantumCircuit:
+    """
+    FOURIER: delegate to the multi-sine QFT synthesizer.
+
+    For T=1 mode with phi=0 this is identical to _synth_sinusoidal.
+    For T=1 with phi=pi/2 it matches _synth_cosine.
+    For T>1 modes it uses _synth_multi_sin_load.
+    All paths share the same O(m^2) inverse-QFT pipeline.
+    """
+    modes = params["modes"]
+    if len(modes) == 1:
+        mode = modes[0]
+        phi = mode.get("phi", 0.0)
+        # Delegate to single-mode synthesizers
+        p = {"n": mode["n"], "A": mode["A"], "phi": phi}
+        return _synth_sinusoidal(m, p)
+    return _synth_multi_sin_load(m, params)

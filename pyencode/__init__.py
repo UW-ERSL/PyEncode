@@ -10,7 +10,12 @@ using closed-form circuit templates instead of general O(2^m) routines.
 Three entry points
 ------------------
 
-**encode_params** — specify the vector type and parameters directly:
+**encode** — the primary API (paper name for encode_params):
+
+>>> circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
+>>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
+
+**encode_params** — identical to encode(), legacy name:
 
 >>> circuit, info = encode_params(DISCRETE(k=3, P=5.0), N=8)
 >>> circuit, info = encode_params(SINE(n=3, A=1.0), N=64)
@@ -30,7 +35,9 @@ Three entry points
 
 Supported vector patterns
 --------------------------
-  DISCRETE       :  f[k] = P
+  SPARSE         :  Gleinig-Hoefler s-sparse state  (replaces DISCRETE + MULTI_DISCRETE)
+  FOURIER        :  T sinusoidal modes via inverse QFT  (replaces SINE + COSINE + MULTI_SINE)
+  DISCRETE       :  f[k] = P  (legacy; use SPARSE)
   UNIFORM        :  f = ones(N) * c
   STEP           :  f[:k_s] = c
   SQUARE         :  f[k1:k2] = c
@@ -50,6 +57,8 @@ from .recognizer import VectorType, LoadPattern, recognize, recognise
 from .types import (
     LoadType,
     _VectorObj,
+    SPARSE,
+    FOURIER,
     DISCRETE,
     UNIFORM,
     STEP,
@@ -60,11 +69,12 @@ from .types import (
     MULTI_SINE,
     EncodingInfo,
 )
-from .encode_params import encode_params
+from .encode_params import encode_params, encode
 from .encode_vector import encode_vector
 from .encode_python import encode_python
 
 __all__ = [
+    "encode",
     "encode_params",
     "encode_vector",
     "encode_python",
@@ -73,7 +83,10 @@ __all__ = [
     "LoadType",
     "recognize",
     "recognise",   # backward-compatible alias
-    # Constructor classes
+    # Constructor classes (new unified API)
+    "SPARSE",
+    "FOURIER",
+    # Legacy constructors
     "DISCRETE",
     "UNIFORM",
     "STEP",
@@ -83,4 +96,4 @@ __all__ = [
     "MULTI_DISCRETE",
     "MULTI_SINE",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0"

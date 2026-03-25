@@ -190,6 +190,13 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
             validated_modes.append({"n": n, "A": float(entry["A"])})
         result["modes"] = validated_modes
 
+
+    elif vector_type == VectorType.SPARSE:
+        result = _validate_sparse_params(result, N)
+
+    elif vector_type == VectorType.FOURIER:
+        result = _validate_fourier_params(result, N)
+
     return result
 
 
@@ -316,6 +323,19 @@ def _build_expected_vector(
         f = np.zeros(N)
         for mode in p["modes"]:
             f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N)
+        return f
+
+    if lt == VectorType.SPARSE:
+        f = np.zeros(N)
+        for load in p["loads"]:
+            f[load["k"]] = load["P"]
+        return f
+
+    if lt == VectorType.FOURIER:
+        k = np.arange(N)
+        f = np.zeros(N)
+        for mode in p["modes"]:
+            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
 
     return None
@@ -567,3 +587,59 @@ def _apply_anc_ry(qc, node_norm, node, depth, n_anc, anc_qubits, ctrl_path):
 # ---------------------------------------------------------------------------
 _normalise_vector_type = _normalize_vector_type          # noqa: E305
 _synthesise_and_build_info = _synthesize_and_build_info  # noqa: E305
+
+
+# ---------------------------------------------------------------------------
+# SPARSE and FOURIER support — schema, validation, vector materialisation
+# ---------------------------------------------------------------------------
+
+# Patch _PARAM_SCHEMAS at import time
+from .types import _PARAM_SCHEMAS
+from .recognizer import VectorType as _VT
+
+_PARAM_SCHEMAS[_VT.SPARSE] = {
+    "required": {"loads"},
+    "optional": set(),
+    "description": 'loads=[{"k": idx, "P": amp}, ...]',
+}
+_PARAM_SCHEMAS[_VT.FOURIER] = {
+    "required": {"modes"},
+    "optional": set(),
+    "description": 'modes=[{"n": freq, "A": amp, "phi": phase}, ...]',
+}
+
+
+def _validate_sparse_params(params: dict, N: int) -> dict:
+    """Validate SPARSE constructor params."""
+    loads = params["loads"]
+    if not isinstance(loads, list) or len(loads) < 1:
+        raise TypeError("SPARSE loads must be a non-empty list.")
+    validated = []
+    seen = set()
+    for entry in loads:
+        k = int(entry["k"])
+        if k < 0 or k >= N:
+            raise ValueError(f"SPARSE index k={k} out of range [0, {N}).")
+        if k in seen:
+            raise ValueError(f"SPARSE index k={k} appears more than once.")
+        seen.add(k)
+        validated.append({"k": k, "P": float(entry["P"])})
+    return {"loads": validated}
+
+
+def _validate_fourier_params(params: dict, N: int) -> dict:
+    """Validate FOURIER constructor params."""
+    modes = params["modes"]
+    if not isinstance(modes, list) or len(modes) < 1:
+        raise TypeError("FOURIER modes must be a non-empty list.")
+    validated = []
+    for entry in modes:
+        n = int(entry["n"])
+        if n < 1:
+            raise ValueError(f"FOURIER mode n={n} must be >= 1.")
+        validated.append({
+            "n": n,
+            "A": float(entry["A"]),
+            "phi": float(entry.get("phi", 0.0)),
+        })
+    return {"modes": validated}

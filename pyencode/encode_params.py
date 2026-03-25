@@ -77,3 +77,47 @@ def encode_params(
         pattern, fallback_vector=None,
         validate=validate, tol=tol,
     )
+
+
+# ---------------------------------------------------------------------------
+# Public alias: encode() is the paper API name for encode_params()
+# ---------------------------------------------------------------------------
+
+def encode(VectorObj, N, validate=False, tol=1e-6):
+    """
+    encode(VectorObj, N, validate=False, tol=1e-6)
+
+    Single entry point for structured quantum state preparation.
+    Maps a typed constructor directly to a verified Qiskit circuit.
+
+    This is the primary API described in the paper. It is identical to
+    encode_params() and is provided as the canonical name going forward.
+
+    Parameters
+    ----------
+    VectorObj : _VectorObj instance or list of _VectorObj instances
+        A typed constructor such as SPARSE([(3, 1.0)]), STEP(k_s=4, c=1.0),
+        SQUARE(k1=2, k2=6, c=1.0), or FOURIER(modes=[(1, 1.0, 0)]).
+        Pass a list for composite vectors.
+    N : int
+        Vector length. Must be a power of 2.
+    validate : bool, optional
+        If True, simulate the circuit and verify the output state.
+        Disabled by default (requires O(2^m) memory).
+    tol : float, optional
+        Tolerance for statevector validation. Default 1e-6.
+
+    Returns
+    -------
+    (QuantumCircuit, EncodingInfo)
+
+    Examples
+    --------
+    >>> from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER
+    >>> circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
+    >>> circuit, info = encode(STEP(k_s=4, c=1.0), N=8)
+    >>> circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+    >>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
+    >>> circuit, info = encode(SPARSE([(1, 3.0), (6, 4.0)]), N=8)
+    """
+    return encode_params(VectorObj, N, validate=validate, tol=tol)

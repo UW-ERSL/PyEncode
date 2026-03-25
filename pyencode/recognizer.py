@@ -48,7 +48,10 @@ class VectorType(Enum):
     MULTI_DISCRETE  = auto()   # L >= 2 point loads, arbitrary weights
     MULTI_SINE      = auto()   # sum of sinusoidal modes
     UNIFORM_SPIKE   = auto()   # uniform + point perturbation (internal)
-    UNKNOWN         = auto()   # fallback to Mottonen
+    UNKNOWN         = auto()   # fallback to Qiskit StatePreparation
+    # New unified types (paper API)
+    SPARSE          = auto()   # Gleinig-Hoefler: s point masses at arbitrary indices
+    FOURIER         = auto()   # T sinusoidal modes via inverse QFT
 
 # Backward-compatible alias
 LoadType = VectorType

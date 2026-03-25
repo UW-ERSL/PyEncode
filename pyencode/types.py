@@ -167,6 +167,9 @@ _COMPLEXITY = {
     VectorType.MULTI_DISCRETE:  "O(m \u00b7 L)",
     VectorType.MULTI_SINE:      "O(m\u00b2)",
     VectorType.UNKNOWN:         "O(2^m)",
+    # New unified types
+    VectorType.SPARSE:          "O(s·m)",
+    VectorType.FOURIER:         "O(m²)",
 }
 
 
@@ -216,3 +219,70 @@ _PARAM_SCHEMAS = {
         "description": 'modes=[{"n": mode, "A": amp}, ...]',
     },
 }
+
+# ---------------------------------------------------------------------------
+# New unified constructors (paper API) — appended
+# ---------------------------------------------------------------------------
+
+class SPARSE(_VectorObj):
+    """
+    SPARSE([(x1, a1), (x2, a2), ...]) — s point masses at arbitrary indices.
+
+    Implements the Gleinig-Hoefler algorithm. Gate complexity O(s * m).
+    The s=1 case reduces to a single computational-basis state (X gates only).
+
+    Example
+    -------
+    >>> circuit, info = encode(SPARSE([(3, 1.0)]), N=8)
+    >>> circuit, info = encode(SPARSE([(1, 3.0), (6, 4.0)]), N=8)
+    """
+    def __init__(self, entries):
+        self.vector_type = VectorType.SPARSE
+        loads = []
+        for item in entries:
+            try:
+                x, a = item
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"SPARSE expects a list of (index, amplitude) tuples, "
+                    f"got {item!r}."
+                )
+            loads.append({"k": int(x), "P": float(a)})
+        if len(loads) == 0:
+            raise ValueError("SPARSE requires at least one entry.")
+        self.params = {"loads": loads}
+
+
+class FOURIER(_VectorObj):
+    """
+    FOURIER(modes=[(n, A, phi), ...]) — T sinusoidal modes via inverse QFT.
+
+    Gate complexity O(m^2) for any T. Single-mode T=1 subsumes SINE (phi=0)
+    and COSINE (phi=pi/2).
+
+    Example
+    -------
+    >>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
+    >>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0), (3, 0.5, 0)]), N=16)
+    """
+    def __init__(self, modes):
+        self.vector_type = VectorType.FOURIER
+        mode_list = []
+        for item in modes:
+            try:
+                if len(item) == 3:
+                    n, A, phi = item
+                elif len(item) == 2:
+                    n, A = item
+                    phi = 0.0
+                else:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"FOURIER expects (n, A) or (n, A, phi) tuples, "
+                    f"got {item!r}."
+                )
+            mode_list.append({"n": int(n), "A": float(A), "phi": float(phi)})
+        if len(mode_list) == 0:
+            raise ValueError("FOURIER requires at least one mode.")
+        self.params = {"modes": mode_list}
