@@ -58,16 +58,11 @@ def emit_code(pattern: LoadPattern) -> str:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        VectorType.DISCRETE:        _emit_point_load,
-        VectorType.UNIFORM:      _emit_uniform_load,
-        VectorType.STEP:         _emit_step_load,
-        VectorType.SQUARE:       _emit_square_load,
-        VectorType.SINE:   _emit_sinusoidal,
-        VectorType.COSINE:       _emit_cosine,
-        VectorType.MULTI_DISCRETE:  _emit_multi_point_load,
-        VectorType.MULTI_SINE:    _emit_multi_sin_load,
-        VectorType.UNIFORM_SPIKE: _emit_uniform_spike,
-        VectorType.UNKNOWN:           _emit_mottonen,
+        VectorType.STEP:    _emit_step_load,
+        VectorType.SQUARE:  _emit_square_load,
+        VectorType.SPARSE:  _emit_sparse,
+        VectorType.FOURIER: _emit_fourier,
+        VectorType.UNKNOWN: _emit_qiskit_fallback,
     }
 
     fn = dispatch.get(pattern.load_type, _emit_mottonen)
@@ -635,6 +630,77 @@ def _emit_mottonen(m: int, params: dict) -> str:
         f"",
         f"qc = QuantumCircuit({m}, name='mottonen')",
         f"sp = StatePreparation(amplitudes, label='mottonen')",
+        f"qc.append(sp, range({m}))",
+        f"qc = qc.decompose()",
+    ]
+    return "\n".join(lines)
+
+def _emit_sparse(m: int, params: dict) -> str:
+    """Emit circuit code for SPARSE (Gleinig-Hoefler)."""
+    loads = params["loads"]
+    lines = [
+        _header(m, "SPARSE — Gleinig-Hoefler sparse state"),
+        f"from qiskit import QuantumCircuit",
+        f"",
+        f"m = {m}",
+        f"qc = QuantumCircuit(m, name='sparse')",
+    ]
+    if len(loads) == 1:
+        k = loads[0]["k"]
+        lines.append(f"# s=1: basis state |{k}>")
+        for bit in range(m):
+            if (k >> bit) & 1:
+                lines.append(f"qc.x({bit})")
+    else:
+        lines.append("# s>1: Gleinig-Hoefler construction")
+        lines.append("# (circuit synthesized internally by PyEncode)")
+        lines.append(f"# loads = {loads}")
+    return "\n".join(lines)
+
+
+def _emit_fourier(m: int, params: dict) -> str:
+    """Emit circuit code for FOURIER (inverse-QFT)."""
+    modes = params["modes"]
+    lines = [
+        _header(m, "FOURIER — sinusoidal modes via inverse QFT"),
+        f"import numpy as np",
+        f"from qiskit import QuantumCircuit",
+        f"from qiskit.circuit.library import QFT",
+        f"",
+        f"m = {m}",
+        f"N = 2**m",
+        f"k = np.arange(N)",
+        f"",
+        f"# Build the sinusoidal vector",
+        f"f = np.zeros(N)",
+    ]
+    for mode in modes:
+        n, A, phi = mode["n"], mode["A"], mode["phi"]
+        lines.append(f"f += {A} * np.sin(2 * np.pi * {n} * k / N + {phi})")
+    lines += [
+        f"",
+        f"# Encode as sparse Fourier state + inverse QFT",
+        f"# (circuit synthesized internally by PyEncode)",
+        f"# modes = {modes}",
+    ]
+    return "\n".join(lines)
+
+
+def _emit_qiskit_fallback(m: int, params: dict) -> str:
+    """Emit circuit code for Qiskit StatePreparation fallback."""
+    lines = [
+        _header(m, "UNKNOWN — Qiskit StatePreparation fallback"),
+        f"import numpy as np",
+        f"from qiskit import QuantumCircuit",
+        f"from qiskit.circuit.library import StatePreparation",
+        f"",
+        f"# Pattern not recognized by PyEncode.",
+        f"# Replace 'amplitudes' with your normalized amplitude vector.",
+        f"amplitudes = None  # <-- supply your vector here",
+        f"assert amplitudes is not None, 'Supply your amplitude vector'",
+        f"",
+        f"qc = QuantumCircuit({m}, name='qiskit_fallback')",
+        f"sp = StatePreparation(amplitudes, label='fallback')",
         f"qc.append(sp, range({m}))",
         f"qc = qc.decompose()",
     ]

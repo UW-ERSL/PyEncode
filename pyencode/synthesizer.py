@@ -67,15 +67,8 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        VectorType.DISCRETE:        _synth_point_load,
-        VectorType.UNIFORM:      _synth_uniform_load,
         VectorType.STEP:         _synth_step_load,
         VectorType.SQUARE:       _synth_square_load,
-        VectorType.SINE:   _synth_sinusoidal,
-        VectorType.COSINE:       _synth_cosine,
-        VectorType.MULTI_DISCRETE:  _synth_disjoint_point_load,
-        VectorType.MULTI_SINE:    _synth_multi_sin_load,
-        VectorType.UNIFORM_SPIKE: _synth_uniform_spike_load,
         VectorType.UNKNOWN:           _synth_qiskit_fallback,
         # New unified types (paper API) — delegate to existing synthesizers
         VectorType.SPARSE:            _synth_sparse,

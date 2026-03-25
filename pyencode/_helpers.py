@@ -16,8 +16,7 @@ from .synthesizer import synthesize
 from .emitter import emit_code
 from .config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 from .types import (
-    _VectorObj, DISCRETE, SINE,
-    MULTI_DISCRETE, MULTI_SINE,
+    _VectorObj, SPARSE, FOURIER, STEP, SQUARE,
     EncodingInfo,
     _COMPLEXITY, _PARAM_SCHEMAS,
 )
@@ -46,44 +45,23 @@ def _execute_code(code: str) -> np.ndarray:
 # Vector type normalisation
 # -------------------------------------------------------------------
 
-# Mapping from old names to new enum values for backward compat
-_OLD_NAME_MAP = {
-    "POINT_LOAD": VectorType.DISCRETE,
-    "UNIFORM_LOAD": VectorType.UNIFORM,
-    "STEP_LOAD": VectorType.STEP,
-    "SQUARE_LOAD": VectorType.SQUARE,
-    "SINUSOIDAL_LOAD": VectorType.SINE,
-    "COSINE_LOAD": VectorType.COSINE,
-    "MULTI_POINT_LOAD": VectorType.MULTI_DISCRETE,
-    "MULTI_SIN_LOAD": VectorType.MULTI_SINE,
-    "UNIFORM_SPIKE_LOAD": VectorType.UNIFORM_SPIKE,
-}
 
 
 def _normalize_vector_type(vector_type: Union[VectorType, str]) -> VectorType:
     """Convert string to VectorType enum; reject UNKNOWN."""
     if isinstance(vector_type, str):
         upper = vector_type.upper()
-        # Try new names first
         try:
             vector_type = VectorType[upper]
         except KeyError:
-            # Try old names for backward compat
-            if upper in _OLD_NAME_MAP:
-                vector_type = _OLD_NAME_MAP[upper]
-            else:
-                valid = [vt.name for vt in VectorType if vt != VectorType.UNKNOWN]
-                raise ValueError(
-                    f"Unknown vector_type '{vector_type}'.  "
-                    f"Valid values: {valid}"
-                )
+            valid = [vt.name for vt in VectorType if vt != VectorType.UNKNOWN]
+            raise ValueError(
+                f"Unknown vector_type '{vector_type}'.  "
+                f"Valid values: {valid}"
+            )
 
     if vector_type == VectorType.UNKNOWN:
-        raise ValueError(
-            "vector_type=UNKNOWN is not valid.  "
-            "Specify a concrete vector type like DISCRETE, "
-            "SINE, etc."
-        )
+        raise ValueError("vector_type=UNKNOWN is not valid.")
     return vector_type
 
 
@@ -96,13 +74,12 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
     schema = _PARAM_SCHEMAS.get(vector_type)
     if schema is None:
         raise TypeError(
-            f"vector_type={vector_type.name} is not supported for "
-            f"direct parameter specification."
+            f"vector_type={vector_type.name} is not supported."
         )
 
     required = schema["required"]
     optional = schema["optional"]
-    allowed = required | optional
+    allowed  = required | optional
     description = schema["description"]
 
     missing = required - set(params.keys())
@@ -121,28 +98,8 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
 
     result = dict(params)
 
-    # Defaults — amplitude / constant params are absorbed by
-    # normalisation and default to 1.0 when omitted.
-    if vector_type in (VectorType.SINE, VectorType.COSINE):
-        result.setdefault("phi", 0.0)
-        result.setdefault("A", 1.0)
-    if vector_type == VectorType.DISCRETE:
-        result.setdefault("P", 1.0)
-    if vector_type in (VectorType.UNIFORM, VectorType.STEP, VectorType.SQUARE):
+    if vector_type == VectorType.STEP:
         result.setdefault("c", 1.0)
-
-    # Type-specific validation
-    if vector_type == VectorType.DISCRETE:
-        k = int(result["k"])
-        if k < 0 or k >= N:
-            raise ValueError(f"k={k} out of range [0, {N}).")
-        result["k"] = k
-        result["P"] = float(result["P"])
-
-    elif vector_type == VectorType.UNIFORM:
-        result["c"] = float(result["c"])
-
-    elif vector_type == VectorType.STEP:
         k_s = int(result["k_s"])
         if k_s < 1 or k_s > N:
             raise ValueError(f"k_s={k_s} out of range [1, {N}].")
@@ -150,46 +107,12 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         result["c"] = float(result["c"])
 
     elif vector_type == VectorType.SQUARE:
-        k1 = int(result["k1"])
-        k2 = int(result["k2"])
+        result.setdefault("c", 1.0)
+        k1, k2 = int(result["k1"]), int(result["k2"])
         if k1 < 0 or k2 > N or k1 >= k2:
             raise ValueError(f"Invalid range [{k1}, {k2}) for N={N}.")
-        result["k1"] = k1
-        result["k2"] = k2
+        result["k1"], result["k2"] = k1, k2
         result["c"] = float(result["c"])
-
-    elif vector_type in (VectorType.SINE, VectorType.COSINE):
-        n = int(result["n"])
-        if n < 1:
-            raise ValueError(f"Mode n={n} must be >= 1.")
-        result["n"] = n
-        result["A"] = float(result["A"])
-        result["phi"] = float(result["phi"])
-
-    elif vector_type == VectorType.MULTI_DISCRETE:
-        loads = result["loads"]
-        if not isinstance(loads, list) or len(loads) < 2:
-            raise TypeError("loads must be a list of >= 2 entries.")
-        validated_loads = []
-        for entry in loads:
-            k = int(entry["k"])
-            if k < 0 or k >= N:
-                raise ValueError(f"Load index k={k} out of range [0, {N}).")
-            validated_loads.append({"k": k, "P": float(entry["P"])})
-        result["loads"] = validated_loads
-
-    elif vector_type == VectorType.MULTI_SINE:
-        modes = result["modes"]
-        if not isinstance(modes, list) or len(modes) < 2:
-            raise TypeError("modes must be a list of >= 2 entries.")
-        validated_modes = []
-        for entry in modes:
-            n = int(entry["n"])
-            if n < 1:
-                raise ValueError(f"Mode n={n} must be >= 1.")
-            validated_modes.append({"n": n, "A": float(entry["A"])})
-        result["modes"] = validated_modes
-
 
     elif vector_type == VectorType.SPARSE:
         result = _validate_sparse_params(result, N)
@@ -281,22 +204,15 @@ def _validate_circuit(
 
 def _build_expected_vector(
     pattern: LoadPattern,
-    fallback_vector: Optional[np.ndarray],
-) -> Optional[np.ndarray]:
+    fallback_vector,
+):
     """Return the expected real amplitude vector for validation."""
-    N = pattern.N
-
-    if fallback_vector is not None:
-        return fallback_vector.astype(float)
-
+    N  = pattern.N
     lt = pattern.load_type
     p  = pattern.params
 
-    if lt == VectorType.DISCRETE:
-        f = np.zeros(N); f[p["k"]] = p.get("P", 1.0); return f
-
-    if lt == VectorType.UNIFORM:
-        return np.full(N, p.get("c", 1.0))
+    if fallback_vector is not None:
+        return fallback_vector.astype(float)
 
     if lt == VectorType.STEP:
         f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
@@ -304,61 +220,38 @@ def _build_expected_vector(
     if lt == VectorType.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
 
-    if lt == VectorType.SINE:
-        k = np.arange(N)
-        return p.get("A", 1.0) * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
-
-    if lt == VectorType.COSINE:
-        k = np.arange(N)
-        return p.get("A", 1.0) * np.cos(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
-
-    if lt == VectorType.MULTI_DISCRETE:
-        f = np.zeros(N)
-        for load in p["loads"]:
-            f[load["k"]] = load["P"]
-        return f
-
-    if lt == VectorType.MULTI_SINE:
-        k = np.arange(N)
-        f = np.zeros(N)
-        for mode in p["modes"]:
-            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N)
-        return f
-
     if lt == VectorType.SPARSE:
         f = np.zeros(N)
-        for load in p["loads"]:
-            f[load["k"]] = load["P"]
+        for load in p["loads"]: f[load["k"]] = load["P"]
         return f
 
     if lt == VectorType.FOURIER:
         k = np.arange(N)
         f = np.zeros(N)
         for mode in p["modes"]:
-            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
+            f += mode["A"] * np.sin(
+                2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
 
     return None
 
 
-def _build_component_vector(comp: _VectorObj, N: int) -> np.ndarray:
+def _build_component_vector(comp: _VectorObj, N: int):
     """Materialise a single component vector from its constructor."""
     p = comp.params
-    k = np.arange(N)
-
-    if comp.vector_type == VectorType.DISCRETE:
-        f = np.zeros(N); f[p["k"]] = p.get("P", 1.0); return f
-    if comp.vector_type == VectorType.UNIFORM:
-        return np.full(N, p.get("c", 1.0))
     if comp.vector_type == VectorType.STEP:
         f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
     if comp.vector_type == VectorType.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
-    if comp.vector_type == VectorType.SINE:
-        return p.get("A", 1.0) * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
-    if comp.vector_type == VectorType.COSINE:
-        return p.get("A", 1.0) * np.cos(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
-
+    if comp.vector_type == VectorType.SPARSE:
+        f = np.zeros(N)
+        for load in p["loads"]: f[load["k"]] = load["P"]
+        return f
+    if comp.vector_type == VectorType.FOURIER:
+        k = np.arange(N); f = np.zeros(N)
+        for mode in p["modes"]:
+            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
+        return f
     raise TypeError(f"Cannot materialise component of type {comp.vector_type.name}.")
 
 
@@ -397,32 +290,6 @@ def _encode_composite(
             raise TypeError(
                 f"Component {i} is not a VectorObj, got {type(comp).__name__}."
             )
-
-    # Check if this is really a MULTI_DISCRETE or MULTI_SINE
-    all_discrete = all(isinstance(c, DISCRETE) for c in components)
-    all_sine = all(isinstance(c, SINE) for c in components)
-
-    if all_discrete:
-        combined = MULTI_DISCRETE(
-            vectors=[c for c in components]
-        )
-        validated_params = _validate_params(VectorType.MULTI_DISCRETE, N, combined.params)
-        pattern = LoadPattern(VectorType.MULTI_DISCRETE, N=N, params=validated_params)
-        return _synthesize_and_build_info(
-            pattern, fallback_vector=None,
-            validate=validate, tol=tol,
-        )
-
-    if all_sine:
-        combined = MULTI_SINE(
-            modes=[c for c in components]
-        )
-        validated_params = _validate_params(VectorType.MULTI_SINE, N, combined.params)
-        pattern = LoadPattern(VectorType.MULTI_SINE, N=N, params=validated_params)
-        return _synthesize_and_build_info(
-            pattern, fallback_vector=None,
-            validate=validate, tol=tol,
-        )
 
     # General composite: synthesize each component independently,
     # combine via LCU (linear combination of unitaries).
@@ -589,24 +456,6 @@ _normalise_vector_type = _normalize_vector_type          # noqa: E305
 _synthesise_and_build_info = _synthesize_and_build_info  # noqa: E305
 
 
-# ---------------------------------------------------------------------------
-# SPARSE and FOURIER support — schema, validation, vector materialisation
-# ---------------------------------------------------------------------------
-
-# Patch _PARAM_SCHEMAS at import time
-from .types import _PARAM_SCHEMAS
-from .recognizer import VectorType as _VT
-
-_PARAM_SCHEMAS[_VT.SPARSE] = {
-    "required": {"loads"},
-    "optional": set(),
-    "description": 'loads=[{"k": idx, "P": amp}, ...]',
-}
-_PARAM_SCHEMAS[_VT.FOURIER] = {
-    "required": {"modes"},
-    "optional": set(),
-    "description": 'modes=[{"n": freq, "A": amp, "phi": phase}, ...]',
-}
 
 
 def _validate_sparse_params(params: dict, N: int) -> dict:

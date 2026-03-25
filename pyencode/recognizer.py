@@ -39,28 +39,19 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 class VectorType(Enum):
-    DISCRETE        = auto()
-    UNIFORM         = auto()
     STEP            = auto()
     SQUARE          = auto()   # f[k1:k2] = c  (interior segment)
-    SINE            = auto()
-    COSINE          = auto()
-    MULTI_DISCRETE  = auto()   # L >= 2 point loads, arbitrary weights
-    MULTI_SINE      = auto()   # sum of sinusoidal modes
-    UNIFORM_SPIKE   = auto()   # uniform + point perturbation (internal)
     UNKNOWN         = auto()   # fallback to Qiskit StatePreparation
     # New unified types (paper API)
     SPARSE          = auto()   # Gleinig-Hoefler: s point masses at arbitrary indices
     FOURIER         = auto()   # T sinusoidal modes via inverse QFT
 
-# Backward-compatible alias
-LoadType = VectorType
 
 
 @dataclass
 class LoadPattern:
     """Recognised load pattern with extracted numerical parameters."""
-    load_type: LoadType
+    load_type: VectorType
     N: int                        # number of nodes (must be power of 2)
     params: dict = field(default_factory=dict)
     # params keys depend on load_type — documented per pattern below
