@@ -45,6 +45,7 @@ class VectorType(Enum):
     # New unified types (paper API)
     SPARSE          = auto()   # Gleinig-Hoefler: s point masses at arbitrary indices
     FOURIER         = auto()   # T sinusoidal modes via inverse QFT
+    WALSH           = auto()   # k-th Walsh function: X_k + H^{otimes m}, O(m) gates
 
 
 

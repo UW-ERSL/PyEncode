@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +330,56 @@ class TestConstructors:
         s = SQUARE(k1=2, k2=6, c=1.0)
         assert s.params["k1"] == 2
         assert s.params["k2"] == 6
+
+
+
+# ===================================================================
+# WALSH
+# ===================================================================
+
+class TestWalsh:
+
+    def test_k0_period2(self):
+        """k=0: alternates +c/-c every sample, period 2."""
+        circuit, info = encode(WALSH(k=0, c=1.0), N=8)
+        assert info.vector_type == "WALSH"
+        expected = np.array([1,-1,1,-1,1,-1,1,-1], dtype=float)
+        assert_encodes(circuit, expected)
+
+    def test_k1_period4(self):
+        """k=1: blocks of 2, period 4."""
+        circuit, info = encode(WALSH(k=1, c=1.0), N=8)
+        expected = np.array([1,1,-1,-1,1,1,-1,-1], dtype=float)
+        assert_encodes(circuit, expected)
+
+    def test_k2_period8(self):
+        """k=2: blocks of 4, period 8 (half N=8)."""
+        circuit, info = encode(WALSH(k=2, c=1.0), N=8)
+        expected = np.array([1,1,1,1,-1,-1,-1,-1], dtype=float)
+        assert_encodes(circuit, expected)
+
+    def test_gate_count_is_m_plus_one(self):
+        for m in [3, 4, 5]:
+            N = 2 ** m
+            _, info = encode(WALSH(k=0, c=1.0), N=N)
+            assert info.gate_count == m + 1
+
+    def test_complexity(self):
+        _, info = encode(WALSH(k=1, c=1.0), N=8)
+        assert info.complexity == "O(m)"
+
+    def test_validate(self):
+        _, info = encode(WALSH(k=1, c=1.0), N=8, validate=True)
+        assert info.validated
+
+    def test_k_out_of_range_raises(self):
+        with pytest.raises(ValueError):
+            encode(WALSH(k=3, c=1.0), N=8)  # k must be < m=3
+
+    def test_constructor_stores_params(self):
+        w = WALSH(k=2, c=1.0)
+        assert w.vector_type == VectorType.WALSH
+        assert w.params["k"] == 2
 
 
 if __name__ == "__main__":

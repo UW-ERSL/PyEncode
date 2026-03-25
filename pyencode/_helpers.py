@@ -117,6 +117,15 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
     elif vector_type == VectorType.SPARSE:
         result = _validate_sparse_params(result, N)
 
+    elif vector_type == VectorType.WALSH:
+        result.setdefault("c", 1.0)
+        k = int(result["k"])
+        m = int(round(__import__('math').log2(N)))
+        if k < 0 or k >= m:
+            raise ValueError(f"WALSH qubit index k={k} out of range [0, {m}).")
+        result["k"] = k
+        result["c"] = float(result["c"])
+
     elif vector_type == VectorType.FOURIER:
         result = _validate_fourier_params(result, N)
 
@@ -220,6 +229,11 @@ def _build_expected_vector(
     if lt == VectorType.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
 
+    if lt == VectorType.WALSH:
+        k, c = p["k"], p.get("c", 1.0)
+        f = np.array([c if not ((i >> k) & 1) else -c for i in range(N)], dtype=float)
+        return f
+
     if lt == VectorType.SPARSE:
         f = np.zeros(N)
         for load in p["loads"]: f[load["k"]] = load["P"]
@@ -243,6 +257,9 @@ def _build_component_vector(comp: _VectorObj, N: int):
         f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
     if comp.vector_type == VectorType.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
+    if comp.vector_type == VectorType.WALSH:
+        k, c = p["k"], p.get("c", 1.0)
+        return np.array([c if not ((i >> k) & 1) else -c for i in range(N)], dtype=float)
     if comp.vector_type == VectorType.SPARSE:
         f = np.zeros(N)
         for load in p["loads"]: f[load["k"]] = load["P"]

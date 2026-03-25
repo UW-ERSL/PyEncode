@@ -33,6 +33,7 @@ from .types import (
     _VectorObj,
     SPARSE,
     FOURIER,
+    WALSH,
     STEP,
     SQUARE,
     EncodingInfo,
@@ -47,7 +48,8 @@ __all__ = [
     # Constructors
     "SPARSE",
     "FOURIER",
+    "WALSH",
     "STEP",
     "SQUARE",
 ]
-__version__ = "1.0.0"
+__version__ = "1.1.0"

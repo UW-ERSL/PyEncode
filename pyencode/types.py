@@ -53,6 +53,30 @@ class SQUARE(_VectorObj):
         self.params = {"k1": int(k1), "k2": int(k2), "c": float(c)}
 
 
+class WALSH(_VectorObj):
+    """WALSH(k, c) — k-th Walsh function (signed uniform superposition). O(m) gates.
+
+    Prepares the state with amplitude +c/||f|| where bit k of i is 0,
+    and -c/||f|| where bit k of i is 1. Equivalently, a symmetric
+    square wave with period P = 2^(k+1).
+
+    Circuit: X on qubit k, then H on all m qubits. Total: m+1 gates.
+
+    Parameters
+    ----------
+    k : int
+        Qubit index (0 = LSB). Period P = 2^(k+1). Must satisfy 0 <= k < m.
+    c : float, optional
+        Amplitude scale. Default 1.0.
+
+    Example
+    -------
+    >>> circuit, info = encode(WALSH(k=1, c=1.0), N=8)  # period-4 square wave
+    """
+    def __init__(self, k, c=1.0):
+        self.vector_type = VectorType.WALSH
+        self.params = {"k": int(k), "c": float(c)}
+
 class SPARSE(_VectorObj):
     """SPARSE([(x1, a1), (x2, a2), ...]) — s point masses at arbitrary indices.
 
@@ -173,6 +197,7 @@ class EncodingInfo:
 _COMPLEXITY = {
     VectorType.STEP:    "O(m)",
     VectorType.SQUARE:  "O(m)",
+    VectorType.WALSH:   "O(m)",
     VectorType.SPARSE:  "O(s\u00b7m)",
     VectorType.FOURIER: "O(m\u00b2)",
     VectorType.UNKNOWN: "O(2^m)",
@@ -193,6 +218,11 @@ _PARAM_SCHEMAS = {
         "required": {"k1", "k2"},
         "optional": {"c"},
         "description": "k1=<start>, k2=<end>",
+    },
+    VectorType.WALSH: {
+        "required": {"k"},
+        "optional": {"c"},
+        "description": "k=<qubit index>, period P=2^(k+1)",
     },
     VectorType.SPARSE: {
         "required": {"loads"},

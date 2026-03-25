@@ -71,6 +71,7 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.SQUARE:       _synth_square_load,
         VectorType.UNKNOWN:           _synth_qiskit_fallback,
         # New unified types (paper API) — delegate to existing synthesizers
+        VectorType.WALSH:             _synth_walsh,
         VectorType.SPARSE:            _synth_sparse,
         VectorType.FOURIER:           _synth_fourier,
     }
@@ -1010,3 +1011,27 @@ def _synth_fourier(m: int, params: dict) -> QuantumCircuit:
         p = {"n": mode["n"], "A": mode["A"], "phi": phi}
         return _synth_sinusoidal(m, p)
     return _synth_multi_sin_load(m, params)
+
+
+def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
+    """
+    WALSH: k-th Walsh function via X_k + H^{otimes m}.
+
+    Prepares the signed uniform superposition:
+      amplitude = +1/sqrt(N) when bit k of i is 0
+      amplitude = -1/sqrt(N) when bit k of i is 1
+
+    Equivalently: a symmetric square wave with period P = 2^(k+1).
+
+    Circuit: X on qubit k, H on all m qubits.
+    Gate count: m + 1.  Complexity: O(m).
+    """
+    k = params["k"]
+    if k < 0 or k >= m:
+        raise ValueError(f"WALSH qubit index k={k} out of range [0, {m}).")
+
+    qc = QuantumCircuit(m, name="walsh")
+    qc.x(k)
+    for q in range(m):
+        qc.h(q)
+    return qc

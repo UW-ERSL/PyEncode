@@ -60,6 +60,7 @@ def emit_code(pattern: LoadPattern) -> str:
     dispatch = {
         VectorType.STEP:    _emit_step_load,
         VectorType.SQUARE:  _emit_square_load,
+        VectorType.WALSH:   _emit_walsh,
         VectorType.SPARSE:  _emit_sparse,
         VectorType.FOURIER: _emit_fourier,
         VectorType.UNKNOWN: _emit_qiskit_fallback,
@@ -703,5 +704,21 @@ def _emit_qiskit_fallback(m: int, params: dict) -> str:
         f"sp = StatePreparation(amplitudes, label='fallback')",
         f"qc.append(sp, range({m}))",
         f"qc = qc.decompose()",
+    ]
+    return "\n".join(lines)
+
+
+def _emit_walsh(m: int, params: dict) -> str:
+    """Emit circuit code for WALSH (X_k + H^{otimes m})."""
+    k = params["k"]
+    lines = [
+        _header(m, f"WALSH k={k} — signed uniform superposition (square wave period 2^(k+1))"),
+        f"from qiskit import QuantumCircuit",
+        f"",
+        f"m = {m}",
+        f"qc = QuantumCircuit(m, name='walsh')",
+        f"qc.x({k})   # flip qubit {k} to encode sign pattern",
+        f"for q in range(m):",
+        f"    qc.h(q)  # Hadamard on all qubits",
     ]
     return "\n".join(lines)
