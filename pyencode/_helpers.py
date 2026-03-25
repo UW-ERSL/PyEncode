@@ -144,8 +144,8 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
 
     elif vector_type == VectorType.STEP:
         k_s = int(result["k_s"])
-        if k_s < 1 or k_s >= N:
-            raise ValueError(f"k_s={k_s} out of range [1, {N}).")
+        if k_s < 1 or k_s > N:
+            raise ValueError(f"k_s={k_s} out of range [1, {N}].")
         result["k_s"] = k_s
         result["c"] = float(result["c"])
 

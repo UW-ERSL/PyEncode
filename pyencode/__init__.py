@@ -70,14 +70,10 @@ from .types import (
     EncodingInfo,
 )
 from .encode_params import encode_params, encode
-from .encode_vector import encode_vector
-from .encode_python import encode_python
 
 __all__ = [
     "encode",
     "encode_params",
-    "encode_vector",
-    "encode_python",
     "EncodingInfo",
     "VectorType",
     "LoadType",
