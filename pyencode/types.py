@@ -54,28 +54,36 @@ class SQUARE(_VectorObj):
 
 
 class WALSH(_VectorObj):
-    """WALSH(k, c) — k-th Walsh function (signed uniform superposition). O(m) gates.
+    """WALSH(k, c_pos, c_neg) — generalized Walsh function. O(m) gates.
 
-    Prepares the state with amplitude +c/||f|| where bit k of i is 0,
-    and -c/||f|| where bit k of i is 1. Equivalently, a symmetric
-    square wave with period P = 2^(k+1).
+    Prepares a two-level piecewise-constant state with period P = 2^(k+1):
+      amplitude proportional to c_pos where bit k of i is 0,
+      amplitude proportional to c_neg where bit k of i is 1.
 
-    Circuit: X on qubit k, then H on all m qubits. Total: m+1 gates.
+    Circuit: R_y(theta) on qubit k, then H on all m qubits. Total: m+1 gates.
+    When c_neg = -c_pos (default), R_y(pi) = X and this reduces to the
+    standard Walsh function (signed uniform superposition).
 
     Parameters
     ----------
     k : int
         Qubit index (0 = LSB). Period P = 2^(k+1). Must satisfy 0 <= k < m.
-    c : float, optional
-        Amplitude scale. Default 1.0.
+    c_pos : float, optional
+        Amplitude on the b_k=0 half. Default 1.0.
+    c_neg : float, optional
+        Amplitude on the b_k=1 half. Default -c_pos (standard Walsh).
 
-    Example
-    -------
-    >>> circuit, info = encode(WALSH(k=1, c=1.0), N=8)  # period-4 square wave
+    Examples
+    --------
+    >>> circuit, info = encode(WALSH(k=1), N=8)             # standard: +1/-1
+    >>> circuit, info = encode(WALSH(k=1, c_pos=2.0), N=8)  # standard: +2/-2
+    >>> circuit, info = encode(WALSH(k=2, c_pos=1.0, c_neg=4.0), N=8)  # Ry variant
     """
-    def __init__(self, k, c=1.0):
+    def __init__(self, k, c_pos=1.0, c_neg=None):
         self.vector_type = VectorType.WALSH
-        self.params = {"k": int(k), "c": float(c)}
+        c_pos = float(c_pos)
+        c_neg = float(c_neg) if c_neg is not None else -c_pos
+        self.params = {"k": int(k), "c_pos": c_pos, "c_neg": c_neg}
 
 class SPARSE(_VectorObj):
     """SPARSE([(x1, a1), (x2, a2), ...]) — s point masses at arbitrary indices.
@@ -139,6 +147,67 @@ class FOURIER(_VectorObj):
         self.params = {"modes": mode_list}
 
 
+
+class LCU(_VectorObj):
+    """LCU([(w1, VectorObj1), (w2, VectorObj2), ...]) — linear combination via ancilla.
+
+    Prepares a weighted superposition of structured component states:
+      |psi> ∝ sum_j w_j |f^(j)>
+
+    using ceil(log2(r)) ancilla qubits and controlled component circuits.
+
+    When all components have disjoint support (e.g. multiple SQUARE intervals),
+    success probability is exactly 1.0 and the ancilla uncomputes cleanly.
+    For overlapping components, success probability p < 1.0 and post-selection
+    or amplitude amplification is required.
+
+    Parameters
+    ----------
+    components : list of (weight, VectorObj) tuples
+        Unnormalized weights and typed constructors.
+        All weights must be positive.
+
+    Examples
+    --------
+    >>> # Piecewise-constant: two disjoint intervals (p=1)
+    >>> circuit, info = encode(
+    ...     LCU([(1.0, SQUARE(k1=0,  k2=8,  c=1.0)),
+    ...          (4.0, SQUARE(k1=8,  k2=16, c=1.0))]), N=16)
+    >>> # info.success_probability -> 1.0
+
+    >>> # Mixed patterns: overlapping (p<1, warning issued)
+    >>> circuit, info = encode(
+    ...     LCU([(1.0, STEP(k_s=8, c=1.0)),
+    ...          (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
+    >>> # UserWarning: overlapping support, p < 1.0
+    """
+    def __init__(self, components):
+        self.vector_type = VectorType.LCU
+        if not components:
+            raise ValueError("LCU requires at least one component.")
+        weights = []
+        objs = []
+        for item in components:
+            try:
+                w, obj = item
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"LCU expects (weight, VectorObj) tuples, got {item!r}."
+                )
+            if not isinstance(obj, _VectorObj):
+                raise TypeError(
+                    f"LCU component must be a VectorObj, got {type(obj).__name__}."
+                )
+            w = float(w)
+            if w <= 0:
+                raise ValueError(
+                    f"LCU weights must be positive, got {w}."
+                )
+            weights.append(w)
+            objs.append(obj)
+        self.params = {"weights": weights, "components": objs}
+
+
 # ---------------------------------------------------------------------------
 # Return type
 # ---------------------------------------------------------------------------
@@ -175,6 +244,7 @@ class EncodingInfo:
     validated: bool
     params: dict
     circuit_code: str = ""
+    success_probability: float = 1.0
 
     def __str__(self) -> str:
         lines = [
@@ -185,6 +255,9 @@ class EncodingInfo:
             f"  Complexity  : {self.complexity}",
             f"  Validated   : {'yes' if self.validated else 'no'}",
         ]
+        if self.success_probability < 1.0:
+            lines.append(f"  Success prob: {self.success_probability:.4f}  "
+                         f"(post-selection required)")
         if self.params:
             lines.append(f"  Parameters  : {self.params}")
         return "\n".join(lines)
@@ -221,8 +294,8 @@ _PARAM_SCHEMAS = {
     },
     VectorType.WALSH: {
         "required": {"k"},
-        "optional": {"c"},
-        "description": "k=<qubit index>, period P=2^(k+1)",
+        "optional": {"c_pos", "c_neg"},
+        "description": "k=<qubit index>, c_pos=<pos amplitude>, c_neg=<neg amplitude>",
     },
     VectorType.SPARSE: {
         "required": {"loads"},

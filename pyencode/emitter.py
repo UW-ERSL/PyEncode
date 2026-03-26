@@ -709,16 +709,28 @@ def _emit_qiskit_fallback(m: int, params: dict) -> str:
 
 
 def _emit_walsh(m: int, params: dict) -> str:
-    """Emit circuit code for WALSH (X_k + H^{otimes m})."""
-    k = params["k"]
+    """Emit circuit code for generalized WALSH (R_y(theta)_k + H^{otimes m})."""
+    import math as _math
+    k     = params["k"]
+    c_pos = params.get("c_pos", 1.0)
+    c_neg = params.get("c_neg", -c_pos)
+    denom = c_pos + c_neg
+    if abs(denom) < 1e-14:
+        theta = _math.pi
+    else:
+        theta = 2 * _math.atan2(c_pos - c_neg, c_pos + c_neg)
+    is_standard = abs(theta - _math.pi) < 1e-12
+    gate_line = (f"qc.x({k})          # standard Walsh: X = R_y(pi)"
+                 if is_standard else
+                 f"qc.ry({theta:.6f}, {k})  # generalized Walsh: R_y(theta)")
     lines = [
-        _header(m, f"WALSH k={k} — signed uniform superposition (square wave period 2^(k+1))"),
+        _header(m, f"WALSH k={k}, c_pos={c_pos}, c_neg={c_neg} — period P=2^(k+1)={2**(k+1)}"),
         f"from qiskit import QuantumCircuit",
         f"",
         f"m = {m}",
         f"qc = QuantumCircuit(m, name='walsh')",
-        f"qc.x({k})   # flip qubit {k} to encode sign pattern",
+        gate_line,
         f"for q in range(m):",
-        f"    qc.h(q)  # Hadamard on all qubits",
+        f"    qc.h(q)",
     ]
     return "\n".join(lines)

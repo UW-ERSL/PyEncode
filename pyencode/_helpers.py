@@ -118,13 +118,15 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         result = _validate_sparse_params(result, N)
 
     elif vector_type == VectorType.WALSH:
-        result.setdefault("c", 1.0)
         k = int(result["k"])
-        m = int(round(__import__('math').log2(N)))
-        if k < 0 or k >= m:
-            raise ValueError(f"WALSH qubit index k={k} out of range [0, {m}).")
+        m_bits = int(round(math.log2(N)))
+        if k < 0 or k >= m_bits:
+            raise ValueError(f"WALSH qubit index k={k} out of range [0, {m_bits}).")
         result["k"] = k
-        result["c"] = float(result["c"])
+        result.setdefault("c_pos", 1.0)
+        c_pos = float(result["c_pos"])
+        result["c_pos"] = c_pos
+        result["c_neg"] = float(result.get("c_neg", -c_pos))
 
     elif vector_type == VectorType.FOURIER:
         result = _validate_fourier_params(result, N)
@@ -230,8 +232,10 @@ def _build_expected_vector(
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
 
     if lt == VectorType.WALSH:
-        k, c = p["k"], p.get("c", 1.0)
-        f = np.array([c if not ((i >> k) & 1) else -c for i in range(N)], dtype=float)
+        k = p["k"]
+        c_pos = p.get("c_pos", 1.0)
+        c_neg = p.get("c_neg", -c_pos)
+        f = np.array([c_pos if not ((i >> k) & 1) else c_neg for i in range(N)], dtype=float)
         return f
 
     if lt == VectorType.SPARSE:
@@ -258,8 +262,10 @@ def _build_component_vector(comp: _VectorObj, N: int):
     if comp.vector_type == VectorType.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
     if comp.vector_type == VectorType.WALSH:
-        k, c = p["k"], p.get("c", 1.0)
-        return np.array([c if not ((i >> k) & 1) else -c for i in range(N)], dtype=float)
+        k = p["k"]
+        c_pos = p.get("c_pos", 1.0)
+        c_neg = p.get("c_neg", -c_pos)
+        return np.array([c_pos if not ((i >> k) & 1) else c_neg for i in range(N)], dtype=float)
     if comp.vector_type == VectorType.SPARSE:
         f = np.zeros(N)
         for load in p["loads"]: f[load["k"]] = load["P"]
@@ -509,3 +515,225 @@ def _validate_fourier_params(params: dict, N: int) -> dict:
             "phi": float(entry.get("phi", 0.0)),
         })
     return {"modes": validated}
+
+
+# ---------------------------------------------------------------------------
+# Disjoint support detection
+# ---------------------------------------------------------------------------
+
+def _support_interval(comp):
+    """Return (k1, k2) interval of support, or None if full/unknown support."""
+    vt = comp.vector_type
+    p  = comp.params
+    if vt == VectorType.STEP:
+        return (0, p["k_s"])
+    if vt == VectorType.SQUARE:
+        return (p["k1"], p["k2"])
+    if vt == VectorType.SPARSE:
+        indices = [ld["k"] for ld in p["loads"]]
+        return (min(indices), max(indices) + 1)
+    # WALSH, FOURIER have full support
+    return None
+
+
+def _intervals_disjoint(comps):
+    """
+    Return True if all components have analytically disjoint support.
+    WALSH and FOURIER always have full support — never disjoint with anything.
+    STEP/SQUARE/SPARSE: check pairwise interval non-overlap.
+    """
+    intervals = []
+    for comp in comps:
+        iv = _support_interval(comp)
+        if iv is None:
+            return False   # full support — cannot be disjoint
+        intervals.append(iv)
+
+    # Pairwise overlap check
+    for i in range(len(intervals)):
+        for j in range(i + 1, len(intervals)):
+            a1, a2 = intervals[i]
+            b1, b2 = intervals[j]
+            if a1 < b2 and b1 < a2:   # intervals overlap
+                return False
+    return True
+
+
+def _compute_success_probability(weights, component_vectors):
+    """
+    Success probability for Protocol 1 LCU (PREP + ctrl-U + PREP_dagger):
+      p = sum_{i,j} beta_i * beta_j * <f_hat_i | f_hat_j>
+    where beta_j = w_j * ||f_j|| / Z, Z = ||(w_j * ||f_j||)||.
+    For disjoint support: all cross terms vanish, p = sum_j beta_j^2 <= 1.
+    For overlapping support: cross terms > 0, p > disjoint case.
+    p = 1 only when all component states are identical.
+    """
+    norms  = np.array([np.linalg.norm(v) for v in component_vectors])
+    scaled = np.sqrt(np.array(weights, dtype=float) * norms)
+    Z = np.linalg.norm(scaled)
+    if Z < 1e-14:
+        return 0.0
+    betas   = scaled / Z
+    f_hats  = [v / n if n > 1e-14 else np.zeros_like(v)
+               for v, n in zip(component_vectors, norms)]
+    # Correct formula: p = ||sum_j beta_j^2 |f_hat_j>||^2
+    # = sum_{i,j} beta_i^2 * beta_j^2 * <f_hat_i|f_hat_j>
+    p = 0.0
+    for i, (bi, fi) in enumerate(zip(betas, f_hats)):
+        for j, (bj, fj) in enumerate(zip(betas, f_hats)):
+            p += (bi**2) * (bj**2) * float(np.dot(fi, fj))
+    return float(np.clip(p, 0.0, 1.0))
+
+
+# ---------------------------------------------------------------------------
+# LCU encoding
+# ---------------------------------------------------------------------------
+
+def _encode_lcu(lcu_obj, N, validate, tol):
+    """
+    Encode an LCU constructor: weighted superposition of component states.
+
+    For disjoint-support components (STEP, SQUARE, SPARSE combinations):
+      - success_probability = 1.0, no warning
+    For overlapping components:
+      - success_probability < 1.0, UserWarning issued
+    """
+    import warnings
+    from .synthesizer import synthesize as _synthesize
+    from .types import LCU as LCU_type, EncodingInfo
+
+    weights   = lcu_obj.params["weights"]
+    comp_objs = lcu_obj.params["components"]
+    K = len(comp_objs)
+    m = int(round(math.log2(N)))
+
+    # Single component — just encode directly
+    if K == 1:
+        validated_params = _validate_params(
+            comp_objs[0].vector_type, N, comp_objs[0].params)
+        pattern = LoadPattern(comp_objs[0].vector_type, N=N, params=validated_params)
+        return _synthesize_and_build_info(pattern, None, validate, tol)
+
+    # Validate and materialise each component
+    component_vectors  = []
+    component_patterns = []
+    for comp in comp_objs:
+        validated = _validate_params(comp.vector_type, N, comp.params)
+        component_patterns.append(
+            LoadPattern(comp.vector_type, N=N, params=validated))
+        component_vectors.append(_build_component_vector(comp, N))
+
+    # Disjoint support check
+    disjoint = _intervals_disjoint(comp_objs)
+
+    # Compute success probability: p = sum_{i,j} beta_i*beta_j*<fi|fj>
+    # Disjoint: p = sum_j beta_j^2 (cross terms zero)
+    # Overlapping: p higher due to positive cross terms
+    # p = 1 only when all component states are identical
+    p_success = _compute_success_probability(weights, component_vectors)
+    if not disjoint:
+        warnings.warn(
+            f"LCU components have overlapping support. "
+            f"Success probability p={p_success:.4f}. "
+            f"Post-selection on ancilla |0> required; "
+            f"use amplitude amplification for repeated preparation.",
+            UserWarning, stacklevel=3,
+        )
+
+    # Ancilla amplitude: beta_j = sqrt(w_j * ||f_j||) / Z
+    # This ensures beta_j^2 proportional to w_j * ||f_j||,
+    # so the post-selected state is proportional to sum_j w_j |f_hat_j>.
+    norms  = np.array([np.linalg.norm(v) for v in component_vectors])
+    scaled = np.sqrt(np.array(weights, dtype=float) * norms)
+    Z      = np.linalg.norm(scaled)
+    if Z < 1e-14:
+        raise ValueError("LCU: combined vector is zero.")
+    weights_norm = scaled / Z
+
+    # Synthesise component circuits
+    component_circuits = [_synthesize(pat) for pat in component_patterns]
+
+    # Build LCU circuit
+    n_anc       = math.ceil(math.log2(K))
+    total_qubits = m + n_anc
+    qc          = QuantumCircuit(total_qubits, name="lcu")
+    data_qubits = list(range(m))
+    anc_qubits  = list(range(m, total_qubits))
+
+    # Step 1: Ry-tree on ancilla
+    _prepare_amplitude_ancilla(qc, weights_norm, K, n_anc, anc_qubits)
+
+    # Step 2: controlled component circuits
+    for i, circ_i in enumerate(component_circuits):
+        ctrl_state  = format(i, f'0{n_anc}b')[::-1]
+        flip_qubits = [anc_qubits[b] for b in range(n_anc) if ctrl_state[b] == '0']
+        for q in flip_qubits:
+            qc.x(q)
+        controlled_circ = circ_i.to_gate().control(n_anc)
+        qc.append(controlled_circ, anc_qubits + data_qubits)
+        for q in flip_qubits:
+            qc.x(q)
+
+    # Step 3: apply PREP_dagger to uncompute ancilla
+    # This is the key step for Protocol 1 pure-state LCU.
+    # After this, post-selecting ancilla=|0> gives the target pure state.
+    anc_prep_circ = QuantumCircuit(n_anc)
+    _prepare_amplitude_ancilla(anc_prep_circ, weights_norm, K, n_anc, list(range(n_anc)))
+    qc.compose(anc_prep_circ.inverse(), qubits=anc_qubits, inplace=True)
+
+    total_gates = sum(qc.decompose(reps=3).count_ops().values())
+    complexity  = f"O({K}·m)"
+
+    info = EncodingInfo(
+        vector_type="LCU",
+        N=N,
+        m=m,
+        gate_count=total_gates,
+        complexity=complexity,
+        validated=False,
+        params={
+            "components": [c.vector_type.name for c in comp_objs],
+            "weights":    weights,
+            "disjoint":   disjoint,
+        },
+        success_probability=p_success,
+    )
+
+    if validate:
+        _validate_lcu_circuit(qc, component_vectors, weights,
+                               N, m, n_anc, disjoint, tol)
+        info.validated = True
+
+    return qc, info
+
+
+def _validate_lcu_circuit(qc, component_vectors, weights,
+                           N, m, n_anc, disjoint, tol):
+    """
+    Validate LCU circuit (Protocol 1) by post-selecting ancilla on |0>.
+
+    After PREP + ctrl-U + PREP_dagger, the anc=0 subspace holds the
+    target pure state (up to normalization by sqrt(p_success)).
+    """
+    from qiskit.quantum_info import Statevector
+
+    # Build expected combined vector
+    f_combined = sum(w * v for w, v in zip(weights, component_vectors))
+    norm_f = np.linalg.norm(f_combined)
+    if norm_f < 1e-14:
+        return
+    expected = (f_combined / norm_f).real
+
+    # Post-select: read anc=0 subspace of statevector
+    sv = np.array(Statevector(qc))
+    sv_anc0 = sv[:N].real   # ancilla qubit is MSB: anc=0 -> indices 0..N-1
+    norm_anc0 = np.linalg.norm(sv_anc0)
+    if norm_anc0 < 1e-14:
+        raise ValueError("LCU validation: anc=0 subspace is empty.")
+    simulated = sv_anc0 / norm_anc0
+
+    if not np.allclose(np.abs(simulated), np.abs(expected), atol=max(tol, 1e-4)):
+        max_err = np.max(np.abs(np.abs(simulated) - np.abs(expected)))
+        raise ValueError(
+            f"LCU validation failed: max amplitude error = {max_err:.2e} > tol={tol}."
+        )

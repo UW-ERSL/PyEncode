@@ -13,6 +13,7 @@ from ._helpers import (
     _validate_params,
     _synthesize_and_build_info,
     _encode_composite,
+    _encode_lcu,
     _normalize_vector_type,
 )
 
@@ -59,6 +60,10 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
     """
     if isinstance(VectorObj, list):
         return _encode_composite(VectorObj, N, validate=validate, tol=tol)
+
+    from .types import LCU as _LCU
+    if isinstance(VectorObj, _LCU):
+        return _encode_lcu(VectorObj, N, validate=validate, tol=tol)
 
     if not isinstance(VectorObj, _VectorObj):
         raise TypeError(

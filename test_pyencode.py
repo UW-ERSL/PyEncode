@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, LCU
 
 
 # ---------------------------------------------------------------------------
@@ -23,6 +23,25 @@ from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOU
 def statevector(circuit):
     from qiskit.quantum_info import Statevector
     return np.array(Statevector(circuit))
+
+
+def assert_encodes_lcu(circuit, expected_f, n_anc, tol=1e-4):
+    """Verify LCU circuit by post-selecting ancilla on |0> subspace."""
+    from qiskit.quantum_info import Statevector
+    N = len(expected_f)
+    norm = np.linalg.norm(expected_f)
+    assert norm > 1e-12
+    expected = np.abs(expected_f / norm)
+
+    sv = np.array(Statevector(circuit))
+    sv_anc0 = sv[:N].real   # ancilla is MSB: anc=0 -> indices 0..N-1
+    norm_anc0 = np.linalg.norm(sv_anc0)
+    assert norm_anc0 > 1e-12, "anc=0 subspace is empty"
+    simulated = np.abs(sv_anc0 / norm_anc0)
+    np.testing.assert_allclose(
+        simulated, expected, atol=tol,
+        err_msg=f"LCU post-selected state mismatch.\nGot:      {np.round(simulated,4)}\nExpected: {np.round(expected,4)}"
+    )
 
 
 def assert_encodes(circuit, expected_f, tol=1e-5):
@@ -339,47 +358,167 @@ class TestConstructors:
 
 class TestWalsh:
 
-    def test_k0_period2(self):
-        """k=0: alternates +c/-c every sample, period 2."""
-        circuit, info = encode(WALSH(k=0, c=1.0), N=8)
+    def test_k0_standard(self):
+        """Standard Walsh k=0: alternates +/-1 every sample."""
+        circuit, info = encode(WALSH(k=0), N=8)
         assert info.vector_type == "WALSH"
         expected = np.array([1,-1,1,-1,1,-1,1,-1], dtype=float)
         assert_encodes(circuit, expected)
 
-    def test_k1_period4(self):
-        """k=1: blocks of 2, period 4."""
-        circuit, info = encode(WALSH(k=1, c=1.0), N=8)
+    def test_k1_standard(self):
+        """Standard Walsh k=1: blocks of 2, period 4."""
+        circuit, info = encode(WALSH(k=1), N=8)
         expected = np.array([1,1,-1,-1,1,1,-1,-1], dtype=float)
         assert_encodes(circuit, expected)
 
-    def test_k2_period8(self):
-        """k=2: blocks of 4, period 8 (half N=8)."""
-        circuit, info = encode(WALSH(k=2, c=1.0), N=8)
+    def test_k2_standard(self):
+        """Standard Walsh k=2: blocks of 4."""
+        circuit, info = encode(WALSH(k=2), N=8)
         expected = np.array([1,1,1,1,-1,-1,-1,-1], dtype=float)
         assert_encodes(circuit, expected)
+
+    def test_generalized_two_levels(self):
+        """Generalized Walsh: c_pos=1, c_neg=4 (e.g. Fermi-Hubbard t/U ratio)."""
+        circuit, info = encode(WALSH(k=2, c_pos=1.0, c_neg=4.0), N=8)
+        expected = np.array([1,1,1,1,4,4,4,4], dtype=float)
+        assert_encodes(circuit, expected)
+
+    def test_generalized_validate(self):
+        _, info = encode(WALSH(k=1, c_pos=1.0, c_neg=3.0), N=8, validate=True)
+        assert info.validated
+
+    def test_standard_is_special_case(self):
+        """WALSH(k) and WALSH(k, c_pos=1, c_neg=-1) must produce same circuit."""
+        c1, i1 = encode(WALSH(k=1), N=8)
+        c2, i2 = encode(WALSH(k=1, c_pos=1.0, c_neg=-1.0), N=8)
+        assert i1.gate_count == i2.gate_count
 
     def test_gate_count_is_m_plus_one(self):
         for m in [3, 4, 5]:
             N = 2 ** m
-            _, info = encode(WALSH(k=0, c=1.0), N=N)
+            _, info = encode(WALSH(k=0), N=N)
             assert info.gate_count == m + 1
 
+    def test_generalized_gate_count_is_m_plus_one(self):
+        """Generalized Walsh still costs only m+1 gates."""
+        _, info = encode(WALSH(k=1, c_pos=1.0, c_neg=4.0), N=8)
+        assert info.gate_count == 4  # m+1 = 3+1
+
     def test_complexity(self):
-        _, info = encode(WALSH(k=1, c=1.0), N=8)
+        _, info = encode(WALSH(k=1), N=8)
         assert info.complexity == "O(m)"
 
-    def test_validate(self):
-        _, info = encode(WALSH(k=1, c=1.0), N=8, validate=True)
+    def test_validate_standard(self):
+        _, info = encode(WALSH(k=1), N=8, validate=True)
         assert info.validated
 
     def test_k_out_of_range_raises(self):
         with pytest.raises(ValueError):
-            encode(WALSH(k=3, c=1.0), N=8)  # k must be < m=3
+            encode(WALSH(k=3), N=8)  # k must be < m=3
 
     def test_constructor_stores_params(self):
-        w = WALSH(k=2, c=1.0)
+        w = WALSH(k=2, c_pos=1.0, c_neg=4.0)
         assert w.vector_type == VectorType.WALSH
         assert w.params["k"] == 2
+        assert w.params["c_pos"] == 1.0
+        assert w.params["c_neg"] == 4.0
+
+    def test_default_c_neg_is_minus_c_pos(self):
+        w = WALSH(k=1, c_pos=2.0)
+        assert w.params["c_neg"] == -2.0
+
+
+
+# ===================================================================
+# LCU
+# ===================================================================
+
+class TestLCU:
+
+    def test_two_disjoint_squares_correct_state(self):
+        """Two disjoint SQUARE intervals: post-selected state is correct."""
+        circuit, info = encode(
+            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                 (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
+        assert info.vector_type == "LCU"
+        # p = sum_j beta_j^4 = 2*(1/sqrt(2))^4 = 0.5 for 2 equal-weight disjoint
+        assert abs(info.success_probability - 0.5) < 1e-6
+        expected = np.ones(8, dtype=float)
+        assert_encodes_lcu(circuit, expected, n_anc=1)
+
+    def test_two_disjoint_squares_unequal_weights(self):
+        """Disjoint SQUARE with different weights: post-selected state correct."""
+        circuit, info = encode(
+            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                 (4.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
+        assert 0 < info.success_probability < 1.0
+        expected = np.array([1,1,1,1,4,4,4,4], dtype=float)
+        assert_encodes_lcu(circuit, expected, n_anc=1)
+
+    def test_three_disjoint_squares(self):
+        """Three disjoint intervals — 2 ancilla qubits."""
+        circuit, info = encode(
+            LCU([(1.0, SQUARE(k1=0,  k2=4,  c=2.0)),
+                 (1.0, SQUARE(k1=4,  k2=8,  c=3.0)),
+                 (1.0, SQUARE(k1=8,  k2=16, c=1.0))]), N=16)
+        assert 0 < info.success_probability <= 1.0
+        expected = np.array([2]*4 + [3]*4 + [1]*8, dtype=float)
+        assert_encodes_lcu(circuit, expected, n_anc=2)
+
+    def test_disjoint_step_square(self):
+        """STEP + SQUARE with disjoint support: post-selected state correct."""
+        circuit, info = encode(
+            LCU([(1.0, STEP(k_s=4,  c=2.0)),
+                 (1.0, SQUARE(k1=4, k2=8, c=3.0))]), N=8)
+        assert 0 < info.success_probability <= 1.0
+        expected = np.array([2,2,2,2,3,3,3,3], dtype=float)
+        assert_encodes_lcu(circuit, expected, n_anc=1)
+
+    def test_overlapping_warns_and_p_lt_1(self):
+        """Overlapping components emit UserWarning and p < 1."""
+        import warnings
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            circuit, info = encode(
+                LCU([(1.0, STEP(k_s=8,   c=1.0)),
+                     (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
+            assert len(w) == 1
+            assert "overlapping" in str(w[0].message).lower()
+        # Protocol 1: p < 1 for overlapping, non-identical states
+        assert info.success_probability < 1.0
+        assert info.success_probability > 0.0
+
+    def test_single_component(self):
+        """Single-component LCU reduces to plain encode."""
+        c1, i1 = encode(LCU([(1.0, STEP(k_s=4, c=1.0))]), N=8)
+        c2, i2 = encode(STEP(k_s=4, c=1.0), N=8)
+        assert i1.gate_count == i2.gate_count
+
+    def test_validate_disjoint(self):
+        _, info = encode(
+            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                 (1.0, SQUARE(k1=4, k2=8, c=2.0))]),
+            N=8, validate=True)
+        assert info.validated
+
+    def test_negative_weight_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            LCU([(-1.0, STEP(k_s=4, c=1.0))])
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError):
+            LCU([])
+
+    def test_bad_component_raises(self):
+        with pytest.raises(TypeError):
+            LCU([(1.0, "not a VectorObj")])
+
+    def test_success_probability_in_info(self):
+        _, info = encode(
+            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                 (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
+        assert hasattr(info, 'success_probability')
+        assert 0.0 < info.success_probability <= 1.0
 
 
 if __name__ == "__main__":

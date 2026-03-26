@@ -36,6 +36,7 @@ from .types import (
     WALSH,
     STEP,
     SQUARE,
+    LCU,
     EncodingInfo,
 )
 from .recognizer import VectorType
@@ -49,7 +50,8 @@ __all__ = [
     "SPARSE",
     "FOURIER",
     "WALSH",
+    "LCU",
     "STEP",
     "SQUARE",
 ]
-__version__ = "1.1.0"
+__version__ = "1.2.0"
