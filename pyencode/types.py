@@ -288,7 +288,7 @@ class EncodingInfo:
 
 _COMPLEXITY = {
     VectorType.STEP:    "O(m)",
-    VectorType.SQUARE:  "O(m)",
+    VectorType.SQUARE:  "O(m²)",   # general; O(m) for k1=0 or aligned blocks
     VectorType.WALSH:   "O(m)",
     VectorType.SPARSE:  "O(s\u00b7m)",
     VectorType.FOURIER: "O(m\u00b2)",

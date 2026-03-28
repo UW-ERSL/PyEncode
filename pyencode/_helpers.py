@@ -180,6 +180,15 @@ def _synthesize_and_build_info(
 
     complexity = _COMPLEXITY.get(pattern.load_type, "unknown")
 
+    # SQUARE: override complexity for special cases that avoid the Draper adder
+    if pattern.load_type == VectorType.SQUARE:
+        k1 = pattern.params.get("k1", 0)
+        k2 = pattern.params.get("k2", 0)
+        w  = k2 - k1
+        aligned = (w > 0) and ((w & (w - 1)) == 0) and (k1 % w == 0)
+        if k1 == 0 or aligned:
+            complexity = "O(m)"
+
     info = EncodingInfo(
         vector_type=pattern.load_type.name,
         N=N,

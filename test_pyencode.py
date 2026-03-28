@@ -197,8 +197,19 @@ class TestSquare:
             expected = np.zeros(64); expected[k1:k2] = 1.0
             assert_encodes(circuit, expected)
 
-    def test_complexity(self):
+    def test_complexity_general(self):
+        """General non-aligned SQUARE: O(m²) via Draper adder."""
         _, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+        assert info.complexity == "O(m²)"
+
+    def test_complexity_k1_zero(self):
+        """SQUARE with k1=0 reduces to STEP: O(m)."""
+        _, info = encode(SQUARE(k1=0, k2=4, c=1.0), N=8)
+        assert info.complexity == "O(m)"
+
+    def test_complexity_aligned(self):
+        """Power-of-2-aligned SQUARE: O(m) special case."""
+        _, info = encode(SQUARE(k1=8, k2=16, c=1.0), N=64)
         assert info.complexity == "O(m)"
 
     def test_validate(self):
@@ -519,6 +530,221 @@ class TestLCU:
                  (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
         assert hasattr(info, 'success_probability')
         assert 0.0 < info.success_probability <= 1.0
+
+
+# ===================================================================
+# Gate-count scaling tests: verify O(poly(m)) not O(2^m)
+#
+# Strategy: measure transpiled gate_count at m = 4, 6, 8, 10, 12 and
+# fit two competing models by least-squares in log-space:
+#
+#   poly  model:  log(gates) ~ a + b*log(m)   => gates ~ C * m^b
+#   exp   model:  log(gates) ~ a + b*m         => gates ~ C * alpha^m
+#
+# A pattern is O(poly(m)) if the poly model fits substantially better
+# than the exponential model, measured by R^2.  We require:
+#
+#   R2_poly > R2_exp  (poly model wins)
+#   R2_poly > 0.90    (good fit overall)
+#   b_exp   < 0.50    (exponential coefficient is small, ruling out 2^m)
+#
+# The b_exp < 0.50 guard catches cases where both models fit poorly
+# (flat gate-count curves where neither is informative).
+#
+# These tests are deliberately coarse: they detect O(2^m) blowup, not
+# exact constants.  They complement, not replace, the unit correctness
+# tests above.
+# ===================================================================
+
+import numpy as np
+
+
+def _fit_scaling(m_vals, gate_vals):
+    """
+    Fit poly and exponential models to (m, gate_count) data.
+
+    Returns
+    -------
+    b_poly  : exponent in C * m^b  (poly model)
+    b_exp   : coefficient in C * alpha^b*m  (exp model)
+    r2_poly : R^2 of poly fit in log-log space
+    r2_exp  : R^2 of exp fit in log-linear space
+    """
+    m = np.array(m_vals, dtype=float)
+    g = np.array(gate_vals, dtype=float)
+
+    log_m = np.log(m)
+    log_g = np.log(g)
+
+    # Poly fit: log(g) = a + b*log(m)
+    A_poly = np.column_stack([np.ones_like(log_m), log_m])
+    coeff_poly, _, _, _ = np.linalg.lstsq(A_poly, log_g, rcond=None)
+    b_poly = coeff_poly[1]
+    pred_poly = A_poly @ coeff_poly
+    ss_res = np.sum((log_g - pred_poly) ** 2)
+    ss_tot = np.sum((log_g - log_g.mean()) ** 2)
+    r2_poly = 1.0 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0
+
+    # Exp fit: log(g) = a + b*m
+    A_exp = np.column_stack([np.ones_like(m), m])
+    coeff_exp, _, _, _ = np.linalg.lstsq(A_exp, log_g, rcond=None)
+    b_exp = coeff_exp[1]
+    pred_exp = A_exp @ coeff_exp
+    ss_res_e = np.sum((log_g - pred_exp) ** 2)
+    r2_exp = 1.0 - ss_res_e / ss_tot if ss_tot > 1e-12 else 1.0
+
+    return b_poly, b_exp, r2_poly, r2_exp
+
+
+def _assert_poly_scaling(m_vals, gate_vals, label):
+    """Assert that gate_vals scales as poly(m), not as 2^m."""
+    b_poly, b_exp, r2_poly, r2_exp = _fit_scaling(m_vals, gate_vals)
+    assert r2_poly > r2_exp, (
+        f"{label}: exponential model fits better than polynomial "
+        f"(R2_poly={r2_poly:.3f} <= R2_exp={r2_exp:.3f}). "
+        f"Gate counts: {list(zip(m_vals, gate_vals))}"
+    )
+    assert r2_poly > 0.90, (
+        f"{label}: polynomial fit is poor (R2_poly={r2_poly:.3f} < 0.90). "
+        f"Gate counts may not follow O(poly(m)). "
+        f"Gate counts: {list(zip(m_vals, gate_vals))}"
+    )
+    assert b_exp < 0.50, (
+        f"{label}: exponential coefficient b_exp={b_exp:.3f} >= 0.50, "
+        f"suggesting near-exponential gate growth. "
+        f"Gate counts: {list(zip(m_vals, gate_vals))}"
+    )
+
+
+class TestScaling:
+    """
+    Verify that each pattern's gate count scales as O(poly(m)),
+    not O(2^m).  Tests use m = 4, 6, 8, 10, 12 (N up to 4096).
+    """
+
+    M_VALS = [4, 6, 8, 10, 12]
+
+    def test_sparse_single_entry_scaling(self):
+        """SPARSE(s=1): gate count ~ Hamming weight, bounded by m."""
+        # Use index 2^(m-1) - 1 to give Hamming weight ~ m/2 consistently
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            idx = N // 2 - 1  # e.g. m=4 -> idx=7 = 0111, HW=3
+            _, info = encode(SPARSE([(idx, 1.0)]), N=N)
+            gate_vals.append(info.gate_count)
+        _assert_poly_scaling(self.M_VALS, gate_vals, "SPARSE(s=1)")
+
+    def test_sparse_multi_entry_scaling(self):
+        """SPARSE(s=4): gate count should scale as O(s*m), not O(2^m).
+
+        Uses non-power-of-2 indices so the Gleinig-Hoefler tree is
+        non-trivial and gate count actually grows with m.
+        """
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            # Non-aligned indices: small odd offsets stay in range for m>=4
+            indices = [N // 8 + 1, N // 4 + 1, N // 2 + 1, 3 * N // 4 + 1]
+            entries = [(idx, float(j + 1)) for j, idx in enumerate(indices)]
+            _, info = encode(SPARSE(entries), N=N)
+            gate_vals.append(info.gate_count)
+        # If gate count is constant across m, it is trivially O(poly(m)) --
+        # verify only that it does not grow exponentially.
+        if max(gate_vals) == min(gate_vals):
+            m_large = self.M_VALS[-1]
+            assert gate_vals[-1] < 2 ** m_large, (
+                f"SPARSE(s=4): constant gate count {gate_vals[-1]} >= 2^{m_large}."
+            )
+        else:
+            _assert_poly_scaling(self.M_VALS, gate_vals, "SPARSE(s=4)")
+
+    def test_step_scaling(self):
+        """STEP: gate count is O(m) by Shukla-Vedula construction."""
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            # k_s = 3*N//4 gives a non-trivial binary decomposition
+            _, info = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+            gate_vals.append(info.gate_count)
+        _assert_poly_scaling(self.M_VALS, gate_vals, "STEP")
+
+    def test_square_scaling(self):
+        """SQUARE: gate count is O(m) via two controlled STEP circuits."""
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            k1 = N // 4
+            k2 = 3 * N // 4
+            _, info = encode(SQUARE(k1=k1, k2=k2, c=1.0), N=N)
+            gate_vals.append(info.gate_count)
+        _assert_poly_scaling(self.M_VALS, gate_vals, "SQUARE")
+
+    def test_walsh_scaling(self):
+        """WALSH: gate count is exactly m+1, clearly O(m)."""
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            _, info = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
+            gate_vals.append(info.gate_count)
+        _assert_poly_scaling(self.M_VALS, gate_vals, "WALSH")
+
+    def test_fourier_single_mode_scaling(self):
+        """FOURIER(T=1): gate count is O(m^2) via inverse QFT."""
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            _, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)
+            gate_vals.append(info.gate_count)
+        _assert_poly_scaling(self.M_VALS, gate_vals, "FOURIER(T=1)")
+
+    def test_fourier_multi_mode_scaling(self):
+        """FOURIER(T=2): gate count is still O(m^2), independent of T."""
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            _, info = encode(FOURIER(modes=[(1, 1.0, 0), (2, 0.5, 0)]), N=N)
+            gate_vals.append(info.gate_count)
+        _assert_poly_scaling(self.M_VALS, gate_vals, "FOURIER(T=2)")
+
+    def test_square_scales_as_step(self):
+        """
+        SQUARE gate count should grow no faster than a fixed multiple
+        of STEP gate count at the same m (verifies the ~2x constant factor).
+        """
+        for m in self.M_VALS:
+            N = 2 ** m
+            _, info_sq = encode(SQUARE(k1=N // 4, k2=3 * N // 4, c=1.0), N=N)
+            _, info_st = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+            ratio = info_sq.gate_count / max(info_st.gate_count, 1)
+            assert ratio < 6, (
+                f"m={m}: SQUARE gate count ({info_sq.gate_count}) is more than "
+                f"6x STEP gate count ({info_st.gate_count}). "
+                f"Ratio={ratio:.2f}. The ancilla overhead may be larger than expected."
+            )
+
+    def test_no_pattern_matches_exponential(self):
+        """
+        Omnibus guard: for every O(m) pattern, gate count at m=12 must
+        be less than 2^12 = 4096.  A single violation signals exponential
+        growth slipping through.
+        """
+        m = 12
+        N = 2 ** m
+        threshold = 2 ** m  # 4096
+
+        checks = [
+            ("SPARSE(s=1)", encode(SPARSE([(N // 2 - 1, 1.0)]), N=N)[1].gate_count),
+            ("STEP",        encode(STEP(k_s=3 * N // 4, c=1.0), N=N)[1].gate_count),
+            ("SQUARE",      encode(SQUARE(k1=N // 4, k2=3 * N // 4, c=1.0), N=N)[1].gate_count),
+            ("WALSH",       encode(WALSH(k=m // 2), N=N)[1].gate_count),
+            ("FOURIER(T=1)",encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)[1].gate_count),
+        ]
+        for label, count in checks:
+            assert count < threshold, (
+                f"{label}: gate_count={count} >= 2^m={threshold} at m={m}. "
+                f"This indicates exponential gate growth."
+            )
 
 
 if __name__ == "__main__":

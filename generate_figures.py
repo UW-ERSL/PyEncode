@@ -15,7 +15,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 
-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER
+from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, LCU
 from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 
 # ── matplotlib style ──────────────────────────────────────────────
@@ -177,19 +177,21 @@ def fig_fourier_multi():
 # ===================================================================
 
 def fig_hubbard():
-    """Fermi-Hubbard PREP oracle."""
+    """Fermi-Hubbard PREP oracle via generalized Walsh."""
     print("\n--- Fermi-Hubbard PREP ---")
+    import math
     L = 8; t = 1.0; U = 4.0
-    N_pauli = 4 * L  # = 32
-    circuit, info = encode([
-        SQUARE(k1=0,   k2=2*L, c=t),
-        SQUARE(k1=2*L, k2=3*L, c=U),
-    ], N=N_pauli)
+    N = 2 * L  # = 16
+    circuit, info = encode(
+        WALSH(k=int(math.log2(L)), c_pos=t, c_neg=U),
+        N=N)
     print_info("encode", info)
-    f = np.zeros(N_pauli)
-    f[0:2*L] = t; f[2*L:3*L] = U
-    plot_vector(f, N_pauli, r"Fermi-Hubbard: $t=1, U=4, L=8$", "hubbard_vector.png")
-    save_circuit(circuit, "hubbard_circuit.png", scale=0.7)
+    # coefficient vector: t on [0, L), U on [L, 2L)
+    f = np.zeros(N)
+    f[:L] = t; f[L:] = U
+    plot_vector(f, N, r"Fermi-Hubbard PREP: $t=1,\;U=4,\;L=8,\;N=16$",
+                "hubbard_vector.png")
+    save_circuit(circuit, "hubbard_circuit.png", scale=1.0)
 
 
 def fig_poisson():
@@ -228,6 +230,108 @@ def fig_finance():
 
 
 # ===================================================================
+# Figure: gate count vs m (scaling figure)
+# ===================================================================
+
+def fig_gate_count_vs_m():
+    """
+    Gate count vs number of qubits m for each PyEncode pattern,
+    compared against Qiskit StatePreparation on a random vector.
+
+    m values: 4, 6, 8, 10, 12  (N = 16 to 4096)
+
+    SQUARE uses non-aligned intervals (k1 = N//4 + 1, k2 = 3*N//4 + 1)
+    to reflect realistic usage rather than power-of-2 boundaries.
+    """
+    print("\n--- Gate Count vs m figure ---")
+
+    M_VALS = [4, 6, 8, 10, 12]
+
+    patterns = {
+        "SPARSE ($s=2$)":  [],
+        "STEP":            [],
+        "SQUARE":          [],
+        "WALSH":           [],
+        "FOURIER":         [],
+        "Qiskit (random)": [],
+    }
+
+    np.random.seed(42)
+
+    for m in M_VALS:
+        N = 2 ** m
+
+        # SPARSE s=2: indices chosen so binary representations grow with m,
+        # giving non-trivial Gleinig-Hoefler trees that scale with m.
+        idx1 = min(int(0.3 * N) + 3, N - 2)
+        idx2 = min(int(0.7 * N) + 5, N - 1)
+        _, info = encode(SPARSE([(idx1, 1.0), (idx2, 2.0)]), N=N)
+        patterns["SPARSE ($s=2$)"].append(info.gate_count)
+
+        # STEP: non-power-of-2 cutoff
+        _, info = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+        patterns["STEP"].append(info.gate_count)
+
+        # SQUARE: non-aligned interval
+        k1 = N // 4 + 1
+        k2 = 3 * N // 4 + 1
+        _, info = encode(SQUARE(k1=k1, k2=k2, c=1.0), N=N)
+        patterns["SQUARE"].append(info.gate_count)
+
+        # WALSH: mid-register bit, generalized
+        _, info = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
+        patterns["WALSH"].append(info.gate_count)
+
+        # FOURIER T=1
+        _, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)
+        patterns["FOURIER"].append(info.gate_count)
+
+        # Qiskit baseline: random unit vector
+        f_rand = np.random.randn(N)
+        qk = qiskit_gates(f_rand, N)
+        patterns["Qiskit (random)"].append(qk)
+
+        print(f"  m={m}: SPARSE={patterns['SPARSE ($s=2$)'][-1]}, "
+              f"STEP={patterns['STEP'][-1]}, "
+              f"SQUARE={patterns['SQUARE'][-1]}, "
+              f"WALSH={patterns['WALSH'][-1]}, "
+              f"FOURIER={patterns['FOURIER'][-1]}, "
+              f"Qiskit={patterns['Qiskit (random)'][-1]}")
+
+    # ── Plot ──────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(6.0, 4.0))
+
+    style = {
+        "SPARSE ($s=2$)":  dict(color="#2166ac", marker="o",  ls="-",  lw=1.6),
+        "STEP":            dict(color="#4dac26", marker="s",  ls="-",  lw=1.6),
+        "SQUARE":          dict(color="#d01c8b", marker="^",  ls="-",  lw=1.6),
+        "WALSH":           dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
+        "FOURIER":         dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
+        "Qiskit (random)": dict(color="#555555", marker="x",  ls=":",  lw=1.8),
+    }
+
+    for label, counts in patterns.items():
+        s = style[label]
+        ax.semilogy(M_VALS, counts, label=label,
+                    color=s["color"], marker=s["marker"],
+                    ls=s["ls"], lw=s["lw"], markersize=6)
+
+    ax.set_xlabel("Number of qubits $m$  ($N = 2^m$)")
+    ax.set_ylabel("Transpiled gate count  (log scale)")
+    ax.set_xticks(M_VALS)
+    ax.set_xticklabels([f"$m={m}$\n$N={2**m}$" for m in M_VALS], fontsize=9)
+    ax.legend(fontsize=9, loc="upper left", framealpha=0.9)
+    ax.grid(True, which="both", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.set_title(r"Gate count vs. $m$: PyEncode patterns vs. Qiskit",
+                 fontsize=10, pad=6)
+
+    fig.tight_layout()
+    fig.savefig(f"{FIGDIR}/gate_count_vs_m.png")
+    plt.close(fig)
+    print(f"  saved {FIGDIR}/gate_count_vs_m.png")
+
+
+# ===================================================================
 # Gate count table
 # ===================================================================
 
@@ -242,8 +346,8 @@ def gate_count_table():
          np.eye(N)[20]),
         ("STEP (k_s=4)",         STEP(k_s=4, c=1.0),
          np.r_[np.ones(4), np.zeros(N-4)]),
-        ("SQUARE ([8,16))",      SQUARE(k1=8, k2=16, c=1.0),
-         np.r_[np.zeros(8), np.ones(8), np.zeros(N-16)]),
+        ("SQUARE ([12,52), general)", SQUARE(k1=12, k2=52, c=1.0),
+         np.r_[np.zeros(12), np.ones(40), np.zeros(N-52)]),
         ("FOURIER T=1 n=1",      FOURIER(modes=[(1, 1.0, 0)]),
          np.sin(2*np.pi*k/N)),
         ("FOURIER T=1 n=3 phi",  FOURIER(modes=[(3, 1.0, math.pi/4)]),
@@ -280,6 +384,9 @@ if __name__ == "__main__":
     fig_hubbard()
     fig_poisson()
     fig_finance()
+
+    # Gate count scaling figure
+    fig_gate_count_vs_m()
 
     # Gate count table
     gate_count_table()
