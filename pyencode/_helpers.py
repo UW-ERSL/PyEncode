@@ -151,6 +151,7 @@ def _synthesize_and_build_info(
     circuit = synthesize(pattern)
 
     validated = False
+    f_vec = None      
     if validate:
         _validate_circuit(circuit, pattern, fallback_vector, tol)
         validated = True
@@ -175,6 +176,7 @@ def _synthesize_and_build_info(
         validated=validated,
         params=_sanitise_params(pattern.params),
         circuit_code=emit_code(pattern),
+        vector=f_vec,      
     )
 
     return circuit, info

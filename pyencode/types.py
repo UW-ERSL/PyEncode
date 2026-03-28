@@ -245,6 +245,7 @@ class EncodingInfo:
     params: dict
     circuit_code: str = ""
     success_probability: float = 1.0
+    vector: Optional[np.ndarray] = None  # populated only when validate=True
 
     def __str__(self) -> str:
         lines = [
