@@ -140,7 +140,6 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
 
 def _synthesize_and_build_info(
     pattern: LoadPattern,
-    fallback_vector: Optional[np.ndarray],
     validate: bool,
     tol: float,
 ) -> tuple[QuantumCircuit, EncodingInfo]:
@@ -151,9 +150,10 @@ def _synthesize_and_build_info(
     circuit = synthesize(pattern)
 
     validated = False
-    f_vec = None      
+    f_vec = None
     if validate:
-        _validate_circuit(circuit, pattern, fallback_vector, tol)
+        f_vec = _build_expected_vector(pattern)
+        _validate_circuit(circuit, f_vec, tol)
         validated = True
 
     try:
@@ -176,7 +176,7 @@ def _synthesize_and_build_info(
         validated=validated,
         params=_sanitise_params(pattern.params),
         circuit_code=emit_code(pattern),
-        vector=f_vec,      
+        vector=f_vec,
     )
 
     return circuit, info
@@ -188,19 +188,17 @@ def _synthesize_and_build_info(
 
 def _validate_circuit(
     circuit: QuantumCircuit,
-    pattern: LoadPattern,
-    fallback_vector: Optional[np.ndarray],
+    expected: Optional[np.ndarray],
     tol: float,
 ):
     """Simulate and compare to expected amplitude vector."""
     from qiskit.quantum_info import Statevector
 
-    sv = Statevector(circuit)
-    simulated = np.array(sv)
-
-    expected = _build_expected_vector(pattern, fallback_vector)
     if expected is None:
         return
+
+    sv = Statevector(circuit)
+    simulated = np.array(sv)
 
     norm = np.linalg.norm(expected)
     if norm < 1e-14:
@@ -217,16 +215,11 @@ def _validate_circuit(
 
 def _build_expected_vector(
     pattern: LoadPattern,
-    fallback_vector,
 ):
     """Return the expected real amplitude vector for validation."""
     N  = pattern.N
     lt = pattern.load_type
     p  = pattern.params
-
-    if fallback_vector is not None:
-        return fallback_vector.astype(float)
-
     if lt == VectorType.STEP:
         f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
 
@@ -350,7 +343,7 @@ def _encode_composite(
     if K == 1:
         info_pattern = component_patterns[0]
         return _synthesize_and_build_info(
-            info_pattern, fallback_vector=None,
+            info_pattern,
             validate=validate, tol=tol,
         )
 
@@ -614,7 +607,7 @@ def _encode_lcu(lcu_obj, N, validate, tol):
         validated_params = _validate_params(
             comp_objs[0].vector_type, N, comp_objs[0].params)
         pattern = LoadPattern(comp_objs[0].vector_type, N=N, params=validated_params)
-        return _synthesize_and_build_info(pattern, None, validate, tol)
+        return _synthesize_and_build_info(pattern, validate, tol)
 
     # Validate and materialise each component
     component_vectors  = []
@@ -705,6 +698,8 @@ def _encode_lcu(lcu_obj, N, validate, tol):
         _validate_lcu_circuit(qc, component_vectors, weights,
                                N, m, n_anc, disjoint, tol)
         info.validated = True
+        f_combined = sum(w * v for w, v in zip(weights, component_vectors))
+        info.vector = f_combined
 
     return qc, info
 

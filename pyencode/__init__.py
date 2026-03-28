@@ -40,7 +40,7 @@ from .types import (
     EncodingInfo,
 )
 from .recognizer import VectorType
-from .encode_params import encode
+from .encode import encode
 
 __all__ = [
     "encode",

@@ -75,6 +75,6 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
     validated_params = _validate_params(vtype, N, VectorObj.params)
     pattern = LoadPattern(vtype, N=N, params=validated_params)
     return _synthesize_and_build_info(
-        pattern, fallback_vector=None,
+        pattern,
         validate=validate, tol=tol,
     )

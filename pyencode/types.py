@@ -235,6 +235,12 @@ class EncodingInfo:
         Supplied vector parameters.
     circuit_code : str
         Standalone Qiskit source that builds the same circuit.
+    success_probability : float
+        Post-selection probability (1.0 for single-pattern constructors;
+        p in (0,1] for LCU).
+    vector : np.ndarray or None
+        The classically constructed amplitude vector f, populated only
+        when validate=True. Requires O(2^m) memory. None otherwise.
     """
     vector_type: str
     N: int
@@ -245,7 +251,7 @@ class EncodingInfo:
     params: dict
     circuit_code: str = ""
     success_probability: float = 1.0
-    vector: Optional[np.ndarray] = None  # populated only when validate=True
+    vector: Optional[np.ndarray] = None
 
     def __str__(self) -> str:
         lines = [
@@ -259,6 +265,8 @@ class EncodingInfo:
         if self.success_probability < 1.0:
             lines.append(f"  Success prob: {self.success_probability:.4f}  "
                          f"(post-selection required)")
+        if self.vector is not None:
+            lines.append(f"  Vector      : numpy array, shape ({self.N},)")
         if self.params:
             lines.append(f"  Parameters  : {self.params}")
         return "\n".join(lines)
