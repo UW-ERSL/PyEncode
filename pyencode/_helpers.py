@@ -165,6 +165,19 @@ def _synthesize_and_build_info(
     except Exception:
         total_gates = sum(circuit.count_ops().values())
 
+    # Count 1q and 2q gates after transpilation to {cx, u} basis.
+    gate_count_1q = None
+    gate_count_2q = None
+    try:
+        from qiskit import transpile as qk_transpile
+        transpiled = qk_transpile(circuit, basis_gates=['cx', 'u'],
+                                  optimization_level=3)
+        ops = transpiled.count_ops()
+        gate_count_1q = ops.get('u', 0)
+        gate_count_2q = ops.get('cx', 0)
+    except Exception:
+        pass
+
     complexity = _COMPLEXITY.get(pattern.load_type, "unknown")
 
     info = EncodingInfo(
@@ -177,6 +190,8 @@ def _synthesize_and_build_info(
         params=_sanitise_params(pattern.params),
         circuit_code=emit_code(pattern),
         vector=f_vec,
+        gate_count_1q=gate_count_1q,
+        gate_count_2q=gate_count_2q,
     )
 
     return circuit, info

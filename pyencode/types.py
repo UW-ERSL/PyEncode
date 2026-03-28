@@ -241,6 +241,12 @@ class EncodingInfo:
     vector : np.ndarray or None
         The classically constructed amplitude vector f, populated only
         when validate=True. Requires O(2^m) memory. None otherwise.
+    gate_count_1q : int or None
+        Number of single-qubit gates after transpilation to {cx, u}.
+        None if transpilation was not performed.
+    gate_count_2q : int or None
+        Number of two-qubit (CX) gates after transpilation to {cx, u}.
+        None if transpilation was not performed.
     """
     vector_type: str
     N: int
@@ -252,6 +258,8 @@ class EncodingInfo:
     circuit_code: str = ""
     success_probability: float = 1.0
     vector: Optional[np.ndarray] = None
+    gate_count_1q: Optional[int] = None
+    gate_count_2q: Optional[int] = None
 
     def __str__(self) -> str:
         lines = [
@@ -262,6 +270,8 @@ class EncodingInfo:
             f"  Complexity  : {self.complexity}",
             f"  Validated   : {'yes' if self.validated else 'no'}",
         ]
+        if self.gate_count_1q is not None:
+            lines.append(f"  Gates 1q/2q : {self.gate_count_1q} / {self.gate_count_2q}")
         if self.success_probability < 1.0:
             lines.append(f"  Success prob: {self.success_probability:.4f}  "
                          f"(post-selection required)")

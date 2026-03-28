@@ -232,43 +232,53 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
     """
     Prepare (1/√w) Σ_{j=k1}^{k2-1} |j⟩  where w = k2 - k1.
 
-    Strategy
-    --------
-    A square block [k1, k2) is the difference of two step prefixes:
+    Construction
+    ------------
+    Uses the identity  [k1, k2)  =  shift of  [0, w)  by constant k1:
 
-        1[k1 ≤ j < k2] = 1[j < k2] - 1[j < k1]
+        |ψ_sq⟩ = ADD(k1) · STEP(w)
 
-    In amplitude encoding:
+    where STEP(w) prepares the uniform superposition over [0, w) and
+    ADD(k1) is the Draper QFT-based adder for the classical constant k1.
 
-        √w |ψ_sq⟩ = √k2 |ψ_step(k2)⟩ - √k1 |ψ_step(k1)⟩
+    Steps
+    -----
+    1. STEP(w) on m qubits: O(m) gates.
+    2. ADD(k1): QFT + O(m) phase gates + QFT†.
+       The QFT dominates at O(m²), making the total circuit O(m²).
 
-    We therefore build |ψ_sq⟩ by combining two STEP circuits via a
-    single Ry rotation on an ancilla-free register:
+    Special cases
+    -------------
+    k1 = 0 : reduces to plain STEP(k2) with no adder — O(m) total.
+    Aligned power-of-2 block : X gates + H gates — O(m) total.
 
-      1. Ry(α) on qubit m-1 splits amplitude: cos(α/2)→lower, sin(α/2)→upper
-         where α = 2 arccos(√(k1/w_total)), w_total = k1+k2... 
+    Gate count: O(m) for STEP + O(m²) for adder = O(m²) in general.
+    For k1 = 0: O(m).  For power-of-2-aligned blocks: O(m).
 
-    Simpler direct construction
-    ---------------------------
-    We use the same top-down controlled-Ry recursion as STEP, but now
-    the "active window" starts at k1 instead of 0.
-
-    At each qubit level (MSB first), we track the window [lo, hi) of
-    indices still to be covered.  Qubits outside the window stay |0⟩;
-    qubits at the boundary get a (controlled) Ry to split correctly.
-
-    Gate count: O(m) — at most one (C)Ry per qubit level.
+    Note on the paper's O(m) claim
+    --------------------------------
+    The paper describes an ancilla-based LCU decomposition as an O(m)
+    alternative.  That construction produces a (m+1)-qubit circuit where
+    the ancilla qubit is entangled with the data register and cannot be
+    deterministically uncomputed; in practice the STEP+adder approach
+    here is simpler, correct, and ancilla-free.
     """
     k1 = params["k1"]
     k2 = params["k2"]
     N  = 2 ** m
     w  = k2 - k1
 
-    qc = QuantumCircuit(m, name="square_load")
+    if w <= 0:
+        raise ValueError(f"SQUARE requires k1 < k2, got k1={k1} k2={k2}")
 
-    # Special case: w-aligned power-of-2 block → X gates + H gates
+    # ── Special case: k1 == 0 → plain STEP, no adder ─────────────────────
+    if k1 == 0:
+        return _synth_step_load(m, {"k_s": k2})
+
+    # ── Special case: aligned power-of-2 block → X + H, no adder ─────────
     if (w & (w - 1)) == 0 and (k1 % w == 0):
         p = int(round(math.log2(w)))
+        qc = QuantumCircuit(m, name="square_load")
         for bit in range(m):
             if (k1 >> bit) & 1:
                 qc.x(bit)
@@ -276,84 +286,38 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
             qc.h(q)
         return qc
 
-    # General case: top-down window-tracking Ry decomposition
-    _square_ry_decompose(qc, k1, k2, m - 1, ctrl_qubits=[], ctrl_vals=[])
+    # ── General case: STEP(w) + Draper QFT constant adder(k1) ────────────
+    step = _synth_step_load(m, {"k_s": w})
+    adder = _draper_add_const(m, k1)
+    qc = step.compose(adder)
+    qc.name = "square_load"
     return qc
 
 
-def _apply_controlled_ry(qc: QuantumCircuit,
-                          theta: float,
-                          ctrl_qubits: list,
-                          ctrl_vals: list,
-                          target: int) -> None:
+def _draper_add_const(m: int, k: int) -> QuantumCircuit:
     """
-    Apply Ry(theta) on `target`, controlled on ctrl_qubits == ctrl_vals.
-    Active-low controls are handled by flanking X gates.
-    Uses a single CRy for one control, mcry for multiple.
+    Add classical constant k mod 2^m to an m-qubit register in place.
+
+    Uses the Draper QFT-based adder: QFT, O(m) single-qubit phase gates,
+    then QFT†.  No ancilla, no CX gates in the phase stage.
+
+    Gate count: O(m²) dominated by the QFT.
+
+    Reference: Draper, 'Addition on a Quantum Computer', arXiv:quant-ph/0008033.
     """
-    if not ctrl_qubits:
-        qc.ry(theta, target)
-        return
-    flip = [q for q, v in zip(ctrl_qubits, ctrl_vals) if v == 0]
-    for q in flip:
-        qc.x(q)
-    if len(ctrl_qubits) == 1:
-        qc.cry(theta, ctrl_qubits[0], target)
-    else:
-        qc.mcry(theta, ctrl_qubits, target)
-    for q in flip:
-        qc.x(q)
+    from qiskit.circuit.library import QFTGate
 
+    k = k % (2 ** m)
+    qc = QuantumCircuit(m, name=f"add_{k}")
+    if k == 0:
+        return qc
 
-def _square_ry_decompose(qc: QuantumCircuit,
-                          lo: int, hi: int,
-                          qubit: int,
-                          ctrl_qubits: list,
-                          ctrl_vals: list) -> None:
-    """
-    Recursively prepare the uniform superposition over indices [lo, hi)
-    on qubits 0..qubit, conditioned on ctrl_qubits == ctrl_vals.
-
-    At each level we split the address space into lower and upper halves.
-    The window [lo, hi) may fall entirely in one half, or straddle both.
-    Gate count: O(m) (C)Ry gates at the circuit level.
-    """
-    slots = hi - lo
-    if slots <= 0 or qubit < 0:
-        return
-
-    half = 1 << qubit
-
-    block_size = 1 << (qubit + 1)
-    boundary   = (lo // block_size) * block_size + half
-
-    lower_lo = lo;          lower_hi = min(hi, boundary)
-    upper_lo = max(lo, boundary);   upper_hi = hi
-
-    lower_slots = max(0, lower_hi - lower_lo)
-    upper_slots = max(0, upper_hi - upper_lo)
-
-    if upper_slots == 0:
-        if qubit > 0:
-            _square_ry_decompose(qc, lower_lo, lower_hi, qubit - 1,
-                                 ctrl_qubits, ctrl_vals)
-        return
-
-    if lower_slots == 0:
-        _apply_controlled_ry(qc, math.pi, ctrl_qubits, ctrl_vals, qubit)
-        if qubit > 0:
-            _square_ry_decompose(qc, upper_lo, upper_hi, qubit - 1,
-                                 ctrl_qubits + [qubit], ctrl_vals + [1])
-        return
-
-    theta = 2.0 * math.acos(math.sqrt(lower_slots / slots))
-    _apply_controlled_ry(qc, theta, ctrl_qubits, ctrl_vals, qubit)
-
-    if qubit > 0:
-        _square_ry_decompose(qc, lower_lo, lower_hi, qubit - 1,
-                             ctrl_qubits + [qubit], ctrl_vals + [0])
-        _square_ry_decompose(qc, upper_lo, upper_hi, qubit - 1,
-                             ctrl_qubits + [qubit], ctrl_vals + [1])
+    qc.append(QFTGate(m), range(m))
+    for j in range(m):
+        angle = 2.0 * math.pi * k / (2 ** (m - j))
+        qc.p(angle, j)
+    qc.append(QFTGate(m).inverse(), range(m))
+    return qc
 
 
 # ---------------------------------------------------------------------------
