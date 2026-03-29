@@ -178,6 +178,7 @@ def _synthesize_and_build_info(
     # Count 1q and 2q gates after transpilation to {cx, u} basis.
     gate_count_1q = None
     gate_count_2q = None
+    circuit_depth = None
     try:
         from qiskit import transpile as qk_transpile
         transpiled = qk_transpile(circuit, basis_gates=['cx', 'u'],
@@ -185,6 +186,7 @@ def _synthesize_and_build_info(
         ops = transpiled.count_ops()
         gate_count_1q = ops.get('u', 0)
         gate_count_2q = ops.get('cx', 0)
+        circuit_depth = transpiled.depth()
     except Exception:
         pass
 
@@ -211,6 +213,7 @@ def _synthesize_and_build_info(
         vector=f_vec,
         gate_count_1q=gate_count_1q,
         gate_count_2q=gate_count_2q,
+        circuit_depth=circuit_depth,
     )
 
     return circuit, info

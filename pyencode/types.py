@@ -281,6 +281,9 @@ class EncodingInfo:
     gate_count_2q : int or None
         Number of two-qubit (CX) gates after transpilation to {cx, u}.
         None if transpilation was not performed.
+    circuit_depth : int or None
+        Circuit depth after transpilation to {cx, u}.
+        None if transpilation was not performed.
     """
     vector_type: str
     N: int
@@ -294,6 +297,7 @@ class EncodingInfo:
     vector: Optional[np.ndarray] = None
     gate_count_1q: Optional[int] = None
     gate_count_2q: Optional[int] = None
+    circuit_depth: Optional[int] = None
 
     def __str__(self) -> str:
         lines = [
@@ -306,6 +310,8 @@ class EncodingInfo:
         ]
         if self.gate_count_1q is not None:
             lines.append(f"  Gates 1q/2q : {self.gate_count_1q} / {self.gate_count_2q}")
+        if self.circuit_depth is not None:
+            lines.append(f"  Depth       : {self.circuit_depth}")
         if self.success_probability < 1.0:
             lines.append(f"  Success prob: {self.success_probability:.4f}  "
                          f"(post-selection required)")
