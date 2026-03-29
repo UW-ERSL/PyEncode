@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, LCU
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +616,84 @@ def _assert_poly_scaling(m_vals, gate_vals, label):
     )
 
 
+# ===================================================================
+# GEOMETRIC
+# ===================================================================
+
+class TestGeometric:
+
+    def test_decay_basic(self):
+        circuit, info = encode(GEOMETRIC(ratio=0.5), N=8)
+        assert info.vector_type == "GEOMETRIC"
+        assert info.complexity == "O(m)"
+        f = 0.5 ** np.arange(8)
+        assert_encodes(circuit, f)
+
+    def test_growth(self):
+        circuit, info = encode(GEOMETRIC(ratio=2.0), N=16)
+        f = 2.0 ** np.arange(16)
+        assert_encodes(circuit, f)
+
+    def test_near_one(self):
+        circuit, info = encode(GEOMETRIC(ratio=0.99), N=16)
+        f = 0.99 ** np.arange(16)
+        assert_encodes(circuit, f)
+
+    def test_gate_count_equals_m(self):
+        for m in [3, 4, 6, 8]:
+            N = 2 ** m
+            _, info = encode(GEOMETRIC(ratio=0.9), N=N)
+            assert info.gate_count == m
+
+    def test_zero_two_qubit_gates(self):
+        _, info = encode(GEOMETRIC(ratio=0.9), N=64)
+        assert info.gate_count_2q == 0
+        assert info.gate_count_1q == 6
+
+    def test_validate(self):
+        circuit, info = encode(GEOMETRIC(ratio=0.8), N=16, validate=True)
+        assert info.validated is True
+        assert info.vector is not None
+
+    def test_custom_c_normalization(self):
+        """c only affects normalization, not relative amplitudes."""
+        c1, _ = encode(GEOMETRIC(ratio=0.7, c=1.0), N=8)
+        c2, _ = encode(GEOMETRIC(ratio=0.7, c=5.0), N=8)
+        sv1 = np.abs(np.array(statevector(c1)))
+        sv2 = np.abs(np.array(statevector(c2)))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+    def test_ratio_zero_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            GEOMETRIC(ratio=0.0)
+
+    def test_ratio_negative_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            GEOMETRIC(ratio=-0.5)
+
+    def test_ratio_one_raises(self):
+        with pytest.raises(ValueError, match="uniform"):
+            GEOMETRIC(ratio=1.0)
+
+    def test_emitted_code_runs(self):
+        circuit, info = encode(GEOMETRIC(ratio=0.8), N=16)
+        namespace = {}
+        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(np.array(statevector(circuit)))
+        sv_emit = np.abs(np.array(statevector(namespace["qc"])))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
+
+    def test_lcu_composability(self):
+        """GEOMETRIC can be used as an LCU component."""
+        circuit, info = encode(
+            LCU([(1.0, STEP(k_s=8, c=1.0)),
+                 (2.0, GEOMETRIC(ratio=0.5))]),
+            N=16)
+        assert info.vector_type == "LCU"
+        assert 0 < info.success_probability <= 1.0
+
+
 class TestScaling:
     """
     Verify that each pattern's gate count scales as O(poly(m)),
@@ -689,6 +767,17 @@ class TestScaling:
             gate_vals.append(info.gate_count)
         _assert_poly_scaling(self.M_VALS, gate_vals, "WALSH")
 
+    def test_geometric_scaling(self):
+        """GEOMETRIC: gate count is exactly m, clearly O(m)."""
+        gate_vals = []
+        for m in self.M_VALS:
+            N = 2 ** m
+            _, info = encode(GEOMETRIC(ratio=0.95), N=N)
+            gate_vals.append(info.gate_count)
+            assert info.gate_count == m
+            assert info.gate_count_2q == 0
+        _assert_poly_scaling(self.M_VALS, gate_vals, "GEOMETRIC")
+
     def test_fourier_single_mode_scaling(self):
         """FOURIER(T=1): gate count is O(m^2) via inverse QFT."""
         gate_vals = []
@@ -738,6 +827,7 @@ class TestScaling:
             ("STEP",        encode(STEP(k_s=3 * N // 4, c=1.0), N=N)[1].gate_count),
             ("SQUARE",      encode(SQUARE(k1=N // 4, k2=3 * N // 4, c=1.0), N=N)[1].gate_count),
             ("WALSH",       encode(WALSH(k=m // 2), N=N)[1].gate_count),
+            ("GEOMETRIC",   encode(GEOMETRIC(ratio=0.95), N=N)[1].gate_count),
             ("FOURIER(T=1)",encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)[1].gate_count),
         ]
         for label, count in checks:

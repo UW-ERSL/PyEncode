@@ -147,6 +147,40 @@ class FOURIER(_VectorObj):
         self.params = {"modes": mode_list}
 
 
+class GEOMETRIC(_VectorObj):
+    """GEOMETRIC(ratio, c) — exponential decay / geometric sequence. O(m) gates.
+
+    Prepares a state proportional to f_i = c * ratio^i for i = 0, ..., N-1.
+
+    The vector is multiplicatively separable over the bits of i:
+      f_i = c * ratio^(sum_j b_j * 2^j) = c * prod_j ratio^(b_j * 2^j)
+    so the quantum state is a product state prepared by m independent
+    R_y rotations — one per qubit, zero entangling gates.
+
+    Parameters
+    ----------
+    ratio : float
+        Base of the geometric sequence. Must satisfy 0 < ratio and ratio != 1.
+        Typical values: 0 < ratio < 1 for decay, ratio > 1 for growth.
+    c : float, optional
+        Leading amplitude (default 1.0). Only affects normalization.
+
+    Examples
+    --------
+    >>> circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
+    >>> circuit, info = encode(GEOMETRIC(ratio=0.5), N=16)
+    """
+    def __init__(self, ratio, c=1.0):
+        self.vector_type = VectorType.GEOMETRIC
+        ratio = float(ratio)
+        if ratio <= 0:
+            raise ValueError(f"GEOMETRIC ratio must be positive, got {ratio}.")
+        if abs(ratio - 1.0) < 1e-14:
+            raise ValueError(
+                "GEOMETRIC ratio=1.0 is a uniform vector; use STEP(k_s=N) instead."
+            )
+        self.params = {"ratio": ratio, "c": float(c)}
+
 
 class LCU(_VectorObj):
     """LCU([(w1, VectorObj1), (w2, VectorObj2), ...]) — linear combination via ancilla.
@@ -292,6 +326,7 @@ _COMPLEXITY = {
     VectorType.WALSH:   "O(m)",
     VectorType.SPARSE:  "O(s\u00b7m)",
     VectorType.FOURIER: "O(m\u00b2)",
+    VectorType.GEOMETRIC: "O(m)",
     VectorType.UNKNOWN: "O(2^m)",
 }
 
@@ -325,5 +360,10 @@ _PARAM_SCHEMAS = {
         "required": {"modes"},
         "optional": set(),
         "description": 'modes=[{"n": freq, "A": amp, "phi": phase}, ...]',
+    },
+    VectorType.GEOMETRIC: {
+        "required": {"ratio"},
+        "optional": {"c"},
+        "description": "ratio=<base of geometric sequence>",
     },
 }

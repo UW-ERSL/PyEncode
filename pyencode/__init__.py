@@ -36,6 +36,7 @@ from .types import (
     WALSH,
     STEP,
     SQUARE,
+    GEOMETRIC,
     LCU,
     EncodingInfo,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "SPARSE",
     "FOURIER",
     "WALSH",
+    "GEOMETRIC",
     "LCU",
     "STEP",
     "SQUARE",

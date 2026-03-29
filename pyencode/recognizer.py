@@ -47,6 +47,7 @@ class VectorType(Enum):
     FOURIER         = auto()   # T sinusoidal modes via inverse QFT
     WALSH           = auto()   # k-th Walsh function: X_k + H^{otimes m}, O(m) gates
     LCU             = auto()   # linear combination of unitaries via ancilla
+    GEOMETRIC       = auto()   # exponential decay c^i — product state, O(m) Ry gates
 
 
 

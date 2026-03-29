@@ -15,7 +15,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 
-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, LCU
+from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
 from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 
 # ── matplotlib style ──────────────────────────────────────────────
@@ -172,6 +172,18 @@ def fig_fourier_multi():
     save_circuit(circuit, "multi_sine_circuit.png", scale=0.8)
 
 
+def fig_geometric():
+    """GEOMETRIC: exponential decay as product state."""
+    print("\n--- GEOMETRIC: ratio=0.5, N=8 ---")
+    N = 8
+    circuit, info = encode(GEOMETRIC(ratio=0.5), N=N)
+    print_info("encode", info)
+    f = 0.5 ** np.arange(N)
+    plot_vector(f, N, r"GEOMETRIC: $f_i = 0.5^{\,i}$, $N=8$",
+                "geometric_vector.png")
+    save_circuit(circuit, "geometric_circuit.png", scale=0.6)
+
+
 # ===================================================================
 # Figures: applications
 # ===================================================================
@@ -252,6 +264,7 @@ def fig_gate_count_vs_m():
         "STEP":            [],
         "SQUARE":          [],
         "WALSH":           [],
+        "GEOMETRIC":       [],
         "FOURIER":         [],
         "Qiskit (random)": [],
     }
@@ -282,6 +295,10 @@ def fig_gate_count_vs_m():
         _, info = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
         patterns["WALSH"].append(info.gate_count)
 
+        # GEOMETRIC: exponential decay (product state, 0 CX)
+        _, info = encode(GEOMETRIC(ratio=0.95), N=N)
+        patterns["GEOMETRIC"].append(info.gate_count)
+
         # FOURIER T=1
         _, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)
         patterns["FOURIER"].append(info.gate_count)
@@ -295,6 +312,7 @@ def fig_gate_count_vs_m():
               f"STEP={patterns['STEP'][-1]}, "
               f"SQUARE={patterns['SQUARE'][-1]}, "
               f"WALSH={patterns['WALSH'][-1]}, "
+              f"GEOMETRIC={patterns['GEOMETRIC'][-1]}, "
               f"FOURIER={patterns['FOURIER'][-1]}, "
               f"Qiskit={patterns['Qiskit (random)'][-1]}")
 
@@ -306,6 +324,7 @@ def fig_gate_count_vs_m():
         "STEP":            dict(color="#4dac26", marker="s",  ls="-",  lw=1.6),
         "SQUARE":          dict(color="#d01c8b", marker="^",  ls="-",  lw=1.6),
         "WALSH":           dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
+        "GEOMETRIC":       dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
         "FOURIER":         dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
         "Qiskit (random)": dict(color="#555555", marker="x",  ls=":",  lw=1.8),
     }
@@ -354,6 +373,8 @@ def gate_count_table():
          np.sin(2*np.pi*3*k/N + math.pi/4)),
         ("SPARSE s=2",           SPARSE([(10, 3.0), (50, 4.0)]),
          np.array([3.0 if i==10 else 4.0 if i==50 else 0.0 for i in range(N)])),
+        ("GEOMETRIC (r=0.95)",   GEOMETRIC(ratio=0.95),
+         0.95 ** np.arange(N)),
     ]
 
     print(f"{'Pattern':<28} {'PyEncode':>10} {'Qiskit':>8}  Complexity")
@@ -379,6 +400,7 @@ if __name__ == "__main__":
     fig_square()
     fig_fourier_sine()
     fig_fourier_multi()
+    fig_geometric()
 
     # Application figures
     fig_hubbard()

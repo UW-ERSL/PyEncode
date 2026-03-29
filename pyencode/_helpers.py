@@ -16,7 +16,7 @@ from .synthesizer import synthesize
 from .emitter import emit_code
 from .config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 from .types import (
-    _VectorObj, SPARSE, FOURIER, STEP, SQUARE,
+    _VectorObj, SPARSE, FOURIER, STEP, SQUARE, GEOMETRIC,
     EncodingInfo,
     _COMPLEXITY, _PARAM_SCHEMAS,
 )
@@ -130,6 +130,16 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
 
     elif vector_type == VectorType.FOURIER:
         result = _validate_fourier_params(result, N)
+
+    elif vector_type == VectorType.GEOMETRIC:
+        result.setdefault("c", 1.0)
+        ratio = float(result["ratio"])
+        if ratio <= 0:
+            raise ValueError(f"GEOMETRIC ratio must be positive, got {ratio}.")
+        if abs(ratio - 1.0) < 1e-14:
+            raise ValueError("GEOMETRIC ratio=1.0 is a uniform vector; use STEP(k_s=N).")
+        result["ratio"] = ratio
+        result["c"] = float(result["c"])
 
     return result
 
@@ -270,6 +280,12 @@ def _build_expected_vector(
                 2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
 
+    if lt == VectorType.GEOMETRIC:
+        ratio = p["ratio"]
+        c = p.get("c", 1.0)
+        f = c * (ratio ** np.arange(N, dtype=float))
+        return f
+
     return None
 
 
@@ -294,6 +310,10 @@ def _build_component_vector(comp: _VectorObj, N: int):
         for mode in p["modes"]:
             f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
+    if comp.vector_type == VectorType.GEOMETRIC:
+        ratio = p["ratio"]
+        c = p.get("c", 1.0)
+        return c * (ratio ** np.arange(N, dtype=float))
     raise TypeError(f"Cannot materialise component of type {comp.vector_type.name}.")
 
 

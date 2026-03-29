@@ -63,6 +63,7 @@ def emit_code(pattern: LoadPattern) -> str:
         VectorType.WALSH:   _emit_walsh,
         VectorType.SPARSE:  _emit_sparse,
         VectorType.FOURIER: _emit_fourier,
+        VectorType.GEOMETRIC: _emit_geometric,
         VectorType.UNKNOWN: _emit_qiskit_fallback,
     }
 
@@ -732,5 +733,31 @@ def _emit_walsh(m: int, params: dict) -> str:
         gate_line,
         f"for q in range(m):",
         f"    qc.h(q)",
+    ]
+    return "\n".join(lines)
+
+# ---------------------------------------------------------------------------
+# Geometric  f_i = c * ratio^i  (product state, m independent Ry)
+# ---------------------------------------------------------------------------
+
+def _emit_geometric(m: int, params: dict) -> str:
+    """Emit circuit code for GEOMETRIC (product-state R_y per qubit)."""
+    import math as _math
+    ratio = params["ratio"]
+    c = params.get("c", 1.0)
+
+    lines = [
+        _header(m, f"GEOMETRIC  ratio={ratio}, c={c}"),
+        f"import math",
+        f"from qiskit import QuantumCircuit",
+        f"",
+        f"m = {m}",
+        f"ratio = {ratio!r}",
+        f"qc = QuantumCircuit(m, name='geometric')",
+        f"",
+        f"# Product state: each qubit j gets R_y(2*arctan(ratio^(2^j)))",
+        f"for j in range(m):",
+        f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
+        f"    qc.ry(theta_j, j)",
     ]
     return "\n".join(lines)

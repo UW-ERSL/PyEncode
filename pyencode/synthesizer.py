@@ -74,6 +74,7 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.WALSH:             _synth_walsh,
         VectorType.SPARSE:            _synth_sparse,
         VectorType.FOURIER:           _synth_fourier,
+        VectorType.GEOMETRIC:         _synth_geometric,
     }
 
     fn = dispatch.get(pattern.load_type, _synth_qiskit_fallback)
@@ -1014,4 +1015,55 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
         qc.ry(theta, k)
     for q in range(m):
         qc.h(q)
+    return qc
+
+
+# ---------------------------------------------------------------------------
+# GEOMETRIC  f_i = c * ratio^i  (product state, m independent Ry)
+# ---------------------------------------------------------------------------
+
+def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
+    """
+    GEOMETRIC: exponential decay / geometric sequence as a product state.
+
+    The vector f_i = c * ratio^i is multiplicatively separable over the
+    bits of i:
+        f_i = c * ratio^(sum_j b_j 2^j) = c * prod_j ratio^(b_j 2^j)
+
+    Each qubit j is independently prepared by a single R_y rotation:
+        R_y(theta_j)|0>  with  theta_j = 2 * arctan(ratio^(2^j))
+
+    This produces:
+        |psi> = bigotimes_j (|0> + ratio^(2^j) |1>) / norm_j
+
+    which, after normalization, encodes the amplitudes proportional to
+    ratio^i across the computational basis.
+
+    Gate count: m single-qubit R_y gates, zero entangling gates.
+    Complexity: O(m).
+
+    Parameters
+    ----------
+    m : int
+        Number of qubits (N = 2^m).
+    params : dict
+        Must contain 'ratio' (float, > 0, != 1).
+        Optional 'c' (float, default 1.0) — only affects normalization.
+    """
+    ratio = params["ratio"]
+
+    qc = QuantumCircuit(m, name="geometric")
+
+    for j in range(m):
+        # For qubit j, we want the state:
+        #   alpha_j |0> + beta_j |1>
+        # where beta_j / alpha_j = ratio^(2^j)
+        #
+        # R_y(theta)|0> = cos(theta/2)|0> + sin(theta/2)|1>
+        # so sin(theta/2)/cos(theta/2) = tan(theta/2) = ratio^(2^j)
+        # => theta_j = 2 * arctan(ratio^(2^j))
+        r_pow = ratio ** (2 ** j)
+        theta_j = 2.0 * math.atan(r_pow)
+        qc.ry(theta_j, j)
+
     return qc
