@@ -184,6 +184,45 @@ def fig_geometric():
     save_circuit(circuit, "geometric_circuit.png", scale=0.6)
 
 
+def fig_lcu_disjoint():
+    """LCU: two disjoint SQUARE intervals."""
+    print("\n--- LCU disjoint: two SQUARE intervals, N=16 ---")
+    N = 16
+    circuit, info = encode(
+        LCU([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
+             (3.0, SQUARE(k1=8, k2=16, c=1.0))]),
+        N=N)
+    print_info("encode", info)
+    print(f"  success_probability = {info.success_probability:.4f}")
+    f = np.zeros(N)
+    f[:8] = 1.0; f[8:] = 3.0
+    plot_vector(f, N,
+                r"LCU (disjoint): $f_{[:8]}=1,\;f_{[8:]}=3$, $N=16$",
+                "lcu_disjoint_vector.png")
+    save_circuit(circuit, "lcu_disjoint_circuit.png", scale=0.5)
+
+
+def fig_lcu_overlap():
+    """LCU: overlapping STEP + FOURIER."""
+    import warnings
+    print("\n--- LCU overlapping: STEP + FOURIER, N=16 ---")
+    N = 16
+    k = np.arange(N)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        circuit, info = encode(
+            LCU([(1.0, STEP(k_s=16, c=1.0)),
+                 (1.0, FOURIER(modes=[(1, 1.0, 0)]))]),
+            N=N)
+    print_info("encode", info)
+    print(f"  success_probability = {info.success_probability:.4f}")
+    f = np.ones(N) + np.sin(2 * np.pi * k / N)
+    plot_vector(f, N,
+                r"LCU (overlap): uniform $+$ $\sin(2\pi i/N)$, $N=16$",
+                "lcu_overlap_vector.png", smooth=True)
+    save_circuit(circuit, "lcu_overlap_circuit.png", scale=0.4)
+
+
 # ===================================================================
 # Figures: applications
 # ===================================================================
@@ -401,6 +440,8 @@ if __name__ == "__main__":
     fig_fourier_sine()
     fig_fourier_multi()
     fig_geometric()
+    fig_lcu_disjoint()
+    fig_lcu_overlap()
 
     # Application figures
     fig_hubbard()
