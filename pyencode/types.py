@@ -43,9 +43,10 @@ class STEP(_VectorObj):
 
 
 class SQUARE(_VectorObj):
-    """SQUARE(k1, k2, c) — interval uniform superposition [k1, k2). O(m) gates.
+    """SQUARE(k1, k2, c) — interval uniform superposition [k1, k2). O(m^2) gates.
 
-    Extends STEP to arbitrary intervals. Novel contribution of PyEncode.
+    Extends STEP to arbitrary intervals via a Draper QFT-based constant adder.
+    O(m) for k1=0 or power-of-2-aligned blocks.
     SQUARE(k1=0, k2=k_s) is identical to STEP(k_s).
     """
     def __init__(self, k1, k2, c=1.0):
