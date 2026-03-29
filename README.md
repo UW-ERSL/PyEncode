@@ -79,14 +79,17 @@ Requires O(2^m) memory; disabled by default.
 
 Each `encode()` call returns an `EncodingInfo` with:
 
-- `vector_type` — pattern name
+- `vector_type` — pattern name (e.g. `"SPARSE"`, `"GEOMETRIC"`)
+- `N`, `m` — vector length and number of qubits
+- `params` — supplied vector parameters (e.g. `{"ratio": 0.95, "c": 1.0}`)
 - `gate_count` — total gates (pre-transpilation)
 - `gate_count_1q`, `gate_count_2q` — U and CX counts after transpilation to {cx, u}
-- `circuit_depth` — depth after transpilation
-- `complexity` — asymptotic class (e.g. "O(m)")
+- `circuit_depth` — circuit depth after transpilation (determines minimum execution time when gates on disjoint qubits run in parallel)
+- `complexity` — asymptotic class (e.g. `"O(m)"`, `"O(m²)"`)
 - `success_probability` — 1.0 for single patterns; p ∈ (0,1] for LCU
 - `circuit_code` — standalone Qiskit snippet reproducing the circuit
-- `vector` — amplitude vector (only when `validate=True`)
+- `validated` — True if statevector validation was performed
+- `vector` — amplitude vector (only when `validate=True`; requires O(2^m) memory)
 
 ## Standalone Circuit Code
 
