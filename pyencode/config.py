@@ -13,7 +13,7 @@ QISKIT_VERSION = "2.3.1"
 # Universal gate basis for transpilation.
 # All PyEncode and Qiskit gate counts in the paper are reported
 # after transpilation to this basis.
-BASIS_GATES = ['cx', 'u', 'x', 'h', 'ry', 'rz', 'rx', 'p']
+BASIS_GATES = ['cx', 'u']
 
 # Optimization level used for all transpilation.
 # Level 3 applies the full Qiskit optimization pass including
