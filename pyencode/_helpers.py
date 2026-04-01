@@ -726,6 +726,9 @@ def _encode_lcu(lcu_obj, N, validate, tol):
     total_gates = sum(qc.decompose(reps=3).count_ops().values())
     complexity  = f"O({K}·m)"
 
+    # Generate standalone circuit code by extracting gates
+    circuit_code = _emit_lcu_circuit_code(qc, m, n_anc, comp_objs, weights)
+
     info = EncodingInfo(
         vector_type="LCU",
         N=N,
@@ -739,6 +742,7 @@ def _encode_lcu(lcu_obj, N, validate, tol):
             "disjoint":   disjoint,
         },
         success_probability=p_success,
+        circuit_code=circuit_code,
     )
 
     if validate:
@@ -749,6 +753,65 @@ def _encode_lcu(lcu_obj, N, validate, tol):
         info.vector = f_combined
 
     return qc, info
+
+
+def _emit_lcu_circuit_code(qc, m, n_anc, comp_objs, weights):
+    """Extract gate-level code from an LCU circuit."""
+    total_qubits = m + n_anc
+    decomposed = qc.decompose(reps=3)
+
+    lines = [
+        f"# PyEncode — emitted circuit: LCU — extracted from synthesized circuit",
+        f"# m = {m} data qubits + {n_anc} ancilla = {total_qubits} total",
+        f"# Components: {[c.vector_type.name for c in comp_objs]}",
+        f"# Weights: {list(weights)}",
+        f"# Edit freely; run as standalone Qiskit code.",
+        f"",
+        f"from qiskit import QuantumCircuit",
+        f"import math",
+        f"",
+        f"qc = QuantumCircuit({total_qubits}, name='lcu')",
+    ]
+
+    for instruction in decomposed.data:
+        op = instruction.operation
+        qubits = [decomposed.find_bit(q).index for q in instruction.qubits]
+        name = op.name
+        params = op.params
+
+        if name == 'u':
+            lines.append(f"qc.u({params[0]:.10f}, {params[1]:.10f}, {params[2]:.10f}, {qubits[0]})")
+        elif name == 'ry':
+            lines.append(f"qc.ry({params[0]:.10f}, {qubits[0]})")
+        elif name == 'rz':
+            lines.append(f"qc.rz({params[0]:.10f}, {qubits[0]})")
+        elif name == 'rx':
+            lines.append(f"qc.rx({params[0]:.10f}, {qubits[0]})")
+        elif name == 'p':
+            lines.append(f"qc.p({params[0]:.10f}, {qubits[0]})")
+        elif name == 'x':
+            lines.append(f"qc.x({qubits[0]})")
+        elif name == 'h':
+            lines.append(f"qc.h({qubits[0]})")
+        elif name == 'cx':
+            lines.append(f"qc.cx({qubits[0]}, {qubits[1]})")
+        elif name == 'cry':
+            lines.append(f"qc.cry({params[0]:.10f}, {qubits[0]}, {qubits[1]})")
+        elif name == 'cp':
+            lines.append(f"qc.cp({params[0]:.10f}, {qubits[0]}, {qubits[1]})")
+        elif name == 'swap':
+            lines.append(f"qc.swap({qubits[0]}, {qubits[1]})")
+        elif name == 'ccx':
+            lines.append(f"qc.ccx({qubits[0]}, {qubits[1]}, {qubits[2]})")
+        else:
+            q_str = ", ".join(str(q) for q in qubits)
+            if params:
+                p_str = ", ".join(f"{p:.10f}" for p in params)
+                lines.append(f"qc.{name}({p_str}, {q_str})")
+            else:
+                lines.append(f"qc.{name}({q_str})")
+
+    return "\n".join(lines)
 
 
 def _validate_lcu_circuit(qc, component_vectors, weights,

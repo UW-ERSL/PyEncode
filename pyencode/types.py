@@ -284,6 +284,7 @@ class EncodingInfo:
         None if transpilation was not performed.
     circuit_depth : int or None
         Circuit depth after transpilation to {cx, u}.
+        May differ from the raw circuit depth visible via print(circuit).
         None if transpilation was not performed.
     """
     vector_type: str
@@ -316,10 +317,14 @@ class EncodingInfo:
         if self.success_probability < 1.0:
             lines.append(f"  Success prob: {self.success_probability:.4f}  "
                          f"(post-selection required)")
+        else:
+            lines.append(f"  Success prob: 1.0")
         if self.vector is not None:
             lines.append(f"  Vector      : numpy array, shape ({self.N},)")
         if self.params:
             lines.append(f"  Parameters  : {self.params}")
+        if self.circuit_code:
+            lines.append(f"  Circuit code: {len(self.circuit_code)} chars (info.circuit_code)")
         return "\n".join(lines)
 
 

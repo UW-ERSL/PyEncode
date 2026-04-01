@@ -68,7 +68,82 @@ def emit_code(pattern: LoadPattern) -> str:
     }
 
     fn = dispatch.get(pattern.load_type, _emit_mottonen)
-    return fn(m, pattern.params)
+    code = fn(m, pattern.params)
+
+    # If the emitter produced an incomplete snippet (contains the
+    # "synthesized internally" placeholder), replace with the actual
+    # gate sequence extracted from the synthesized circuit.
+    if "synthesized internally" in code:
+        from .synthesizer import synthesize
+        circuit = synthesize(pattern)
+        code = _emit_from_circuit(m, pattern, circuit)
+
+    return code
+
+
+def _emit_from_circuit(m: int, pattern: LoadPattern, circuit) -> str:
+    """Emit standalone code by extracting gates from a synthesized circuit."""
+    from qiskit import transpile as _transpile
+
+    # Decompose composite gates (qft, ch, etc.) into primitives
+    # that have direct QuantumCircuit methods.
+    decomposed = circuit.decompose(reps=3)
+
+    label = pattern.load_type.name
+    lines = [
+        _header(m, f"{label} — extracted from synthesized circuit"),
+        f"import math",
+        f"",
+        f"m = {m}",
+        f"qc = QuantumCircuit(m, name='{label.lower()}')",
+    ]
+    for instruction in decomposed.data:
+        op = instruction.operation
+        qubits = [decomposed.find_bit(q).index for q in instruction.qubits]
+        name = op.name
+        params = op.params
+
+        if name == 'u':
+            lines.append(f"qc.u({params[0]:.10f}, {params[1]:.10f}, {params[2]:.10f}, {qubits[0]})")
+        elif name == 'ry':
+            lines.append(f"qc.ry({params[0]:.10f}, {qubits[0]})")
+        elif name == 'rz':
+            lines.append(f"qc.rz({params[0]:.10f}, {qubits[0]})")
+        elif name == 'rx':
+            lines.append(f"qc.rx({params[0]:.10f}, {qubits[0]})")
+        elif name == 'p':
+            lines.append(f"qc.p({params[0]:.10f}, {qubits[0]})")
+        elif name == 'x':
+            lines.append(f"qc.x({qubits[0]})")
+        elif name == 'h':
+            lines.append(f"qc.h({qubits[0]})")
+        elif name == 'cx':
+            lines.append(f"qc.cx({qubits[0]}, {qubits[1]})")
+        elif name == 'cry':
+            lines.append(f"qc.cry({params[0]:.10f}, {qubits[0]}, {qubits[1]})")
+        elif name == 'crz':
+            lines.append(f"qc.crz({params[0]:.10f}, {qubits[0]}, {qubits[1]})")
+        elif name == 'cp':
+            lines.append(f"qc.cp({params[0]:.10f}, {qubits[0]}, {qubits[1]})")
+        elif name == 'swap':
+            lines.append(f"qc.swap({qubits[0]}, {qubits[1]})")
+        elif name == 'ccx':
+            lines.append(f"qc.ccx({qubits[0]}, {qubits[1]}, {qubits[2]})")
+        elif name == 'mcry':
+            angle = params[0]
+            ctrls = qubits[:-1]
+            tgt = qubits[-1]
+            lines.append(f"qc.mcry({angle:.10f}, {ctrls}, {tgt})")
+        elif hasattr(op, 'params') and len(params) > 0:
+            p_str = ", ".join(f"{p:.10f}" for p in params)
+            q_str = ", ".join(str(q) for q in qubits)
+            lines.append(f"qc.append(QuantumCircuit.{name}({p_str}), [{q_str}])"
+                         f"  # {name}")
+        else:
+            q_str = ", ".join(str(q) for q in qubits)
+            lines.append(f"qc.{name}({q_str})")
+
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -238,17 +313,10 @@ def _emit_square_load(m: int, params: dict) -> str:
             lines.append(f"qc.h({q})  # uniform superposition over segment")
     else:
         lines += [
-            f"import numpy as np",
-            f"from qiskit.circuit.library import StatePreparation",
             f"",
-            f"# General segment [{k1}, {k2}): use Shende StatePreparation.",
-            f"N = {2**m}",
-            f"f = np.zeros(N)",
-            f"f[{k1}:{k2}] = 1.0",
-            f"f /= np.linalg.norm(f)",
+            f"# General segment [{k1}, {k2}): STEP({w}) + Draper adder({k1})",
+            f"# (circuit synthesized internally by PyEncode)",
             f"qc = QuantumCircuit({m}, name='square_load')",
-            f"qc.append(StatePreparation(f.astype(complex)), range({m}))",
-            f"qc = qc.decompose()",
         ]
 
     lines.append("")
@@ -600,7 +668,6 @@ def _emit_uniform_spike(m: int, params: dict) -> str:
         f"f[{k}] = {float(delta)}",
         f"f = f / np.linalg.norm(f)",
         f"",
-        f"from qiskit import QuantumCircuit",
         f"qc = QuantumCircuit({m}, name='uniform_spike_load')",
         f"sp = StatePreparation(f.astype(complex), label='uniform_spike')",
         f"qc.append(sp, range({m}))",
@@ -619,7 +686,6 @@ def _emit_mottonen(m: int, params: dict) -> str:
     lines = [
         _header(m, "UNKNOWN — Shende / Möttönen fallback"),
         f"import numpy as np",
-        f"from qiskit import QuantumCircuit",
         f"from qiskit.circuit.library import StatePreparation",
         f"",
         f"# Pattern not recognized by PyEncode.",
@@ -642,7 +708,6 @@ def _emit_sparse(m: int, params: dict) -> str:
     loads = params["loads"]
     lines = [
         _header(m, "SPARSE — Gleinig-Hoefler sparse state"),
-        f"from qiskit import QuantumCircuit",
         f"",
         f"m = {m}",
         f"qc = QuantumCircuit(m, name='sparse')",
@@ -666,7 +731,6 @@ def _emit_fourier(m: int, params: dict) -> str:
     lines = [
         _header(m, "FOURIER — sinusoidal modes via inverse QFT"),
         f"import numpy as np",
-        f"from qiskit import QuantumCircuit",
         f"from qiskit.circuit.library import QFT",
         f"",
         f"m = {m}",
@@ -693,7 +757,6 @@ def _emit_qiskit_fallback(m: int, params: dict) -> str:
     lines = [
         _header(m, "UNKNOWN — Qiskit StatePreparation fallback"),
         f"import numpy as np",
-        f"from qiskit import QuantumCircuit",
         f"from qiskit.circuit.library import StatePreparation",
         f"",
         f"# Pattern not recognized by PyEncode.",
@@ -726,7 +789,6 @@ def _emit_walsh(m: int, params: dict) -> str:
                  f"qc.ry({theta:.6f}, {k})  # generalized Walsh: R_y(theta)")
     lines = [
         _header(m, f"WALSH k={k}, c_pos={c_pos}, c_neg={c_neg} — period P=2^(k+1)={2**(k+1)}"),
-        f"from qiskit import QuantumCircuit",
         f"",
         f"m = {m}",
         f"qc = QuantumCircuit(m, name='walsh')",
@@ -749,7 +811,6 @@ def _emit_geometric(m: int, params: dict) -> str:
     lines = [
         _header(m, f"GEOMETRIC  ratio={ratio}, c={c}"),
         f"import math",
-        f"from qiskit import QuantumCircuit",
         f"",
         f"m = {m}",
         f"ratio = {ratio!r}",

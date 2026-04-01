@@ -84,7 +84,7 @@ Each `encode()` call returns an `EncodingInfo` with:
 - `params` — supplied vector parameters (e.g. `{"ratio": 0.95, "c": 1.0}`)
 - `gate_count` — total gates (pre-transpilation)
 - `gate_count_1q`, `gate_count_2q` — U and CX counts after transpilation to {cx, u}
-- `circuit_depth` — circuit depth after transpilation (determines minimum execution time when gates on disjoint qubits run in parallel)
+- `circuit_depth` — circuit depth after transpilation to {cx, u} (determines minimum execution time when gates on disjoint qubits run in parallel; may differ from the raw circuit depth visible via `print(circuit)`)
 - `complexity` — asymptotic class (e.g. `"O(m)"`, `"O(m²)"`)
 - `success_probability` — 1.0 for single patterns; p ∈ (0,1] for LCU
 - `circuit_code` — standalone Qiskit snippet reproducing the circuit
@@ -123,7 +123,7 @@ If you use PyEncode in your work, please cite:
 
 ```
 K. Suresh and S. Suresh, "PyEncode: An Open-Source Library for
-Structured Quantum State Preparation," 2025.
+Structured Quantum State Preparation," 2026.
 ```
 
 ## License
