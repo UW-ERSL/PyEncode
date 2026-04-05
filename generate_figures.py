@@ -266,18 +266,23 @@ def fig_poisson():
 
 
 def fig_finance():
-    """Quantum finance: SPARSE price distribution."""
-    print("\n--- Quantum Finance ---")
-    N = 8
-    indices = [2, 4, 6]
-    weights = [0.25, 0.50, 0.25]
-    circuit, info = encode(SPARSE(list(zip(indices, weights))), N=N)
+    """Quantum finance: piecewise-constant distribution via LCU of SQUARE bins."""
+    print("\n--- Quantum Finance (LCU) ---")
+    N = 16
+    circuit, info = encode(
+        LCU([(0.10, SQUARE(k1=0,  k2=4,  c=1.0)),
+             (0.40, SQUARE(k1=4,  k2=8,  c=1.0)),
+             (0.35, SQUARE(k1=8,  k2=12, c=1.0)),
+             (0.15, SQUARE(k1=12, k2=16, c=1.0))]),
+        N=N)
     print_info("encode", info)
+    print(f"  success_probability = {info.success_probability:.4f}")
     f = np.zeros(N)
-    for k_i, w_i in zip(indices, weights): f[k_i] = w_i
-    plot_vector(f, N, "Price distribution (3 bins), $N=8$",
+    f[0:4] = 0.10; f[4:8] = 0.40; f[8:12] = 0.35; f[12:16] = 0.15
+    plot_vector(f, N,
+                r"Price distribution (4 bins), $N=16$",
                 "finance_vector.png", ylabel=r"$\sqrt{p_i}$")
-    save_circuit(circuit, "finance_circuit.png", scale=1.0)
+    save_circuit(circuit, "finance_circuit.png", scale=0.4)
 
 
 # ===================================================================
