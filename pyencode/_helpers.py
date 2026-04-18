@@ -289,6 +289,32 @@ def _build_expected_vector(
         f = c * (ratio ** np.arange(N, dtype=float))
         return f
 
+    if lt == VectorType.POPCOUNT:
+        r = p["r"]
+        c = p.get("c", 1.0)
+        pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
+        f = c * (r ** pops)
+        return f
+
+    if lt == VectorType.STAIRCASE:
+        r = p["r"]
+        c = p.get("c", 1.0)
+        m_bits = int(round(math.log2(N)))
+        f = np.zeros(N)
+        for k in range(m_bits + 1):
+            f[(1 << k) - 1] = c * (r ** k)
+        return f
+
+    if lt == VectorType.POLYNOMIAL:
+        coeffs = p["coeffs"]
+        normalize_domain = p.get("normalize_domain", True)
+        if normalize_domain and N > 1:
+            x = np.arange(N, dtype=float) / (N - 1)
+        else:
+            x = np.arange(N, dtype=float)
+        f = np.polyval(list(reversed(coeffs)), x)
+        return f
+
     return None
 
 
@@ -317,6 +343,27 @@ def _build_component_vector(comp: _VectorObj, N: int):
         ratio = p["ratio"]
         c = p.get("c", 1.0)
         return c * (ratio ** np.arange(N, dtype=float))
+    if comp.vector_type == VectorType.POPCOUNT:
+        r = p["r"]
+        c = p.get("c", 1.0)
+        pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
+        return c * (r ** pops)
+    if comp.vector_type == VectorType.STAIRCASE:
+        r = p["r"]
+        c = p.get("c", 1.0)
+        m_bits = int(round(math.log2(N)))
+        f = np.zeros(N)
+        for k in range(m_bits + 1):
+            f[(1 << k) - 1] = c * (r ** k)
+        return f
+    if comp.vector_type == VectorType.POLYNOMIAL:
+        coeffs = p["coeffs"]
+        normalize_domain = p.get("normalize_domain", True)
+        if normalize_domain and N > 1:
+            x = np.arange(N, dtype=float) / (N - 1)
+        else:
+            x = np.arange(N, dtype=float)
+        return np.polyval(list(reversed(coeffs)), x)
     raise TypeError(f"Cannot materialise component of type {comp.vector_type.name}.")
 
 
@@ -844,3 +891,143 @@ def _validate_lcu_circuit(qc, component_vectors, weights,
         raise ValueError(
             f"LCU validation failed: max amplitude error = {max_err:.2e} > tol={tol}."
         )
+
+# ---------------------------------------------------------------------------
+# TENSOR encoding
+# ---------------------------------------------------------------------------
+
+def _encode_tensor(tensor_obj, N, validate, tol):
+    """
+    Encode a TENSOR constructor: disjoint-subregister composition.
+
+    The returned circuit places each component on its own qubit
+    subregister; components execute in parallel (different qubits),
+    so the resulting circuit depth is the MAX of component depths and
+    total CX count is the SUM of component CX counts.  No ancilla.
+    """
+    from .synthesizer import synthesize as _synthesize
+    from .types import EncodingInfo
+
+    comp_objs = tensor_obj.params["components"]
+    sizes     = tensor_obj.params["sizes"]
+    K         = len(comp_objs)
+
+    # Check total N matches product of subregister sizes
+    N_prod = 1
+    for n_i in sizes:
+        N_prod *= n_i
+    if N_prod != N:
+        raise ValueError(
+            f"TENSOR: encode(N={N}) must equal product of subregister sizes "
+            f"{sizes} = {N_prod}."
+        )
+
+    m = int(round(math.log2(N)))
+
+    # Synthesise each component on its own subregister.
+    component_patterns = []
+    component_circuits = []
+    for obj, n_i in zip(comp_objs, sizes):
+        validated = _validate_params(obj.vector_type, n_i, obj.params)
+        pat = LoadPattern(obj.vector_type, N=n_i, params=validated)
+        component_patterns.append(pat)
+        component_circuits.append(_synthesize(pat))
+
+    # Compose via Qiskit's tensor().  Convention: component 0 gets the
+    # lowest-indexed qubits (LSBs), matching the product-state ordering
+    # used throughout PyEncode.
+    # Qiskit's QuantumCircuit.tensor(other) returns other x self,
+    # i.e. 'other' becomes the MSB side.  We want the opposite, so we
+    # build up with tensor() using reverse ordering.
+    qc = component_circuits[0]
+    for next_qc in component_circuits[1:]:
+        qc = next_qc.tensor(qc)
+    qc.name = "tensor"
+
+    # Validate
+    validated_flag = False
+    f_vec = None
+    if validate:
+        # Build the expected full vector as the Kronecker product of
+        # component vectors (component 0 = LSB side).
+        comp_vectors = []
+        for obj, n_i in zip(comp_objs, sizes):
+            v = _build_component_vector(obj, n_i)
+            comp_vectors.append(v)
+        f_vec = comp_vectors[0]
+        for v in comp_vectors[1:]:
+            f_vec = np.kron(v, f_vec)   # v is on MSB side, matches tensor()
+        _validate_circuit(qc, f_vec, tol)
+        validated_flag = True
+
+    # Gate counts
+    total_gates = sum(circuit.count_ops().get(k, 0)
+                      for circuit in component_circuits
+                      for k in circuit.count_ops())
+    total_gates = sum(sum(c.count_ops().values()) for c in component_circuits)
+
+    # Transpile the composed circuit for 1q/2q/depth
+    gate_count_1q = None
+    gate_count_2q = None
+    circuit_depth = None
+    try:
+        from qiskit import transpile as qk_transpile
+        transpiled = qk_transpile(qc, basis_gates=['cx', 'u'],
+                                  optimization_level=3)
+        ops = transpiled.count_ops()
+        gate_count_1q = ops.get('u', 0)
+        gate_count_2q = ops.get('cx', 0)
+        circuit_depth = transpiled.depth()
+    except Exception:
+        pass
+
+    # Combined complexity string: sum of component complexities.  Since
+    # disjoint-qubit composition doesn't add gates, the total gate count
+    # is O(max component cost) * K, which simplifies to O(m) or O(m^2)
+    # depending on the most expensive component.
+    complexity = "O(sum of components)"
+
+    info = EncodingInfo(
+        vector_type="TENSOR",
+        N=N,
+        m=m,
+        gate_count=total_gates,
+        complexity=complexity,
+        validated=validated_flag,
+        params={
+            "K": K,
+            "sizes": sizes,
+            "components": [obj.vector_type.name for obj in comp_objs],
+        },
+        circuit_code=_emit_tensor_code(comp_objs, sizes),
+        vector=f_vec,
+        gate_count_1q=gate_count_1q,
+        gate_count_2q=gate_count_2q,
+        circuit_depth=circuit_depth,
+        success_probability=1.0,
+    )
+    return qc, info
+
+
+def _emit_tensor_code(comp_objs, sizes):
+    """Emit standalone reconstruction code for a TENSOR composition."""
+    lines = [
+        "# PyEncode — emitted circuit: TENSOR composition",
+        "# Each component is synthesised on its own subregister;",
+        "# components are combined via QuantumCircuit.tensor().",
+        "",
+        "from pyencode import encode",
+        f"# from pyencode import {', '.join(sorted({obj.vector_type.name for obj in comp_objs}))}",
+        "",
+        "# Component circuits:",
+    ]
+    lines.append("components = [")
+    for obj, n_i in zip(comp_objs, sizes):
+        lines.append(f"    ({obj!r}, {n_i}),")
+    lines.append("]")
+    lines.append("")
+    lines.append("subcircuits = [encode(obj, n)[0] for obj, n in components]")
+    lines.append("qc = subcircuits[0]")
+    lines.append("for nxt in subcircuits[1:]:")
+    lines.append("    qc = nxt.tensor(qc)")
+    return "\n".join(lines)

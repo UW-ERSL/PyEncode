@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU
 
 
 # ---------------------------------------------------------------------------
@@ -839,3 +839,442 @@ class TestScaling:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestPopcount:
+    """Tests for POPCOUNT — product state with identical Ry per qubit.
+    Amplitudes depend only on Hamming weight: f_i proportional to r^popcount(i).
+    """
+
+    def test_basic(self):
+        circuit, info = encode(POPCOUNT(r=0.5), N=8)
+        assert info.vector_type == "POPCOUNT"
+        assert info.complexity == "O(m)"
+        pops = np.array([bin(i).count("1") for i in range(8)], dtype=float)
+        f = 0.5 ** pops
+        assert_encodes(circuit, f)
+
+    def test_binomial_large_r(self):
+        circuit, info = encode(POPCOUNT(r=2.0), N=16)
+        pops = np.array([bin(i).count("1") for i in range(16)], dtype=float)
+        f = 2.0 ** pops
+        assert_encodes(circuit, f)
+
+    def test_r_equals_one_is_uniform(self):
+        """r=1 gives the uniform superposition (all amplitudes equal)."""
+        circuit, _ = encode(POPCOUNT(r=1.0), N=16)
+        sv = np.abs(statevector(circuit))
+        np.testing.assert_allclose(sv, 1.0 / np.sqrt(16), atol=1e-10)
+
+    def test_gate_count_equals_m(self):
+        for m in [3, 4, 6, 8, 10]:
+            N = 2 ** m
+            _, info = encode(POPCOUNT(r=0.7), N=N)
+            assert info.gate_count == m, \
+                f"m={m}: expected {m} gates, got {info.gate_count}"
+
+    def test_zero_two_qubit_gates_and_depth_one(self):
+        """POPCOUNT is a product state: zero CX, depth 1."""
+        _, info = encode(POPCOUNT(r=0.6), N=64)
+        assert info.gate_count_2q == 0
+        assert info.circuit_depth == 1
+
+    def test_validate(self):
+        circuit, info = encode(POPCOUNT(r=0.4), N=16, validate=True)
+        assert info.validated is True
+        assert info.vector is not None
+
+    def test_custom_c_normalization(self):
+        """c only affects global normalisation, not relative amplitudes."""
+        c1, _ = encode(POPCOUNT(r=0.5, c=1.0), N=8)
+        c2, _ = encode(POPCOUNT(r=0.5, c=7.0), N=8)
+        sv1 = np.abs(statevector(c1))
+        sv2 = np.abs(statevector(c2))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+    def test_r_zero_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            POPCOUNT(r=0.0)
+
+    def test_r_negative_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            POPCOUNT(r=-0.3)
+
+    def test_emitted_code_runs(self):
+        circuit, info = encode(POPCOUNT(r=0.8), N=16)
+        namespace = {}
+        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(statevector(circuit))
+        sv_emit = np.abs(statevector(namespace["qc"]))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
+
+    def test_lcu_composability(self):
+        """POPCOUNT can be used as an LCU component."""
+        circuit, info = encode(
+            LCU([(1.0, STEP(k_s=8, c=1.0)),
+                 (2.0, POPCOUNT(r=0.5))]),
+            N=16)
+        assert info.vector_type == "LCU"
+        assert 0 < info.success_probability <= 1.0
+
+    def test_hamming_weight_structure(self):
+        """Verify amplitudes group by Hamming weight, not index."""
+        r = 0.6
+        _, info = encode(POPCOUNT(r=r), N=16, validate=True)
+        f = info.vector / np.linalg.norm(info.vector)
+        # Indices 3 (011), 5 (101), 6 (110) all have popcount=2
+        # so amplitudes should be identical
+        for i, j in [(3, 5), (3, 6), (5, 6), (7, 11), (7, 13), (7, 14)]:
+            np.testing.assert_allclose(abs(f[i]), abs(f[j]), atol=1e-10,
+                err_msg=f"indices {i},{j} have same popcount but different amplitudes")
+
+
+class TestStaircase:
+    """Tests for STAIRCASE — sparse geometric staircase on unary indices.
+    Produces m+1 nonzero amplitudes at indices {0, 1, 3, 7, ..., 2^m-1} with
+    f_{2^k-1} = c * r^k, via cascaded CR_y gates.
+    """
+
+    @staticmethod
+    def _unary_indices(m):
+        return [(1 << k) - 1 for k in range(m + 1)]
+
+    def test_basic(self):
+        circuit, info = encode(STAIRCASE(r=0.5), N=8)
+        assert info.vector_type == "STAIRCASE"
+        assert info.complexity == "O(m)"
+        f = np.zeros(8)
+        for k in range(4):
+            f[(1 << k) - 1] = 0.5 ** k
+        assert_encodes(circuit, f)
+
+    def test_support_is_unary_indices(self):
+        """Only indices 2^k - 1 should have nonzero amplitude."""
+        for m in [3, 4, 5]:
+            N = 2 ** m
+            circuit, _ = encode(STAIRCASE(r=0.4), N=N)
+            sv = np.array(statevector(circuit))
+            unary = set(self._unary_indices(m))
+            for i in range(N):
+                if i in unary:
+                    assert abs(sv[i]) > 1e-10, f"m={m}: expected nonzero at i={i}"
+                else:
+                    assert abs(sv[i]) < 1e-10, f"m={m}: expected zero at i={i}, got {sv[i]}"
+
+    def test_geometric_ratio_exact(self):
+        """Consecutive nonzero amplitudes should have ratio exactly r."""
+        for r in [0.3, 0.5, 0.8, 1.5, 2.5]:
+            for m in [3, 4, 5]:
+                N = 2 ** m
+                circuit, _ = encode(STAIRCASE(r=r), N=N)
+                sv = np.array(statevector(circuit)).real
+                amps = [sv[(1 << k) - 1] for k in range(m + 1)]
+                for k in range(m):
+                    observed = amps[k + 1] / amps[k]
+                    np.testing.assert_allclose(observed, r, atol=1e-10,
+                        err_msg=f"r={r}, m={m}, k={k}: ratio mismatch")
+
+    def test_gate_count_equals_m(self):
+        for m in [3, 4, 6, 8]:
+            N = 2 ** m
+            _, info = encode(STAIRCASE(r=0.7), N=N)
+            assert info.gate_count == m, \
+                f"m={m}: expected {m} gates, got {info.gate_count}"
+
+    def test_cx_count_linear(self):
+        """Each CR_y decomposes to O(1) CX, so total CX is O(m)."""
+        for m in [4, 6, 8]:
+            N = 2 ** m
+            _, info = encode(STAIRCASE(r=0.6), N=N)
+            assert info.gate_count_2q <= 3 * m, \
+                f"m={m}: CX count {info.gate_count_2q} exceeds 3m"
+
+    def test_validate(self):
+        circuit, info = encode(STAIRCASE(r=0.5), N=16, validate=True)
+        assert info.validated is True
+        assert info.vector is not None
+        # Check vector has exactly m+1 nonzero entries
+        nonzero = np.count_nonzero(info.vector)
+        assert nonzero == 5  # m+1 = log2(16)+1 = 5
+
+    def test_custom_c_normalization(self):
+        c1, _ = encode(STAIRCASE(r=0.6, c=1.0), N=16)
+        c2, _ = encode(STAIRCASE(r=0.6, c=8.0), N=16)
+        sv1 = np.abs(statevector(c1))
+        sv2 = np.abs(statevector(c2))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+    def test_growth_r_greater_than_one(self):
+        circuit, _ = encode(STAIRCASE(r=2.0), N=8, validate=True)
+        sv = np.array(statevector(circuit)).real
+        # Amplitudes should grow by factor 2 at each unary index
+        for k in range(3):
+            observed = sv[(1 << (k + 1)) - 1] / sv[(1 << k) - 1]
+            np.testing.assert_allclose(observed, 2.0, atol=1e-10)
+
+    def test_r_zero_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            STAIRCASE(r=0.0)
+
+    def test_r_negative_raises(self):
+        with pytest.raises(ValueError, match="positive"):
+            STAIRCASE(r=-0.4)
+
+    def test_r_one_raises(self):
+        with pytest.raises(ValueError, match="uniform"):
+            STAIRCASE(r=1.0)
+
+    def test_emitted_code_runs(self):
+        circuit, info = encode(STAIRCASE(r=0.55), N=16)
+        namespace = {}
+        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(statevector(circuit))
+        sv_emit = np.abs(statevector(namespace["qc"]))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
+
+    def test_lcu_composability(self):
+        circuit, info = encode(
+            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                 (2.0, STAIRCASE(r=0.5))]),
+            N=16)
+        assert info.vector_type == "LCU"
+        assert 0 < info.success_probability <= 1.0
+
+
+class TestTensor:
+    """Tests for TENSOR — disjoint-subregister composition.
+    Wraps the circ_A.tensor(circ_B) idiom as a named pattern.  Component 0
+    occupies the LSB subregister (lowest-indexed qubits).
+    """
+
+    def test_basic_two_component(self):
+        circuit, info = encode(
+            TENSOR([(GEOMETRIC(ratio=0.5), 8),
+                    (GEOMETRIC(ratio=0.8), 8)]),
+            N=64)
+        assert info.vector_type == "TENSOR"
+        assert info.N == 64
+        assert info.m == 6
+
+    def test_matches_manual_tensor(self):
+        """TENSOR should give the same state as manually calling circ.tensor()."""
+        c_a, _ = encode(FOURIER(modes=[(2, 1.0, 0)]), N=16)
+        c_b, _ = encode(FOURIER(modes=[(3, 1.0, 0)]), N=16)
+        manual = c_b.tensor(c_a)
+
+        auto, _ = encode(
+            TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 16),
+                    (FOURIER(modes=[(3, 1.0, 0)]), 16)]),
+            N=256)
+        sv_m = np.abs(statevector(manual))
+        sv_a = np.abs(statevector(auto))
+        np.testing.assert_allclose(sv_a, sv_m, atol=1e-10)
+
+    def test_separable_poisson(self):
+        """Matches the paper's 2D Poisson separable source-term example."""
+        circuit, info = encode(
+            TENSOR([(FOURIER(modes=[(1, 1.0, 0)]), 32),
+                    (FOURIER(modes=[(2, 1.0, 0)]), 32)]),
+            N=32 * 32, validate=True)
+        assert info.validated is True
+
+    def test_three_way_tensor(self):
+        circuit, info = encode(
+            TENSOR([(GEOMETRIC(ratio=0.7), 4),
+                    (POPCOUNT(r=0.5), 8),
+                    (SQUARE(k1=1, k2=5, c=1.0), 8)]),
+            N=4 * 8 * 8, validate=True)
+        assert info.validated is True
+        assert info.N == 256
+
+    def test_validate_matches_kron(self):
+        """Validated vector should equal Kronecker product of components."""
+        from pyencode._helpers import _build_component_vector
+        a = GEOMETRIC(ratio=0.6)
+        b = GEOMETRIC(ratio=0.9)
+        _, info = encode(TENSOR([(a, 8), (b, 4)]), N=32, validate=True)
+        va = _build_component_vector(a, 8)
+        vb = _build_component_vector(b, 4)
+        expected = np.kron(vb, va)   # b on MSB side per TENSOR convention
+        np.testing.assert_allclose(info.vector, expected, atol=1e-10)
+
+    def test_gate_count_equals_sum_of_components(self):
+        """Disjoint composition: no extra gates beyond component counts."""
+        _, info_a = encode(GEOMETRIC(ratio=0.7), N=16)
+        _, info_b = encode(POPCOUNT(r=0.5), N=16)
+        _, info_t = encode(
+            TENSOR([(GEOMETRIC(ratio=0.7), 16), (POPCOUNT(r=0.5), 16)]),
+            N=256)
+        assert info_t.gate_count == info_a.gate_count + info_b.gate_count
+
+    def test_success_probability_is_one(self):
+        _, info = encode(
+            TENSOR([(GEOMETRIC(ratio=0.5), 8), (GEOMETRIC(ratio=0.8), 8)]),
+            N=64)
+        assert info.success_probability == 1.0
+
+    def test_empty_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            TENSOR([])
+
+    def test_non_power_of_two_size_raises(self):
+        with pytest.raises(ValueError, match="power of 2"):
+            TENSOR([(GEOMETRIC(ratio=0.5), 6), (GEOMETRIC(ratio=0.5), 8)])
+
+    def test_bad_component_type_raises(self):
+        with pytest.raises(TypeError):
+            TENSOR([("not a VectorObj", 8)])
+
+    def test_mismatched_total_N_raises(self):
+        with pytest.raises(ValueError, match="product of subregister sizes"):
+            encode(
+                TENSOR([(GEOMETRIC(ratio=0.5), 8),
+                        (GEOMETRIC(ratio=0.5), 8)]),
+                N=32)  # should be 64
+
+    def test_single_component_tensor(self):
+        """A one-component TENSOR should equal the component by itself."""
+        c_plain, _ = encode(GEOMETRIC(ratio=0.7), N=16)
+        c_tensor, _ = encode(TENSOR([(GEOMETRIC(ratio=0.7), 16)]), N=16)
+        sv_p = np.abs(statevector(c_plain))
+        sv_t = np.abs(statevector(c_tensor))
+        np.testing.assert_allclose(sv_p, sv_t, atol=1e-10)
+
+
+class TestPolynomial:
+    """Tests for POLYNOMIAL — degree-d polynomial via Walsh-sparse loading.
+    Covers ramp, quadratic (Poiseuille), cubic, verifies Walsh-sparsity
+    structure and machine-precision reconstruction.
+    """
+
+    @staticmethod
+    def _normalised_eval(coeffs, N, normalize=True):
+        if normalize and N > 1:
+            x = np.arange(N, dtype=float) / (N - 1)
+        else:
+            x = np.arange(N, dtype=float)
+        return np.polyval(list(reversed(coeffs)), x)
+
+    @staticmethod
+    def _compare_upto_sign(sv, expected, tol=1e-10):
+        """Validate up to a possible global -1 sign."""
+        err_plus  = np.max(np.abs(sv - expected))
+        err_minus = np.max(np.abs(sv + expected))
+        return min(err_plus, err_minus) < tol
+
+    def test_ramp_basic(self):
+        """POLYNOMIAL(coeffs=[0, 1]) == ramp f(i) = i/(N-1)."""
+        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=16)
+        assert info.vector_type == "POLYNOMIAL"
+        sv = np.array(statevector(circuit)).real
+        f = self._normalised_eval([0.0, 1.0], 16)
+        expected = f / np.linalg.norm(f)
+        assert self._compare_upto_sign(sv, expected, tol=1e-10)
+
+    def test_poiseuille(self):
+        """Parabolic profile f(x) = 4x(1-x) (degree-2)."""
+        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=32)
+        sv = np.array(statevector(circuit)).real
+        f = self._normalised_eval([0.0, 4.0, -4.0], 32)
+        expected = f / np.linalg.norm(f)
+        assert self._compare_upto_sign(sv, expected, tol=1e-10)
+
+    def test_cubic(self):
+        circuit, _ = encode(POLYNOMIAL(coeffs=[0.1, 0.5, 1.0, -0.3]), N=32)
+        sv = np.array(statevector(circuit)).real
+        f = self._normalised_eval([0.1, 0.5, 1.0, -0.3], 32)
+        expected = f / np.linalg.norm(f)
+        assert self._compare_upto_sign(sv, expected, tol=1e-10)
+
+    def test_validate(self):
+        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 2.0, -1.0]),
+                               N=16, validate=True)
+        assert info.validated is True
+        assert info.vector is not None
+
+    def test_degree_1_sparsity(self):
+        """Degree-1 polynomial: Walsh spectrum supported on Hamming weight <= 1."""
+        from pyencode.synthesizer import _fwht_inplace
+        for m in [3, 5, 7]:
+            N = 2 ** m
+            f = self._normalised_eval([1.0, 3.0], N)
+            walsh = f.copy()
+            _fwht_inplace(walsh)
+            walsh /= np.sqrt(N)
+            for k in range(N):
+                if bin(k).count("1") > 1:
+                    assert abs(walsh[k]) < 1e-10, \
+                        f"m={m}, k={k}: weight-{bin(k).count('1')} Walsh coeff is nonzero"
+
+    def test_degree_2_sparsity_count(self):
+        """Degree-2: exactly 1 + m + C(m,2) nonzero Walsh coefficients."""
+        from pyencode.synthesizer import _fwht_inplace
+        from math import comb
+        for m in [4, 5, 6, 7]:
+            N = 2 ** m
+            f = self._normalised_eval([1.0, 2.0, -3.0], N)
+            walsh = f.copy()
+            _fwht_inplace(walsh)
+            walsh /= np.sqrt(N)
+            nonzero = sum(1 for k in range(N) if abs(walsh[k]) > 1e-10)
+            expected = 1 + m + comb(m, 2)
+            assert nonzero == expected, \
+                f"m={m}: got {nonzero} nonzero Walsh coeffs, expected {expected}"
+
+    def test_normalize_domain_false(self):
+        """normalize_domain=False evaluates at raw integer indices."""
+        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0], normalize_domain=False),
+                               N=8)
+        sv = np.array(statevector(circuit)).real
+        f = np.arange(8, dtype=float)   # raw indices
+        expected = f / np.linalg.norm(f)
+        assert self._compare_upto_sign(sv, expected, tol=1e-10)
+
+    def test_constant_polynomial_is_uniform(self):
+        """Degree-0 (constant) polynomial maps to the uniform superposition."""
+        circuit, info = encode(POLYNOMIAL(coeffs=[3.5]), N=8)
+        sv = np.array(statevector(circuit)).real
+        expected = np.ones(8) / np.sqrt(8)
+        assert self._compare_upto_sign(sv, expected, tol=1e-10)
+
+    def test_trailing_zeros_stripped(self):
+        """POLYNOMIAL([1.0, 2.0, 0.0, 0.0]) == POLYNOMIAL([1.0, 2.0])."""
+        p1 = POLYNOMIAL(coeffs=[1.0, 2.0, 0.0, 0.0])
+        p2 = POLYNOMIAL(coeffs=[1.0, 2.0])
+        assert p1.params["coeffs"] == p2.params["coeffs"]
+
+    def test_zero_polynomial_raises(self):
+        with pytest.raises(ValueError, match="zero polynomial"):
+            POLYNOMIAL(coeffs=[0.0, 0.0, 0.0])
+
+    def test_empty_coeffs_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            POLYNOMIAL(coeffs=[])
+
+    def test_emitted_code_runs(self):
+        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=16)
+        namespace = {"QuantumCircuit": QuantumCircuit}
+        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(statevector(circuit))
+        sv_emit = np.abs(statevector(namespace["qc"]))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
+
+    def test_lcu_composability(self):
+        """POLYNOMIAL can be used as an LCU component."""
+        circuit, info = encode(
+            LCU([(1.0, STEP(k_s=8, c=1.0)),
+                 (2.0, POLYNOMIAL(coeffs=[0.0, 1.0]))]),
+            N=16)
+        assert info.vector_type == "LCU"
+        assert 0 < info.success_probability <= 1.0
+
+    def test_tensor_composability(self):
+        """POLYNOMIAL can be used as a TENSOR component (separable 2D)."""
+        circuit, info = encode(
+            TENSOR([(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 16),
+                    (POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 16)]),
+            N=256, validate=True)
+        assert info.validated is True

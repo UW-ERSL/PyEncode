@@ -65,6 +65,11 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
     if isinstance(VectorObj, _LCU):
         return _encode_lcu(VectorObj, N, validate=validate, tol=tol)
 
+    from .types import TENSOR as _TENSOR
+    if isinstance(VectorObj, _TENSOR):
+        from ._helpers import _encode_tensor
+        return _encode_tensor(VectorObj, N, validate=validate, tol=tol)
+
     if not isinstance(VectorObj, _VectorObj):
         raise TypeError(
             f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "

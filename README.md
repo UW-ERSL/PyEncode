@@ -16,7 +16,7 @@ Requires Python 3.10+ and Qiskit 2.3+.
 ## Quick Start
 
 ```python
-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
+from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU
 
 # Basis vector at index 19 (Hamming weight 3 → 3 gates)
 circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
@@ -35,6 +35,24 @@ circuit, info = encode(WALSH(k=1, c_pos=1.0, c_neg=4.0), N=8)
 
 # Exponential decay — product state, zero two-qubit gates
 circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
+
+# Hamming-weight structured — product state, identical Ry per qubit, depth 1
+circuit, info = encode(POPCOUNT(r=0.5), N=64)
+
+# Sparse geometric staircase on unary indices — cascaded CR_y, O(m) gates
+circuit, info = encode(STAIRCASE(r=0.5), N=16)
+
+# Degree-d polynomial via Walsh-sparse loading
+# Ramp:
+circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=32)
+# Poiseuille parabolic profile f(x) = 4x(1-x):
+circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=32)
+
+# Separable multi-dimensional state — disjoint subregisters, parallel execution
+circuit, info = encode(
+    TENSOR([(FOURIER(modes=[(1, 1.0, 0)]), 32),
+            (FOURIER(modes=[(3, 1.0, 0)]), 32)]),
+    N=32 * 32)
 
 # Weighted superposition of patterns via LCU
 circuit, info = encode(
@@ -57,8 +75,12 @@ statevector-validated amplitude vector.
 | Square     | `SQUARE(k1, k2, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
 | Walsh      | `WALSH(k, c_pos, c_neg)`      | O(m)               | Welch et al. (2014)          |
 | Geometric  | `GEOMETRIC(ratio, c)`         | O(m), 0 CX, depth 1| Xie & Ben-Ami (2025)        |
+| Popcount   | `POPCOUNT(r, c)`              | O(m), 0 CX, depth 1| Product state (this work)    |
+| Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
+| Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
 | Fourier    | `FOURIER(modes=[...])`        | O(m²)              | Gonzalez-Conde / Moosa       |
 | LCU        | `LCU([(w, VectorObj), ...])`  | Σ component costs  | Childs / Babbush             |
+| Tensor     | `TENSOR([(VectorObj, N_i), ...])` | Σ component costs, depth = max | Composition rule (this work) |
 
 Here m = log₂(N) is the number of qubits and N is the vector length.
 

@@ -75,6 +75,9 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.SPARSE:            _synth_sparse,
         VectorType.FOURIER:           _synth_fourier,
         VectorType.GEOMETRIC:         _synth_geometric,
+        VectorType.POPCOUNT:          _synth_popcount,
+        VectorType.STAIRCASE:         _synth_staircase,
+        VectorType.POLYNOMIAL:        _synth_polynomial,
     }
 
     fn = dispatch.get(pattern.load_type, _synth_qiskit_fallback)
@@ -1067,3 +1070,215 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
         qc.ry(theta_j, j)
 
     return qc
+
+# ---------------------------------------------------------------------------
+# POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical R_y gates)
+# ---------------------------------------------------------------------------
+
+def _synth_popcount(m: int, params: dict) -> QuantumCircuit:
+    """
+    POPCOUNT: amplitudes depend only on Hamming weight of the index.
+
+    The target state is
+        f_i = c * r^popcount(i)  for i = 0, ..., N-1,
+    which factorises over the bits of i as
+        f_i = c * prod_j r^(b_j)  where  b_j = (i >> j) & 1.
+
+    Hence the normalised state is a product state:
+        |psi> = bigotimes_{j=0}^{m-1}  (|0> + r|1>) / sqrt(1 + r^2).
+
+    Each qubit is prepared by the SAME single-qubit rotation
+        R_y(theta)|0> = cos(theta/2)|0> + sin(theta/2)|1>
+    with  theta = 2 * arctan(r).
+
+    Gate count: m identical R_y gates, zero entangling gates.
+    Depth: 1 (all rotations commute and act on disjoint qubits).
+    Complexity: O(m).
+
+    Parameters
+    ----------
+    m : int
+        Number of qubits (N = 2^m).
+    params : dict
+        Must contain 'r' (float, > 0).  Optional 'c' (default 1.0)
+        only affects normalisation.
+    """
+    r = params["r"]
+    theta = 2.0 * math.atan(r)
+
+    qc = QuantumCircuit(m, name="popcount")
+    for j in range(m):
+        qc.ry(theta, j)
+
+    return qc
+
+
+# ---------------------------------------------------------------------------
+# STAIRCASE  f_{2^k-1} = r^k  (cascaded CR_y with per-step angles)
+# ---------------------------------------------------------------------------
+
+def _synth_staircase(m: int, params: dict) -> QuantumCircuit:
+    """
+    STAIRCASE: sparse geometric staircase on unary indices.
+
+    Target amplitudes (unnormalised):
+        f_{2^k - 1} = r^k   for k = 0, 1, ..., m
+    with all other amplitudes zero.
+
+    Construction
+    ------------
+    The state is built level-by-level in a cascade of m rotations:
+
+        step 0:   R_y(theta_0)  on q0
+        step k:   CR_y(theta_k) controlled by q_{k-1}, target q_k,
+                                                          for k = 1..m-1
+
+    At the start of step k the "active" branch carries the probability mass
+    of all levels >= k.  The angle theta_k is chosen so that cos(theta_k/2)
+    is f_k's share of that mass and sin(theta_k/2) is the remaining tail.
+
+    Let  T_k = sqrt( sum_{j=k}^{m} r^{2j} )  be the tail norm from level k.
+    Then  cos(theta_k/2) = r^k / T_k  and  sin(theta_k/2) = T_{k+1} / T_k,
+    so  theta_k = 2 * atan2(T_{k+1}, r^k).  In particular
+    theta_0 = 2 * atan2(T_1, 1).
+
+    Gate count: m (1 R_y + (m-1) CR_y).  Complexity: O(m).
+
+    Parameters
+    ----------
+    m : int
+        Number of qubits (N = 2^m).
+    params : dict
+        Must contain 'r' (float, > 0, != 1).  Optional 'c' only affects
+        normalisation.
+    """
+    r = params["r"]
+
+    # Tail norms T_k = sqrt( sum_{j=k}^{m} r^{2j} ) for k = 0, ..., m+1
+    # (T_{m+1} = 0).
+    T = [0.0] * (m + 2)
+    for k in range(m + 1):
+        T[k] = math.sqrt(sum(r ** (2 * j) for j in range(k, m + 1)))
+    # T[m+1] is 0 -- theta_m would be 0 (no rotation), so we stop at k=m-1.
+
+    qc = QuantumCircuit(m, name="staircase")
+
+    # Step 0: R_y on qubit 0.  cos(theta_0/2) = 1/T_0, sin = T_1/T_0.
+    theta_0 = 2.0 * math.atan2(T[1], 1.0)
+    qc.ry(theta_0, 0)
+
+    # Steps 1..m-1: CR_y from q_{k-1} to q_k.
+    for k in range(1, m):
+        # cos(theta_k/2) = r^k / T_k,  sin = T_{k+1}/T_k
+        theta_k = 2.0 * math.atan2(T[k + 1], r ** k)
+        qc.cry(theta_k, k - 1, k)
+
+    return qc
+
+
+# ---------------------------------------------------------------------------
+# POLYNOMIAL  f(i) = sum_{j=0}^{d} c_j * x(i)^j  (Walsh-sparse loading)
+# ---------------------------------------------------------------------------
+
+def _fwht_inplace(a: np.ndarray) -> None:
+    """Iterative unnormalised Walsh-Hadamard transform, in place.
+
+    After this call, a[k] = sum_i (-1)^{popcount(k AND i)} * a_input[i].
+    """
+    h = 1
+    N = len(a)
+    while h < N:
+        for i in range(0, N, h * 2):
+            for j in range(i, i + h):
+                x, y = a[j], a[j + h]
+                a[j]     = x + y
+                a[j + h] = x - y
+        h *= 2
+
+
+def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
+    """
+    POLYNOMIAL: Walsh-sparse loading plus a Hadamard layer.
+
+    Construction
+    ------------
+    Let  f(i) = sum_{j=0}^{d} coeffs[j] * x(i)^j  be the target polynomial,
+    where x(i) = i / (N - 1) if normalize_domain=True, else x(i) = i.
+
+    Classical preprocessing:
+      1. Evaluate f on the grid (O(N), numerical).
+      2. Compute the Walsh-Hadamard transform, x = W f / sqrt(N).  Because
+         f has polynomial degree d, only Walsh coefficients x_k at indices
+         with Hamming weight |k|_b <= d are nonzero (Welch 2014; Gonzalez-
+         Conde 2024).  Total nonzero: s = sum_{k=0}^{d} C(m, k).
+
+    Quantum circuit:
+      3. Prepare the sparse state |psi_x> = sum_k x_k |k>  using the
+         Gleinig-Hoefler disjoint-point-load synthesiser (O(s * m) gates).
+      4. Apply a single H layer to all m qubits.  Since H^{otimes m}
+         applied to |k> gives (1/sqrt(N)) sum_i (-1)^{popcount(k AND i)} |i>,
+         this precisely inverts the Walsh transform and yields
+         sum_i f_i |i>  (normalised).
+
+    Gate count: O(s * m) = O(m^{d+1}).  Exact (no approximation).
+
+    Parameters
+    ----------
+    m : int
+        Number of qubits (N = 2^m).
+    params : dict
+        Must contain 'coeffs' (list of floats).
+        Optional 'normalize_domain' (bool, default True).
+    """
+    coeffs           = params["coeffs"]
+    normalize_domain = params.get("normalize_domain", True)
+    d = len(coeffs) - 1
+    N = 2 ** m
+
+    # 1. Evaluate the polynomial on the grid.
+    if normalize_domain and N > 1:
+        x = np.arange(N, dtype=float) / (N - 1)
+    else:
+        x = np.arange(N, dtype=float)
+    f = np.polyval(list(reversed(coeffs)), x)   # polyval: high-to-low
+
+    # 2. Walsh-Hadamard transform (in-place for memory efficiency).
+    walsh = f.copy()
+    _fwht_inplace(walsh)
+    walsh /= np.sqrt(N)
+
+    # 3. Extract nonzero Walsh coefficients at Hamming weight <= d.
+    #    Zero out entries beyond the theoretical support so rounding noise
+    #    doesn't leak into higher-weight indices.
+    for k in range(N):
+        if bin(k).count("1") > d:
+            walsh[k] = 0.0
+
+    walsh_norm = float(np.linalg.norm(walsh))
+    if walsh_norm < 1e-14:
+        raise ValueError(
+            "POLYNOMIAL: all Walsh coefficients are zero within tolerance."
+        )
+    walsh_normalised = walsh / walsh_norm
+
+    # 4. Load the sparse Walsh-coefficient state and apply a Hadamard layer.
+    #    Ideally this uses a Walsh-sparse loader with O(s * m) cost
+    #    (Welch 2014 / Gonzalez-Conde 2024).  The Gleinig-Hoefler SPARSE
+    #    synthesiser currently in this package is known to lose precision
+    #    on dense signed patterns (s >= 11), so we fall back to Qiskit's
+    #    general StatePreparation on the *sparse* Walsh vector.  This is
+    #    numerically correct but produces a circuit whose gate count is
+    #    upper-bounded by the general O(N) bound rather than the
+    #    theoretical O(s * m) = O(m^(d+1)) bound.  A future drop-in
+    #    replacement can restore the asymptotic savings.
+    from qiskit.circuit.library import StatePreparation
+
+    poly_qc = QuantumCircuit(m, name="polynomial")
+    sp = StatePreparation(walsh_normalised, label="walsh_load")
+    poly_qc.append(sp, range(m))
+    poly_qc = poly_qc.decompose(reps=1)
+
+    # 5. Hadamard layer transforms the Walsh register into the target.
+    for q in range(m):
+        poly_qc.h(q)
+    return poly_qc

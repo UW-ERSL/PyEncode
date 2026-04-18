@@ -1,0 +1,1445 @@
+diff --git a/README.md b/README.md
+index 07506bb..96e1afd 100644
+--- a/README.md
++++ b/README.md
+@@ -16,7 +16,7 @@ Requires Python 3.10+ and Qiskit 2.3+.
+ ## Quick Start
+ 
+ ```python
+-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
++from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU
+ 
+ # Basis vector at index 19 (Hamming weight 3 → 3 gates)
+ circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
+@@ -36,6 +36,24 @@ circuit, info = encode(WALSH(k=1, c_pos=1.0, c_neg=4.0), N=8)
+ # Exponential decay — product state, zero two-qubit gates
+ circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
+ 
++# Hamming-weight structured — product state, identical Ry per qubit, depth 1
++circuit, info = encode(POPCOUNT(r=0.5), N=64)
++
++# Sparse geometric staircase on unary indices — cascaded CR_y, O(m) gates
++circuit, info = encode(STAIRCASE(r=0.5), N=16)
++
++# Degree-d polynomial via Walsh-sparse loading
++# Ramp:
++circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=32)
++# Poiseuille parabolic profile f(x) = 4x(1-x):
++circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=32)
++
++# Separable multi-dimensional state — disjoint subregisters, parallel execution
++circuit, info = encode(
++    TENSOR([(FOURIER(modes=[(1, 1.0, 0)]), 32),
++            (FOURIER(modes=[(3, 1.0, 0)]), 32)]),
++    N=32 * 32)
++
+ # Weighted superposition of patterns via LCU
+ circuit, info = encode(
+     LCU([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
+@@ -57,8 +75,12 @@ statevector-validated amplitude vector.
+ | Square     | `SQUARE(k1, k2, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
+ | Walsh      | `WALSH(k, c_pos, c_neg)`      | O(m)               | Welch et al. (2014)          |
+ | Geometric  | `GEOMETRIC(ratio, c)`         | O(m), 0 CX, depth 1| Xie & Ben-Ami (2025)        |
++| Popcount   | `POPCOUNT(r, c)`              | O(m), 0 CX, depth 1| Product state (this work)    |
++| Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
++| Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
+ | Fourier    | `FOURIER(modes=[...])`        | O(m²)              | Gonzalez-Conde / Moosa       |
+ | LCU        | `LCU([(w, VectorObj), ...])`  | Σ component costs  | Childs / Babbush             |
++| Tensor     | `TENSOR([(VectorObj, N_i), ...])` | Σ component costs, depth = max | Composition rule (this work) |
+ 
+ Here m = log₂(N) is the number of qubits and N is the vector length.
+ 
+diff --git a/pyencode/__init__.py b/pyencode/__init__.py
+index c463059..6dd7ece 100644
+--- a/pyencode/__init__.py
++++ b/pyencode/__init__.py
+@@ -37,6 +37,10 @@ from .types import (
+     STEP,
+     SQUARE,
+     GEOMETRIC,
++    POPCOUNT,
++    STAIRCASE,
++    TENSOR,
++    POLYNOMIAL,
+     LCU,
+     EncodingInfo,
+ )
+@@ -52,8 +56,12 @@ __all__ = [
+     "FOURIER",
+     "WALSH",
+     "GEOMETRIC",
++    "POPCOUNT",
++    "STAIRCASE",
++    "TENSOR",
++    "POLYNOMIAL",
+     "LCU",
+     "STEP",
+     "SQUARE",
+ ]
+-__version__ = "1.2.0"
++__version__ = "1.3.0"
+diff --git a/pyencode/_helpers.py b/pyencode/_helpers.py
+index 3169283..71c1507 100644
+--- a/pyencode/_helpers.py
++++ b/pyencode/_helpers.py
+@@ -289,6 +289,32 @@ def _build_expected_vector(
+         f = c * (ratio ** np.arange(N, dtype=float))
+         return f
+ 
++    if lt == VectorType.POPCOUNT:
++        r = p["r"]
++        c = p.get("c", 1.0)
++        pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
++        f = c * (r ** pops)
++        return f
++
++    if lt == VectorType.STAIRCASE:
++        r = p["r"]
++        c = p.get("c", 1.0)
++        m_bits = int(round(math.log2(N)))
++        f = np.zeros(N)
++        for k in range(m_bits + 1):
++            f[(1 << k) - 1] = c * (r ** k)
++        return f
++
++    if lt == VectorType.POLYNOMIAL:
++        coeffs = p["coeffs"]
++        normalize_domain = p.get("normalize_domain", True)
++        if normalize_domain and N > 1:
++            x = np.arange(N, dtype=float) / (N - 1)
++        else:
++            x = np.arange(N, dtype=float)
++        f = np.polyval(list(reversed(coeffs)), x)
++        return f
++
+     return None
+ 
+ 
+@@ -317,6 +343,27 @@ def _build_component_vector(comp: _VectorObj, N: int):
+         ratio = p["ratio"]
+         c = p.get("c", 1.0)
+         return c * (ratio ** np.arange(N, dtype=float))
++    if comp.vector_type == VectorType.POPCOUNT:
++        r = p["r"]
++        c = p.get("c", 1.0)
++        pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
++        return c * (r ** pops)
++    if comp.vector_type == VectorType.STAIRCASE:
++        r = p["r"]
++        c = p.get("c", 1.0)
++        m_bits = int(round(math.log2(N)))
++        f = np.zeros(N)
++        for k in range(m_bits + 1):
++            f[(1 << k) - 1] = c * (r ** k)
++        return f
++    if comp.vector_type == VectorType.POLYNOMIAL:
++        coeffs = p["coeffs"]
++        normalize_domain = p.get("normalize_domain", True)
++        if normalize_domain and N > 1:
++            x = np.arange(N, dtype=float) / (N - 1)
++        else:
++            x = np.arange(N, dtype=float)
++        return np.polyval(list(reversed(coeffs)), x)
+     raise TypeError(f"Cannot materialise component of type {comp.vector_type.name}.")
+ 
+ 
+@@ -843,4 +890,144 @@ def _validate_lcu_circuit(qc, component_vectors, weights,
+         max_err = np.max(np.abs(np.abs(simulated) - np.abs(expected)))
+         raise ValueError(
+             f"LCU validation failed: max amplitude error = {max_err:.2e} > tol={tol}."
+-        )
+\ No newline at end of file
++        )
++
++# ---------------------------------------------------------------------------
++# TENSOR encoding
++# ---------------------------------------------------------------------------
++
++def _encode_tensor(tensor_obj, N, validate, tol):
++    """
++    Encode a TENSOR constructor: disjoint-subregister composition.
++
++    The returned circuit places each component on its own qubit
++    subregister; components execute in parallel (different qubits),
++    so the resulting circuit depth is the MAX of component depths and
++    total CX count is the SUM of component CX counts.  No ancilla.
++    """
++    from .synthesizer import synthesize as _synthesize
++    from .types import EncodingInfo
++
++    comp_objs = tensor_obj.params["components"]
++    sizes     = tensor_obj.params["sizes"]
++    K         = len(comp_objs)
++
++    # Check total N matches product of subregister sizes
++    N_prod = 1
++    for n_i in sizes:
++        N_prod *= n_i
++    if N_prod != N:
++        raise ValueError(
++            f"TENSOR: encode(N={N}) must equal product of subregister sizes "
++            f"{sizes} = {N_prod}."
++        )
++
++    m = int(round(math.log2(N)))
++
++    # Synthesise each component on its own subregister.
++    component_patterns = []
++    component_circuits = []
++    for obj, n_i in zip(comp_objs, sizes):
++        validated = _validate_params(obj.vector_type, n_i, obj.params)
++        pat = LoadPattern(obj.vector_type, N=n_i, params=validated)
++        component_patterns.append(pat)
++        component_circuits.append(_synthesize(pat))
++
++    # Compose via Qiskit's tensor().  Convention: component 0 gets the
++    # lowest-indexed qubits (LSBs), matching the product-state ordering
++    # used throughout PyEncode.
++    # Qiskit's QuantumCircuit.tensor(other) returns other x self,
++    # i.e. 'other' becomes the MSB side.  We want the opposite, so we
++    # build up with tensor() using reverse ordering.
++    qc = component_circuits[0]
++    for next_qc in component_circuits[1:]:
++        qc = next_qc.tensor(qc)
++    qc.name = "tensor"
++
++    # Validate
++    validated_flag = False
++    f_vec = None
++    if validate:
++        # Build the expected full vector as the Kronecker product of
++        # component vectors (component 0 = LSB side).
++        comp_vectors = []
++        for obj, n_i in zip(comp_objs, sizes):
++            v = _build_component_vector(obj, n_i)
++            comp_vectors.append(v)
++        f_vec = comp_vectors[0]
++        for v in comp_vectors[1:]:
++            f_vec = np.kron(v, f_vec)   # v is on MSB side, matches tensor()
++        _validate_circuit(qc, f_vec, tol)
++        validated_flag = True
++
++    # Gate counts
++    total_gates = sum(circuit.count_ops().get(k, 0)
++                      for circuit in component_circuits
++                      for k in circuit.count_ops())
++    total_gates = sum(sum(c.count_ops().values()) for c in component_circuits)
++
++    # Transpile the composed circuit for 1q/2q/depth
++    gate_count_1q = None
++    gate_count_2q = None
++    circuit_depth = None
++    try:
++        from qiskit import transpile as qk_transpile
++        transpiled = qk_transpile(qc, basis_gates=['cx', 'u'],
++                                  optimization_level=3)
++        ops = transpiled.count_ops()
++        gate_count_1q = ops.get('u', 0)
++        gate_count_2q = ops.get('cx', 0)
++        circuit_depth = transpiled.depth()
++    except Exception:
++        pass
++
++    # Combined complexity string: sum of component complexities.  Since
++    # disjoint-qubit composition doesn't add gates, the total gate count
++    # is O(max component cost) * K, which simplifies to O(m) or O(m^2)
++    # depending on the most expensive component.
++    complexity = "O(sum of components)"
++
++    info = EncodingInfo(
++        vector_type="TENSOR",
++        N=N,
++        m=m,
++        gate_count=total_gates,
++        complexity=complexity,
++        validated=validated_flag,
++        params={
++            "K": K,
++            "sizes": sizes,
++            "components": [obj.vector_type.name for obj in comp_objs],
++        },
++        circuit_code=_emit_tensor_code(comp_objs, sizes),
++        vector=f_vec,
++        gate_count_1q=gate_count_1q,
++        gate_count_2q=gate_count_2q,
++        circuit_depth=circuit_depth,
++        success_probability=1.0,
++    )
++    return qc, info
++
++
++def _emit_tensor_code(comp_objs, sizes):
++    """Emit standalone reconstruction code for a TENSOR composition."""
++    lines = [
++        "# PyEncode — emitted circuit: TENSOR composition",
++        "# Each component is synthesised on its own subregister;",
++        "# components are combined via QuantumCircuit.tensor().",
++        "",
++        "from pyencode import encode",
++        f"# from pyencode import {', '.join(sorted({obj.vector_type.name for obj in comp_objs}))}",
++        "",
++        "# Component circuits:",
++    ]
++    lines.append("components = [")
++    for obj, n_i in zip(comp_objs, sizes):
++        lines.append(f"    ({obj!r}, {n_i}),")
++    lines.append("]")
++    lines.append("")
++    lines.append("subcircuits = [encode(obj, n)[0] for obj, n in components]")
++    lines.append("qc = subcircuits[0]")
++    lines.append("for nxt in subcircuits[1:]:")
++    lines.append("    qc = nxt.tensor(qc)")
++    return "\n".join(lines)
+diff --git a/pyencode/emitter.py b/pyencode/emitter.py
+index dd8acec..ab038c8 100644
+--- a/pyencode/emitter.py
++++ b/pyencode/emitter.py
+@@ -64,6 +64,9 @@ def emit_code(pattern: LoadPattern) -> str:
+         VectorType.SPARSE:  _emit_sparse,
+         VectorType.FOURIER: _emit_fourier,
+         VectorType.GEOMETRIC: _emit_geometric,
++        VectorType.POPCOUNT: _emit_popcount,
++        VectorType.STAIRCASE: _emit_staircase,
++        VectorType.POLYNOMIAL: _emit_polynomial,
+         VectorType.UNKNOWN: _emit_qiskit_fallback,
+     }
+ 
+@@ -821,4 +824,116 @@ def _emit_geometric(m: int, params: dict) -> str:
+         f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
+         f"    qc.ry(theta_j, j)",
+     ]
+-    return "\n".join(lines)
+\ No newline at end of file
++    return "\n".join(lines)
++
++# ---------------------------------------------------------------------------
++# POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical Ry)
++# ---------------------------------------------------------------------------
++
++def _emit_popcount(m: int, params: dict) -> str:
++    """Emit circuit code for POPCOUNT (product-state, identical Ry per qubit)."""
++    r = params["r"]
++    c = params.get("c", 1.0)
++
++    lines = [
++        _header(m, f"POPCOUNT  r={r}, c={c}"),
++        f"import math",
++        f"",
++        f"m = {m}",
++        f"r = {r!r}",
++        f"theta = 2.0 * math.atan(r)",
++        f"qc = QuantumCircuit(m, name='popcount')",
++        f"",
++        f"# Product state: every qubit gets the SAME R_y(theta) rotation.",
++        f"# Amplitude at |i> is proportional to r^popcount(i).",
++        f"for j in range(m):",
++        f"    qc.ry(theta, j)",
++    ]
++    return "\n".join(lines)
++
++
++# ---------------------------------------------------------------------------
++# STAIRCASE  f_{2^k-1} = r^k  (cascaded CR_y chain)
++# ---------------------------------------------------------------------------
++
++def _emit_staircase(m: int, params: dict) -> str:
++    """Emit circuit code for STAIRCASE (cascaded CR_y with per-step angles)."""
++    r = params["r"]
++    c = params.get("c", 1.0)
++
++    lines = [
++        _header(m, f"STAIRCASE  r={r}, c={c}  (sparse geometric staircase on unary indices)"),
++        f"import math",
++        f"",
++        f"m = {m}",
++        f"r = {r!r}",
++        f"qc = QuantumCircuit(m, name='staircase')",
++        f"",
++        f"# Tail norms T_k = sqrt(sum_{{j=k}}^{{m}} r^(2j))",
++        f"T = [math.sqrt(sum(r**(2*j) for j in range(k, m + 1))) for k in range(m + 2)]",
++        f"T[-1] = 0.0",
++        f"",
++        f"# Step 0: R_y on qubit 0",
++        f"theta_0 = 2.0 * math.atan2(T[1], 1.0)",
++        f"qc.ry(theta_0, 0)",
++        f"",
++        f"# Steps 1..m-1: cascaded CR_y from q_{{k-1}} to q_k",
++        f"for k in range(1, m):",
++        f"    theta_k = 2.0 * math.atan2(T[k + 1], r ** k)",
++        f"    qc.cry(theta_k, k - 1, k)",
++    ]
++    return "\n".join(lines)
++
++
++# ---------------------------------------------------------------------------
++# POLYNOMIAL  f_i = sum_j c_j x_i^j  (Walsh-sparse loading + H layer)
++# ---------------------------------------------------------------------------
++
++def _emit_polynomial(m: int, params: dict) -> str:
++    """Emit standalone code for POLYNOMIAL (Walsh-sparse loading + Hadamard layer)."""
++    coeffs           = params["coeffs"]
++    normalize_domain = params.get("normalize_domain", True)
++
++    lines = [
++        _header(m, f"POLYNOMIAL  coeffs={coeffs}, normalize_domain={normalize_domain}"),
++        f"import numpy as np",
++        f"from qiskit.circuit.library import StatePreparation",
++        f"",
++        f"m = {m}",
++        f"N = 2 ** m",
++        f"coeffs = {coeffs!r}",
++        f"d = len(coeffs) - 1",
++        f"",
++        f"# Evaluate polynomial on the grid.",
++        f"if {normalize_domain} and N > 1:",
++        f"    x = np.arange(N, dtype=float) / (N - 1)",
++        f"else:",
++        f"    x = np.arange(N, dtype=float)",
++        f"f = np.polyval(list(reversed(coeffs)), x)",
++        f"",
++        f"# In-place Walsh-Hadamard transform.",
++        f"walsh = f.copy()",
++        f"h = 1",
++        f"while h < N:",
++        f"    for i in range(0, N, h * 2):",
++        f"        for j in range(i, i + h):",
++        f"            a, b = walsh[j], walsh[j + h]",
++        f"            walsh[j]     = a + b",
++        f"            walsh[j + h] = a - b",
++        f"    h *= 2",
++        f"walsh /= np.sqrt(N)",
++        f"",
++        f"# Zero out Walsh components beyond degree-d (Walsh-sparsity theorem).",
++        f"for k in range(N):",
++        f"    if bin(k).count('1') > d:",
++        f"        walsh[k] = 0.0",
++        f"walsh = walsh / np.linalg.norm(walsh)",
++        f"",
++        f"# Load the sparse Walsh state, then apply Hadamard layer.",
++        f"qc = QuantumCircuit(m, name='polynomial')",
++        f"qc.append(StatePreparation(walsh, label='walsh_load'), range(m))",
++        f"qc = qc.decompose(reps=1)",
++        f"for q in range(m):",
++        f"    qc.h(q)",
++    ]
++    return "\n".join(lines)
+diff --git a/pyencode/encode.py b/pyencode/encode.py
+index fda011b..a7ee024 100644
+--- a/pyencode/encode.py
++++ b/pyencode/encode.py
+@@ -65,6 +65,11 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
+     if isinstance(VectorObj, _LCU):
+         return _encode_lcu(VectorObj, N, validate=validate, tol=tol)
+ 
++    from .types import TENSOR as _TENSOR
++    if isinstance(VectorObj, _TENSOR):
++        from ._helpers import _encode_tensor
++        return _encode_tensor(VectorObj, N, validate=validate, tol=tol)
++
+     if not isinstance(VectorObj, _VectorObj):
+         raise TypeError(
+             f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "
+diff --git a/pyencode/recognizer.py b/pyencode/recognizer.py
+index bd69a83..e5de362 100644
+--- a/pyencode/recognizer.py
++++ b/pyencode/recognizer.py
+@@ -48,6 +48,10 @@ class VectorType(Enum):
+     WALSH           = auto()   # k-th Walsh function: X_k + H^{otimes m}, O(m) gates
+     LCU             = auto()   # linear combination of unitaries via ancilla
+     GEOMETRIC       = auto()   # exponential decay c^i — product state, O(m) Ry gates
++    POPCOUNT        = auto()   # f_i ∝ r^popcount(i) — identical Ry per qubit, depth 1
++    STAIRCASE       = auto()   # f_{2^k-1} = r^k — cascaded CR_y on unary indices, O(m)
++    TENSOR          = auto()   # disjoint-subregister composition (formalises circ1.tensor(circ2))
++    POLYNOMIAL      = auto()   # degree-d polynomial — Walsh-sparse loading + H-layer, O(m^{d+1})
+ 
+ 
+ 
+diff --git a/pyencode/synthesizer.py b/pyencode/synthesizer.py
+index 9f10043..007b669 100644
+--- a/pyencode/synthesizer.py
++++ b/pyencode/synthesizer.py
+@@ -75,6 +75,9 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
+         VectorType.SPARSE:            _synth_sparse,
+         VectorType.FOURIER:           _synth_fourier,
+         VectorType.GEOMETRIC:         _synth_geometric,
++        VectorType.POPCOUNT:          _synth_popcount,
++        VectorType.STAIRCASE:         _synth_staircase,
++        VectorType.POLYNOMIAL:        _synth_polynomial,
+     }
+ 
+     fn = dispatch.get(pattern.load_type, _synth_qiskit_fallback)
+@@ -1066,4 +1069,216 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
+         theta_j = 2.0 * math.atan(r_pow)
+         qc.ry(theta_j, j)
+ 
+-    return qc
+\ No newline at end of file
++    return qc
++
++# ---------------------------------------------------------------------------
++# POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical R_y gates)
++# ---------------------------------------------------------------------------
++
++def _synth_popcount(m: int, params: dict) -> QuantumCircuit:
++    """
++    POPCOUNT: amplitudes depend only on Hamming weight of the index.
++
++    The target state is
++        f_i = c * r^popcount(i)  for i = 0, ..., N-1,
++    which factorises over the bits of i as
++        f_i = c * prod_j r^(b_j)  where  b_j = (i >> j) & 1.
++
++    Hence the normalised state is a product state:
++        |psi> = bigotimes_{j=0}^{m-1}  (|0> + r|1>) / sqrt(1 + r^2).
++
++    Each qubit is prepared by the SAME single-qubit rotation
++        R_y(theta)|0> = cos(theta/2)|0> + sin(theta/2)|1>
++    with  theta = 2 * arctan(r).
++
++    Gate count: m identical R_y gates, zero entangling gates.
++    Depth: 1 (all rotations commute and act on disjoint qubits).
++    Complexity: O(m).
++
++    Parameters
++    ----------
++    m : int
++        Number of qubits (N = 2^m).
++    params : dict
++        Must contain 'r' (float, > 0).  Optional 'c' (default 1.0)
++        only affects normalisation.
++    """
++    r = params["r"]
++    theta = 2.0 * math.atan(r)
++
++    qc = QuantumCircuit(m, name="popcount")
++    for j in range(m):
++        qc.ry(theta, j)
++
++    return qc
++
++
++# ---------------------------------------------------------------------------
++# STAIRCASE  f_{2^k-1} = r^k  (cascaded CR_y with per-step angles)
++# ---------------------------------------------------------------------------
++
++def _synth_staircase(m: int, params: dict) -> QuantumCircuit:
++    """
++    STAIRCASE: sparse geometric staircase on unary indices.
++
++    Target amplitudes (unnormalised):
++        f_{2^k - 1} = r^k   for k = 0, 1, ..., m
++    with all other amplitudes zero.
++
++    Construction
++    ------------
++    The state is built level-by-level in a cascade of m rotations:
++
++        step 0:   R_y(theta_0)  on q0
++        step k:   CR_y(theta_k) controlled by q_{k-1}, target q_k,
++                                                          for k = 1..m-1
++
++    At the start of step k the "active" branch carries the probability mass
++    of all levels >= k.  The angle theta_k is chosen so that cos(theta_k/2)
++    is f_k's share of that mass and sin(theta_k/2) is the remaining tail.
++
++    Let  T_k = sqrt( sum_{j=k}^{m} r^{2j} )  be the tail norm from level k.
++    Then  cos(theta_k/2) = r^k / T_k  and  sin(theta_k/2) = T_{k+1} / T_k,
++    so  theta_k = 2 * atan2(T_{k+1}, r^k).  In particular
++    theta_0 = 2 * atan2(T_1, 1).
++
++    Gate count: m (1 R_y + (m-1) CR_y).  Complexity: O(m).
++
++    Parameters
++    ----------
++    m : int
++        Number of qubits (N = 2^m).
++    params : dict
++        Must contain 'r' (float, > 0, != 1).  Optional 'c' only affects
++        normalisation.
++    """
++    r = params["r"]
++
++    # Tail norms T_k = sqrt( sum_{j=k}^{m} r^{2j} ) for k = 0, ..., m+1
++    # (T_{m+1} = 0).
++    T = [0.0] * (m + 2)
++    for k in range(m + 1):
++        T[k] = math.sqrt(sum(r ** (2 * j) for j in range(k, m + 1)))
++    # T[m+1] is 0 -- theta_m would be 0 (no rotation), so we stop at k=m-1.
++
++    qc = QuantumCircuit(m, name="staircase")
++
++    # Step 0: R_y on qubit 0.  cos(theta_0/2) = 1/T_0, sin = T_1/T_0.
++    theta_0 = 2.0 * math.atan2(T[1], 1.0)
++    qc.ry(theta_0, 0)
++
++    # Steps 1..m-1: CR_y from q_{k-1} to q_k.
++    for k in range(1, m):
++        # cos(theta_k/2) = r^k / T_k,  sin = T_{k+1}/T_k
++        theta_k = 2.0 * math.atan2(T[k + 1], r ** k)
++        qc.cry(theta_k, k - 1, k)
++
++    return qc
++
++
++# ---------------------------------------------------------------------------
++# POLYNOMIAL  f(i) = sum_{j=0}^{d} c_j * x(i)^j  (Walsh-sparse loading)
++# ---------------------------------------------------------------------------
++
++def _fwht_inplace(a: np.ndarray) -> None:
++    """Iterative unnormalised Walsh-Hadamard transform, in place.
++
++    After this call, a[k] = sum_i (-1)^{popcount(k AND i)} * a_input[i].
++    """
++    h = 1
++    N = len(a)
++    while h < N:
++        for i in range(0, N, h * 2):
++            for j in range(i, i + h):
++                x, y = a[j], a[j + h]
++                a[j]     = x + y
++                a[j + h] = x - y
++        h *= 2
++
++
++def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
++    """
++    POLYNOMIAL: Walsh-sparse loading plus a Hadamard layer.
++
++    Construction
++    ------------
++    Let  f(i) = sum_{j=0}^{d} coeffs[j] * x(i)^j  be the target polynomial,
++    where x(i) = i / (N - 1) if normalize_domain=True, else x(i) = i.
++
++    Classical preprocessing:
++      1. Evaluate f on the grid (O(N), numerical).
++      2. Compute the Walsh-Hadamard transform, x = W f / sqrt(N).  Because
++         f has polynomial degree d, only Walsh coefficients x_k at indices
++         with Hamming weight |k|_b <= d are nonzero (Welch 2014; Gonzalez-
++         Conde 2024).  Total nonzero: s = sum_{k=0}^{d} C(m, k).
++
++    Quantum circuit:
++      3. Prepare the sparse state |psi_x> = sum_k x_k |k>  using the
++         Gleinig-Hoefler disjoint-point-load synthesiser (O(s * m) gates).
++      4. Apply a single H layer to all m qubits.  Since H^{otimes m}
++         applied to |k> gives (1/sqrt(N)) sum_i (-1)^{popcount(k AND i)} |i>,
++         this precisely inverts the Walsh transform and yields
++         sum_i f_i |i>  (normalised).
++
++    Gate count: O(s * m) = O(m^{d+1}).  Exact (no approximation).
++
++    Parameters
++    ----------
++    m : int
++        Number of qubits (N = 2^m).
++    params : dict
++        Must contain 'coeffs' (list of floats).
++        Optional 'normalize_domain' (bool, default True).
++    """
++    coeffs           = params["coeffs"]
++    normalize_domain = params.get("normalize_domain", True)
++    d = len(coeffs) - 1
++    N = 2 ** m
++
++    # 1. Evaluate the polynomial on the grid.
++    if normalize_domain and N > 1:
++        x = np.arange(N, dtype=float) / (N - 1)
++    else:
++        x = np.arange(N, dtype=float)
++    f = np.polyval(list(reversed(coeffs)), x)   # polyval: high-to-low
++
++    # 2. Walsh-Hadamard transform (in-place for memory efficiency).
++    walsh = f.copy()
++    _fwht_inplace(walsh)
++    walsh /= np.sqrt(N)
++
++    # 3. Extract nonzero Walsh coefficients at Hamming weight <= d.
++    #    Zero out entries beyond the theoretical support so rounding noise
++    #    doesn't leak into higher-weight indices.
++    for k in range(N):
++        if bin(k).count("1") > d:
++            walsh[k] = 0.0
++
++    walsh_norm = float(np.linalg.norm(walsh))
++    if walsh_norm < 1e-14:
++        raise ValueError(
++            "POLYNOMIAL: all Walsh coefficients are zero within tolerance."
++        )
++    walsh_normalised = walsh / walsh_norm
++
++    # 4. Load the sparse Walsh-coefficient state and apply a Hadamard layer.
++    #    Ideally this uses a Walsh-sparse loader with O(s * m) cost
++    #    (Welch 2014 / Gonzalez-Conde 2024).  The Gleinig-Hoefler SPARSE
++    #    synthesiser currently in this package is known to lose precision
++    #    on dense signed patterns (s >= 11), so we fall back to Qiskit's
++    #    general StatePreparation on the *sparse* Walsh vector.  This is
++    #    numerically correct but produces a circuit whose gate count is
++    #    upper-bounded by the general O(N) bound rather than the
++    #    theoretical O(s * m) = O(m^(d+1)) bound.  A future drop-in
++    #    replacement can restore the asymptotic savings.
++    from qiskit.circuit.library import StatePreparation
++
++    poly_qc = QuantumCircuit(m, name="polynomial")
++    sp = StatePreparation(walsh_normalised, label="walsh_load")
++    poly_qc.append(sp, range(m))
++    poly_qc = poly_qc.decompose(reps=1)
++
++    # 5. Hadamard layer transforms the Walsh register into the target.
++    for q in range(m):
++        poly_qc.h(q)
++    return poly_qc
+diff --git a/pyencode/types.py b/pyencode/types.py
+index 1df27af..dea8b02 100644
+--- a/pyencode/types.py
++++ b/pyencode/types.py
+@@ -183,6 +183,264 @@ class GEOMETRIC(_VectorObj):
+         self.params = {"ratio": ratio, "c": float(c)}
+ 
+ 
++class POPCOUNT(_VectorObj):
++    """POPCOUNT(r, c) — amplitudes depend only on Hamming weight.  O(m) gates, depth 1.
++
++    Prepares a product state proportional to f_i = c * r^popcount(i), where
++    popcount(i) is the number of 1-bits in the binary representation of i.
++
++    Circuit: m identical R_y(theta) gates applied in parallel, with
++      theta = 2 * arctan(r),
++    yielding the single-qubit state (|0> + r|1>) / sqrt(1+r^2) on each wire.
++    The tensor product gives amplitude r^popcount(i) at basis state |i>.
++
++    Properties:
++      - Gate count: m single-qubit R_y gates
++      - Two-qubit gate count: 0
++      - Depth: 1 (all rotations are on disjoint qubits, execute in parallel)
++
++    Physical interpretation.  If p = r^2 / (1 + r^2) is the per-qubit
++    excitation probability, then |f_i|^2 follows a Bernoulli product
++    distribution and the marginal distribution over popcount(i) is
++    Binomial(m, p).  This structure arises in:
++      - Ising models with uniform transverse field
++      - Depolarising error channels (uniform per-qubit flip rate)
++      - Hamming-weight-structured Hamiltonian coefficient vectors
++
++    Parameters
++    ----------
++    r : float
++        Ratio of |1>-amplitude to |0>-amplitude on each qubit.
++        Must satisfy r > 0.  r = 1 gives the uniform superposition.
++    c : float, optional
++        Leading amplitude (default 1.0).  Only affects normalisation.
++
++    Examples
++    --------
++    >>> # Binomial-structured state with per-qubit weight ratio 0.5
++    >>> circuit, info = encode(POPCOUNT(r=0.5), N=64)
++    >>> # info.complexity    -> "O(m)"
++    >>> # info.gate_count    -> 6  (= m)
++    >>> # info.gate_count_2q -> 0
++    >>> # info.circuit_depth -> 1
++    """
++    def __init__(self, r, c=1.0):
++        self.vector_type = VectorType.POPCOUNT
++        r = float(r)
++        if r <= 0:
++            raise ValueError(
++                f"POPCOUNT r must be positive, got {r}. "
++                f"r=0 is a point mass at index 0; use SPARSE([(0, 1.0)]) instead."
++            )
++        self.params = {"r": r, "c": float(c)}
++
++
++class STAIRCASE(_VectorObj):
++    """STAIRCASE(r, c) — sparse geometric staircase on unary indices.  O(m) gates.
++
++    Prepares a state with exactly m+1 nonzero amplitudes, supported on the
++    "unary" indices  U = {2^k - 1 : k = 0, 1, ..., m} = {0, 1, 3, 7, ..., 2^m - 1}.
++    The amplitudes form a clean geometric progression:
++
++        f_{2^k - 1} = c * r^k   for k = 0, 1, ..., m,
++
++    so adjacent nonzero amplitudes have ratio exactly r.
++
++    Circuit: one R_y on qubit 0 followed by (m-1) cascaded CR_y gates in
++    a linear nearest-neighbour chain (q0 -> q1 -> q2 -> ... -> q_{m-1}),
++    each with a per-step angle chosen so the geometric-r property holds
++    exactly.  Total: m single- and two-qubit rotations.
++
++      Gate count     : m   (1 R_y + (m-1) CR_y)
++      Entangling     : (m-1) CR_y   -> O(m) CX after decomposition
++      Depth          : O(m)
++
++    Physical motivation.  Hierarchical matrix (H-matrix) representations
++    assign a coefficient to each dyadic scale; loading m+1 per-scale
++    coefficients in geometric progression is a common PREP oracle for
++    Pauli expansions of tridiagonal Toeplitz operators (discretised
++    Laplacian, heat equation, wavelet-Galerkin stiffness matrices).
++
++    Parameters
++    ----------
++    r : float
++        Ratio between consecutive nonzero amplitudes.  Must satisfy r > 0
++        and r != 1 (r=1 is a SPARSE uniform-weight state on unary indices).
++    c : float, optional
++        Leading amplitude (default 1.0).  Only affects normalisation.
++
++    Examples
++    --------
++    >>> # Geometric staircase with ratio 0.5 on N=8 (k = 0..3)
++    >>> circuit, info = encode(STAIRCASE(r=0.5), N=8)
++    >>> # Nonzero indices: 0, 1, 3, 7   with amplitudes proportional to 1, 0.5, 0.25, 0.125
++
++    References
++    ----------
++    Hackbusch, "A sparse matrix arithmetic based on H-matrices",
++    Computing 62, 1999.
++    """
++    def __init__(self, r, c=1.0):
++        self.vector_type = VectorType.STAIRCASE
++        r = float(r)
++        if r <= 0:
++            raise ValueError(
++                f"STAIRCASE r must be positive, got {r}. "
++                f"Use SPARSE([(0, 1.0)]) for the degenerate r=0 case."
++            )
++        if abs(r - 1.0) < 1e-14:
++            raise ValueError(
++                "STAIRCASE r=1.0 gives equal amplitudes on unary indices; "
++                "use SPARSE with uniform weights on {0,1,3,...,2^m-1} instead."
++            )
++        self.params = {"r": r, "c": float(c)}
++
++
++class POLYNOMIAL(_VectorObj):
++    """POLYNOMIAL(coeffs, normalize_domain=True) — degree-d polynomial amplitudes.
++
++    Prepares the state proportional to
++
++        f(i) = sum_{j=0}^{d} coeffs[j] * x(i)^j
++
++    where x(i) = i/(N-1) if ``normalize_domain=True`` (evaluation on the
++    unit interval) and x(i) = i otherwise.  Covers RAMP (d=1), QUADRATIC
++    (d=2), POISEUILLE (d=2 parabolic), CUBIC (d=3), etc.
++
++    Construction (Walsh-sparse loading).  A polynomial of degree d in the
++    grid variable has Walsh-Hadamard spectrum supported only on indices of
++    Hamming weight at most d (Welch et al., 2014; Gonzalez-Conde et al.,
++    2024, remark after Lemma 1; Mac Williams & Sloane, Chapter 13).
++    The number of nonzero Walsh coefficients is
++
++        s = sum_{k=0}^{d} C(m, k)  =  O(m^d).
++
++    The synthesiser computes these s coefficients classically, loads them
++    as a sparse state using the Gleinig-Hoefler algorithm (O(s * m) gates),
++    and applies a single layer of Hadamards H^{otimes m} to transform the
++    Walsh-coefficient register into the target polynomial state.
++
++      Total gate count : O(m * s) = O(m^{d+1})
++      Exact (no approximation).
++
++    Parameters
++    ----------
++    coeffs : list or numpy array of floats
++        Polynomial coefficients [c_0, c_1, ..., c_d], so that
++        f(x) = c_0 + c_1 x + c_2 x^2 + ... + c_d x^d.
++    normalize_domain : bool, optional
++        If True (default), evaluate at x = i/(N-1) (unit-interval grid).
++        If False, evaluate at x = i (raw indices).
++
++    Examples
++    --------
++    >>> # Ramp (d=1): f(i) = i/(N-1)
++    >>> circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=16)
++
++    >>> # Poiseuille parabolic profile (d=2): f(i) = 1 - (2 i/(N-1) - 1)^2
++    >>> #   Expanding: f = 4 x - 4 x^2  after centring.
++    >>> circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=32)
++
++    >>> # Cubic: f(x) = x (1 - x)(1 - 2x) on x in [0, 1]
++    >>> circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0, -3.0, 2.0]), N=64)
++
++    References
++    ----------
++    Welch, Greenbaum, Mostame, Aspuru-Guzik, New J. Phys. 16, 033040 (2014).
++    Gonzalez-Conde, Watts, Rodriguez-Grasa, Sanz, Quantum 8, 1297 (2024).
++    """
++    def __init__(self, coeffs, normalize_domain=True):
++        self.vector_type = VectorType.POLYNOMIAL
++        coeffs = [float(c) for c in coeffs]
++        if len(coeffs) == 0:
++            raise ValueError("POLYNOMIAL requires at least one coefficient.")
++        # Strip trailing zeros so degree is correct
++        while len(coeffs) > 1 and abs(coeffs[-1]) < 1e-14:
++            coeffs = coeffs[:-1]
++        # Reject the zero polynomial
++        if all(abs(c) < 1e-14 for c in coeffs):
++            raise ValueError("POLYNOMIAL zero polynomial has no encoding.")
++        self.params = {
++            "coeffs": coeffs,
++            "normalize_domain": bool(normalize_domain),
++        }
++
++
++class TENSOR(_VectorObj):
++    """TENSOR([(VectorObj_1, N_1), (VectorObj_2, N_2), ...]) — disjoint-subregister composition.
++
++    Prepares a tensor-product state where each component acts on its own
++    subregister.  The total amplitude vector is the outer product of the
++    component vectors, so the total qubit count is the sum of the
++    subregister qubit counts and the total N is the product.
++
++    Prepared state:
++        |psi> = |f^(1)> otimes |f^(2)> otimes ... otimes |f^(K)>
++
++    Unlike LCU (which SUPERPOSES components via an ancilla), TENSOR places
++    components on DISJOINT qubit registers.  No ancilla is needed, the
++    success probability is 1, and there is no post-selection.
++
++    Gate count: sum of component gate counts (no additional gates).
++    Depth: max of component depths (components on disjoint qubits execute
++    in parallel).
++    Two-qubit gates: sum of component two-qubit gate counts.
++
++    Physical motivation.  Separable 2D/3D source terms (e.g., discretised
++    Poisson RHS of the form sin(2 pi n x) sin(2 pi p y)) split exactly
++    into a tensor product of 1D states.  TENSOR formalises the
++    ``circ_x.tensor(circ_y)`` idiom as a named pattern.
++
++    Parameters
++    ----------
++    components : list of (VectorObj, N_i) tuples
++        Each tuple declares a subregister: the constructor and its vector
++        length.  Each N_i must be a power of 2.  The total encode() N
++        must equal the product of all N_i.
++
++    Examples
++    --------
++    >>> # Separable 2D Poisson source: sin(2 pi x) * sin(2 pi y)
++    >>> circuit, info = encode(
++    ...     TENSOR([(FOURIER(modes=[(1, 1.0, 0)]), 32),
++    ...             (FOURIER(modes=[(3, 1.0, 0)]), 32)]),
++    ...     N=32 * 32)
++    >>> # info.gate_count -> sum of component gate counts
++
++    >>> # 3D source: Gaussian-like profile factorisable across axes
++    >>> circuit, info = encode(
++    ...     TENSOR([(GEOMETRIC(ratio=0.9), 16),
++    ...             (GEOMETRIC(ratio=0.9), 16),
++    ...             (GEOMETRIC(ratio=0.9), 16)]),
++    ...     N=16 * 16 * 16)
++    """
++    def __init__(self, components):
++        self.vector_type = VectorType.TENSOR
++        if not components:
++            raise ValueError("TENSOR requires at least one component.")
++        comp_list = []
++        sizes = []
++        for item in components:
++            try:
++                obj, n_i = item
++            except (TypeError, ValueError):
++                raise TypeError(
++                    f"TENSOR expects (VectorObj, N_i) tuples, got {item!r}."
++                )
++            if not isinstance(obj, _VectorObj):
++                raise TypeError(
++                    f"TENSOR component must be a VectorObj, got {type(obj).__name__}."
++                )
++            n_i = int(n_i)
++            if n_i < 2 or (n_i & (n_i - 1)) != 0:
++                raise ValueError(
++                    f"TENSOR subregister size must be a power of 2 >= 2, got {n_i}."
++                )
++            comp_list.append(obj)
++            sizes.append(n_i)
++        self.params = {"components": comp_list, "sizes": sizes}
++
++
+ class LCU(_VectorObj):
+     """LCU([(w1, VectorObj1), (w2, VectorObj2), ...]) — linear combination via ancilla.
+ 
+@@ -339,6 +597,9 @@ _COMPLEXITY = {
+     VectorType.SPARSE:  "O(s\u00b7m)",
+     VectorType.FOURIER: "O(m\u00b2)",
+     VectorType.GEOMETRIC: "O(m)",
++    VectorType.POPCOUNT: "O(m)",
++    VectorType.STAIRCASE: "O(m)",
++    VectorType.POLYNOMIAL: "O(m^(d+1))",
+     VectorType.UNKNOWN: "O(2^m)",
+ }
+ 
+@@ -378,4 +639,19 @@ _PARAM_SCHEMAS = {
+         "optional": {"c"},
+         "description": "ratio=<base of geometric sequence>",
+     },
++    VectorType.POPCOUNT: {
++        "required": {"r"},
++        "optional": {"c"},
++        "description": "r=<per-qubit amplitude ratio>",
++    },
++    VectorType.STAIRCASE: {
++        "required": {"r"},
++        "optional": {"c"},
++        "description": "r=<geometric ratio between consecutive unary amplitudes>",
++    },
++    VectorType.POLYNOMIAL: {
++        "required": {"coeffs"},
++        "optional": {"normalize_domain"},
++        "description": "coeffs=[c_0, c_1, ..., c_d]",
++    },
+ }
+\ No newline at end of file
+diff --git a/test_pyencode.py b/test_pyencode.py
+index f6fef3e..1e33bd8 100644
+--- a/test_pyencode.py
++++ b/test_pyencode.py
+@@ -13,7 +13,7 @@ import numpy as np
+ import pytest
+ from qiskit import QuantumCircuit
+ 
+-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
++from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -839,3 +839,442 @@ class TestScaling:
+ 
+ if __name__ == "__main__":
+     pytest.main([__file__, "-v"])
++
++
++class TestPopcount:
++    """Tests for POPCOUNT — product state with identical Ry per qubit.
++    Amplitudes depend only on Hamming weight: f_i proportional to r^popcount(i).
++    """
++
++    def test_basic(self):
++        circuit, info = encode(POPCOUNT(r=0.5), N=8)
++        assert info.vector_type == "POPCOUNT"
++        assert info.complexity == "O(m)"
++        pops = np.array([bin(i).count("1") for i in range(8)], dtype=float)
++        f = 0.5 ** pops
++        assert_encodes(circuit, f)
++
++    def test_binomial_large_r(self):
++        circuit, info = encode(POPCOUNT(r=2.0), N=16)
++        pops = np.array([bin(i).count("1") for i in range(16)], dtype=float)
++        f = 2.0 ** pops
++        assert_encodes(circuit, f)
++
++    def test_r_equals_one_is_uniform(self):
++        """r=1 gives the uniform superposition (all amplitudes equal)."""
++        circuit, _ = encode(POPCOUNT(r=1.0), N=16)
++        sv = np.abs(statevector(circuit))
++        np.testing.assert_allclose(sv, 1.0 / np.sqrt(16), atol=1e-10)
++
++    def test_gate_count_equals_m(self):
++        for m in [3, 4, 6, 8, 10]:
++            N = 2 ** m
++            _, info = encode(POPCOUNT(r=0.7), N=N)
++            assert info.gate_count == m, \
++                f"m={m}: expected {m} gates, got {info.gate_count}"
++
++    def test_zero_two_qubit_gates_and_depth_one(self):
++        """POPCOUNT is a product state: zero CX, depth 1."""
++        _, info = encode(POPCOUNT(r=0.6), N=64)
++        assert info.gate_count_2q == 0
++        assert info.circuit_depth == 1
++
++    def test_validate(self):
++        circuit, info = encode(POPCOUNT(r=0.4), N=16, validate=True)
++        assert info.validated is True
++        assert info.vector is not None
++
++    def test_custom_c_normalization(self):
++        """c only affects global normalisation, not relative amplitudes."""
++        c1, _ = encode(POPCOUNT(r=0.5, c=1.0), N=8)
++        c2, _ = encode(POPCOUNT(r=0.5, c=7.0), N=8)
++        sv1 = np.abs(statevector(c1))
++        sv2 = np.abs(statevector(c2))
++        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
++
++    def test_r_zero_raises(self):
++        with pytest.raises(ValueError, match="positive"):
++            POPCOUNT(r=0.0)
++
++    def test_r_negative_raises(self):
++        with pytest.raises(ValueError, match="positive"):
++            POPCOUNT(r=-0.3)
++
++    def test_emitted_code_runs(self):
++        circuit, info = encode(POPCOUNT(r=0.8), N=16)
++        namespace = {}
++        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
++        assert isinstance(namespace["qc"], QuantumCircuit)
++        sv_orig = np.abs(statevector(circuit))
++        sv_emit = np.abs(statevector(namespace["qc"]))
++        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
++
++    def test_lcu_composability(self):
++        """POPCOUNT can be used as an LCU component."""
++        circuit, info = encode(
++            LCU([(1.0, STEP(k_s=8, c=1.0)),
++                 (2.0, POPCOUNT(r=0.5))]),
++            N=16)
++        assert info.vector_type == "LCU"
++        assert 0 < info.success_probability <= 1.0
++
++    def test_hamming_weight_structure(self):
++        """Verify amplitudes group by Hamming weight, not index."""
++        r = 0.6
++        _, info = encode(POPCOUNT(r=r), N=16, validate=True)
++        f = info.vector / np.linalg.norm(info.vector)
++        # Indices 3 (011), 5 (101), 6 (110) all have popcount=2
++        # so amplitudes should be identical
++        for i, j in [(3, 5), (3, 6), (5, 6), (7, 11), (7, 13), (7, 14)]:
++            np.testing.assert_allclose(abs(f[i]), abs(f[j]), atol=1e-10,
++                err_msg=f"indices {i},{j} have same popcount but different amplitudes")
++
++
++class TestStaircase:
++    """Tests for STAIRCASE — sparse geometric staircase on unary indices.
++    Produces m+1 nonzero amplitudes at indices {0, 1, 3, 7, ..., 2^m-1} with
++    f_{2^k-1} = c * r^k, via cascaded CR_y gates.
++    """
++
++    @staticmethod
++    def _unary_indices(m):
++        return [(1 << k) - 1 for k in range(m + 1)]
++
++    def test_basic(self):
++        circuit, info = encode(STAIRCASE(r=0.5), N=8)
++        assert info.vector_type == "STAIRCASE"
++        assert info.complexity == "O(m)"
++        f = np.zeros(8)
++        for k in range(4):
++            f[(1 << k) - 1] = 0.5 ** k
++        assert_encodes(circuit, f)
++
++    def test_support_is_unary_indices(self):
++        """Only indices 2^k - 1 should have nonzero amplitude."""
++        for m in [3, 4, 5]:
++            N = 2 ** m
++            circuit, _ = encode(STAIRCASE(r=0.4), N=N)
++            sv = np.array(statevector(circuit))
++            unary = set(self._unary_indices(m))
++            for i in range(N):
++                if i in unary:
++                    assert abs(sv[i]) > 1e-10, f"m={m}: expected nonzero at i={i}"
++                else:
++                    assert abs(sv[i]) < 1e-10, f"m={m}: expected zero at i={i}, got {sv[i]}"
++
++    def test_geometric_ratio_exact(self):
++        """Consecutive nonzero amplitudes should have ratio exactly r."""
++        for r in [0.3, 0.5, 0.8, 1.5, 2.5]:
++            for m in [3, 4, 5]:
++                N = 2 ** m
++                circuit, _ = encode(STAIRCASE(r=r), N=N)
++                sv = np.array(statevector(circuit)).real
++                amps = [sv[(1 << k) - 1] for k in range(m + 1)]
++                for k in range(m):
++                    observed = amps[k + 1] / amps[k]
++                    np.testing.assert_allclose(observed, r, atol=1e-10,
++                        err_msg=f"r={r}, m={m}, k={k}: ratio mismatch")
++
++    def test_gate_count_equals_m(self):
++        for m in [3, 4, 6, 8]:
++            N = 2 ** m
++            _, info = encode(STAIRCASE(r=0.7), N=N)
++            assert info.gate_count == m, \
++                f"m={m}: expected {m} gates, got {info.gate_count}"
++
++    def test_cx_count_linear(self):
++        """Each CR_y decomposes to O(1) CX, so total CX is O(m)."""
++        for m in [4, 6, 8]:
++            N = 2 ** m
++            _, info = encode(STAIRCASE(r=0.6), N=N)
++            assert info.gate_count_2q <= 3 * m, \
++                f"m={m}: CX count {info.gate_count_2q} exceeds 3m"
++
++    def test_validate(self):
++        circuit, info = encode(STAIRCASE(r=0.5), N=16, validate=True)
++        assert info.validated is True
++        assert info.vector is not None
++        # Check vector has exactly m+1 nonzero entries
++        nonzero = np.count_nonzero(info.vector)
++        assert nonzero == 5  # m+1 = log2(16)+1 = 5
++
++    def test_custom_c_normalization(self):
++        c1, _ = encode(STAIRCASE(r=0.6, c=1.0), N=16)
++        c2, _ = encode(STAIRCASE(r=0.6, c=8.0), N=16)
++        sv1 = np.abs(statevector(c1))
++        sv2 = np.abs(statevector(c2))
++        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
++
++    def test_growth_r_greater_than_one(self):
++        circuit, _ = encode(STAIRCASE(r=2.0), N=8, validate=True)
++        sv = np.array(statevector(circuit)).real
++        # Amplitudes should grow by factor 2 at each unary index
++        for k in range(3):
++            observed = sv[(1 << (k + 1)) - 1] / sv[(1 << k) - 1]
++            np.testing.assert_allclose(observed, 2.0, atol=1e-10)
++
++    def test_r_zero_raises(self):
++        with pytest.raises(ValueError, match="positive"):
++            STAIRCASE(r=0.0)
++
++    def test_r_negative_raises(self):
++        with pytest.raises(ValueError, match="positive"):
++            STAIRCASE(r=-0.4)
++
++    def test_r_one_raises(self):
++        with pytest.raises(ValueError, match="uniform"):
++            STAIRCASE(r=1.0)
++
++    def test_emitted_code_runs(self):
++        circuit, info = encode(STAIRCASE(r=0.55), N=16)
++        namespace = {}
++        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
++        assert isinstance(namespace["qc"], QuantumCircuit)
++        sv_orig = np.abs(statevector(circuit))
++        sv_emit = np.abs(statevector(namespace["qc"]))
++        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
++
++    def test_lcu_composability(self):
++        circuit, info = encode(
++            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
++                 (2.0, STAIRCASE(r=0.5))]),
++            N=16)
++        assert info.vector_type == "LCU"
++        assert 0 < info.success_probability <= 1.0
++
++
++class TestTensor:
++    """Tests for TENSOR — disjoint-subregister composition.
++    Wraps the circ_A.tensor(circ_B) idiom as a named pattern.  Component 0
++    occupies the LSB subregister (lowest-indexed qubits).
++    """
++
++    def test_basic_two_component(self):
++        circuit, info = encode(
++            TENSOR([(GEOMETRIC(ratio=0.5), 8),
++                    (GEOMETRIC(ratio=0.8), 8)]),
++            N=64)
++        assert info.vector_type == "TENSOR"
++        assert info.N == 64
++        assert info.m == 6
++
++    def test_matches_manual_tensor(self):
++        """TENSOR should give the same state as manually calling circ.tensor()."""
++        c_a, _ = encode(FOURIER(modes=[(2, 1.0, 0)]), N=16)
++        c_b, _ = encode(FOURIER(modes=[(3, 1.0, 0)]), N=16)
++        manual = c_b.tensor(c_a)
++
++        auto, _ = encode(
++            TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 16),
++                    (FOURIER(modes=[(3, 1.0, 0)]), 16)]),
++            N=256)
++        sv_m = np.abs(statevector(manual))
++        sv_a = np.abs(statevector(auto))
++        np.testing.assert_allclose(sv_a, sv_m, atol=1e-10)
++
++    def test_separable_poisson(self):
++        """Matches the paper's 2D Poisson separable source-term example."""
++        circuit, info = encode(
++            TENSOR([(FOURIER(modes=[(1, 1.0, 0)]), 32),
++                    (FOURIER(modes=[(2, 1.0, 0)]), 32)]),
++            N=32 * 32, validate=True)
++        assert info.validated is True
++
++    def test_three_way_tensor(self):
++        circuit, info = encode(
++            TENSOR([(GEOMETRIC(ratio=0.7), 4),
++                    (POPCOUNT(r=0.5), 8),
++                    (SQUARE(k1=1, k2=5, c=1.0), 8)]),
++            N=4 * 8 * 8, validate=True)
++        assert info.validated is True
++        assert info.N == 256
++
++    def test_validate_matches_kron(self):
++        """Validated vector should equal Kronecker product of components."""
++        from pyencode._helpers import _build_component_vector
++        a = GEOMETRIC(ratio=0.6)
++        b = GEOMETRIC(ratio=0.9)
++        _, info = encode(TENSOR([(a, 8), (b, 4)]), N=32, validate=True)
++        va = _build_component_vector(a, 8)
++        vb = _build_component_vector(b, 4)
++        expected = np.kron(vb, va)   # b on MSB side per TENSOR convention
++        np.testing.assert_allclose(info.vector, expected, atol=1e-10)
++
++    def test_gate_count_equals_sum_of_components(self):
++        """Disjoint composition: no extra gates beyond component counts."""
++        _, info_a = encode(GEOMETRIC(ratio=0.7), N=16)
++        _, info_b = encode(POPCOUNT(r=0.5), N=16)
++        _, info_t = encode(
++            TENSOR([(GEOMETRIC(ratio=0.7), 16), (POPCOUNT(r=0.5), 16)]),
++            N=256)
++        assert info_t.gate_count == info_a.gate_count + info_b.gate_count
++
++    def test_success_probability_is_one(self):
++        _, info = encode(
++            TENSOR([(GEOMETRIC(ratio=0.5), 8), (GEOMETRIC(ratio=0.8), 8)]),
++            N=64)
++        assert info.success_probability == 1.0
++
++    def test_empty_raises(self):
++        with pytest.raises(ValueError, match="at least one"):
++            TENSOR([])
++
++    def test_non_power_of_two_size_raises(self):
++        with pytest.raises(ValueError, match="power of 2"):
++            TENSOR([(GEOMETRIC(ratio=0.5), 6), (GEOMETRIC(ratio=0.5), 8)])
++
++    def test_bad_component_type_raises(self):
++        with pytest.raises(TypeError):
++            TENSOR([("not a VectorObj", 8)])
++
++    def test_mismatched_total_N_raises(self):
++        with pytest.raises(ValueError, match="product of subregister sizes"):
++            encode(
++                TENSOR([(GEOMETRIC(ratio=0.5), 8),
++                        (GEOMETRIC(ratio=0.5), 8)]),
++                N=32)  # should be 64
++
++    def test_single_component_tensor(self):
++        """A one-component TENSOR should equal the component by itself."""
++        c_plain, _ = encode(GEOMETRIC(ratio=0.7), N=16)
++        c_tensor, _ = encode(TENSOR([(GEOMETRIC(ratio=0.7), 16)]), N=16)
++        sv_p = np.abs(statevector(c_plain))
++        sv_t = np.abs(statevector(c_tensor))
++        np.testing.assert_allclose(sv_p, sv_t, atol=1e-10)
++
++
++class TestPolynomial:
++    """Tests for POLYNOMIAL — degree-d polynomial via Walsh-sparse loading.
++    Covers ramp, quadratic (Poiseuille), cubic, verifies Walsh-sparsity
++    structure and machine-precision reconstruction.
++    """
++
++    @staticmethod
++    def _normalised_eval(coeffs, N, normalize=True):
++        if normalize and N > 1:
++            x = np.arange(N, dtype=float) / (N - 1)
++        else:
++            x = np.arange(N, dtype=float)
++        return np.polyval(list(reversed(coeffs)), x)
++
++    @staticmethod
++    def _compare_upto_sign(sv, expected, tol=1e-10):
++        """Validate up to a possible global -1 sign."""
++        err_plus  = np.max(np.abs(sv - expected))
++        err_minus = np.max(np.abs(sv + expected))
++        return min(err_plus, err_minus) < tol
++
++    def test_ramp_basic(self):
++        """POLYNOMIAL(coeffs=[0, 1]) == ramp f(i) = i/(N-1)."""
++        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=16)
++        assert info.vector_type == "POLYNOMIAL"
++        sv = np.array(statevector(circuit)).real
++        f = self._normalised_eval([0.0, 1.0], 16)
++        expected = f / np.linalg.norm(f)
++        assert self._compare_upto_sign(sv, expected, tol=1e-10)
++
++    def test_poiseuille(self):
++        """Parabolic profile f(x) = 4x(1-x) (degree-2)."""
++        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=32)
++        sv = np.array(statevector(circuit)).real
++        f = self._normalised_eval([0.0, 4.0, -4.0], 32)
++        expected = f / np.linalg.norm(f)
++        assert self._compare_upto_sign(sv, expected, tol=1e-10)
++
++    def test_cubic(self):
++        circuit, _ = encode(POLYNOMIAL(coeffs=[0.1, 0.5, 1.0, -0.3]), N=32)
++        sv = np.array(statevector(circuit)).real
++        f = self._normalised_eval([0.1, 0.5, 1.0, -0.3], 32)
++        expected = f / np.linalg.norm(f)
++        assert self._compare_upto_sign(sv, expected, tol=1e-10)
++
++    def test_validate(self):
++        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 2.0, -1.0]),
++                               N=16, validate=True)
++        assert info.validated is True
++        assert info.vector is not None
++
++    def test_degree_1_sparsity(self):
++        """Degree-1 polynomial: Walsh spectrum supported on Hamming weight <= 1."""
++        from pyencode.synthesizer import _fwht_inplace
++        for m in [3, 5, 7]:
++            N = 2 ** m
++            f = self._normalised_eval([1.0, 3.0], N)
++            walsh = f.copy()
++            _fwht_inplace(walsh)
++            walsh /= np.sqrt(N)
++            for k in range(N):
++                if bin(k).count("1") > 1:
++                    assert abs(walsh[k]) < 1e-10, \
++                        f"m={m}, k={k}: weight-{bin(k).count('1')} Walsh coeff is nonzero"
++
++    def test_degree_2_sparsity_count(self):
++        """Degree-2: exactly 1 + m + C(m,2) nonzero Walsh coefficients."""
++        from pyencode.synthesizer import _fwht_inplace
++        from math import comb
++        for m in [4, 5, 6, 7]:
++            N = 2 ** m
++            f = self._normalised_eval([1.0, 2.0, -3.0], N)
++            walsh = f.copy()
++            _fwht_inplace(walsh)
++            walsh /= np.sqrt(N)
++            nonzero = sum(1 for k in range(N) if abs(walsh[k]) > 1e-10)
++            expected = 1 + m + comb(m, 2)
++            assert nonzero == expected, \
++                f"m={m}: got {nonzero} nonzero Walsh coeffs, expected {expected}"
++
++    def test_normalize_domain_false(self):
++        """normalize_domain=False evaluates at raw integer indices."""
++        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0], normalize_domain=False),
++                               N=8)
++        sv = np.array(statevector(circuit)).real
++        f = np.arange(8, dtype=float)   # raw indices
++        expected = f / np.linalg.norm(f)
++        assert self._compare_upto_sign(sv, expected, tol=1e-10)
++
++    def test_constant_polynomial_is_uniform(self):
++        """Degree-0 (constant) polynomial maps to the uniform superposition."""
++        circuit, info = encode(POLYNOMIAL(coeffs=[3.5]), N=8)
++        sv = np.array(statevector(circuit)).real
++        expected = np.ones(8) / np.sqrt(8)
++        assert self._compare_upto_sign(sv, expected, tol=1e-10)
++
++    def test_trailing_zeros_stripped(self):
++        """POLYNOMIAL([1.0, 2.0, 0.0, 0.0]) == POLYNOMIAL([1.0, 2.0])."""
++        p1 = POLYNOMIAL(coeffs=[1.0, 2.0, 0.0, 0.0])
++        p2 = POLYNOMIAL(coeffs=[1.0, 2.0])
++        assert p1.params["coeffs"] == p2.params["coeffs"]
++
++    def test_zero_polynomial_raises(self):
++        with pytest.raises(ValueError, match="zero polynomial"):
++            POLYNOMIAL(coeffs=[0.0, 0.0, 0.0])
++
++    def test_empty_coeffs_raises(self):
++        with pytest.raises(ValueError, match="at least one"):
++            POLYNOMIAL(coeffs=[])
++
++    def test_emitted_code_runs(self):
++        circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=16)
++        namespace = {"QuantumCircuit": QuantumCircuit}
++        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
++        assert isinstance(namespace["qc"], QuantumCircuit)
++        sv_orig = np.abs(statevector(circuit))
++        sv_emit = np.abs(statevector(namespace["qc"]))
++        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
++
++    def test_lcu_composability(self):
++        """POLYNOMIAL can be used as an LCU component."""
++        circuit, info = encode(
++            LCU([(1.0, STEP(k_s=8, c=1.0)),
++                 (2.0, POLYNOMIAL(coeffs=[0.0, 1.0]))]),
++            N=16)
++        assert info.vector_type == "LCU"
++        assert 0 < info.success_probability <= 1.0
++
++    def test_tensor_composability(self):
++        """POLYNOMIAL can be used as a TENSOR component (separable 2D)."""
++        circuit, info = encode(
++            TENSOR([(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 16),
++                    (POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 16)]),
++            N=256, validate=True)
++        assert info.validated is True

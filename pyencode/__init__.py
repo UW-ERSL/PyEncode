@@ -37,6 +37,10 @@ from .types import (
     STEP,
     SQUARE,
     GEOMETRIC,
+    POPCOUNT,
+    STAIRCASE,
+    TENSOR,
+    POLYNOMIAL,
     LCU,
     EncodingInfo,
 )
@@ -52,8 +56,12 @@ __all__ = [
     "FOURIER",
     "WALSH",
     "GEOMETRIC",
+    "POPCOUNT",
+    "STAIRCASE",
+    "TENSOR",
+    "POLYNOMIAL",
     "LCU",
     "STEP",
     "SQUARE",
 ]
-__version__ = "1.2.0"
+__version__ = "1.3.0"

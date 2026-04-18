@@ -64,6 +64,9 @@ def emit_code(pattern: LoadPattern) -> str:
         VectorType.SPARSE:  _emit_sparse,
         VectorType.FOURIER: _emit_fourier,
         VectorType.GEOMETRIC: _emit_geometric,
+        VectorType.POPCOUNT: _emit_popcount,
+        VectorType.STAIRCASE: _emit_staircase,
+        VectorType.POLYNOMIAL: _emit_polynomial,
         VectorType.UNKNOWN: _emit_qiskit_fallback,
     }
 
@@ -820,5 +823,117 @@ def _emit_geometric(m: int, params: dict) -> str:
         f"for j in range(m):",
         f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
         f"    qc.ry(theta_j, j)",
+    ]
+    return "\n".join(lines)
+
+# ---------------------------------------------------------------------------
+# POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical Ry)
+# ---------------------------------------------------------------------------
+
+def _emit_popcount(m: int, params: dict) -> str:
+    """Emit circuit code for POPCOUNT (product-state, identical Ry per qubit)."""
+    r = params["r"]
+    c = params.get("c", 1.0)
+
+    lines = [
+        _header(m, f"POPCOUNT  r={r}, c={c}"),
+        f"import math",
+        f"",
+        f"m = {m}",
+        f"r = {r!r}",
+        f"theta = 2.0 * math.atan(r)",
+        f"qc = QuantumCircuit(m, name='popcount')",
+        f"",
+        f"# Product state: every qubit gets the SAME R_y(theta) rotation.",
+        f"# Amplitude at |i> is proportional to r^popcount(i).",
+        f"for j in range(m):",
+        f"    qc.ry(theta, j)",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# STAIRCASE  f_{2^k-1} = r^k  (cascaded CR_y chain)
+# ---------------------------------------------------------------------------
+
+def _emit_staircase(m: int, params: dict) -> str:
+    """Emit circuit code for STAIRCASE (cascaded CR_y with per-step angles)."""
+    r = params["r"]
+    c = params.get("c", 1.0)
+
+    lines = [
+        _header(m, f"STAIRCASE  r={r}, c={c}  (sparse geometric staircase on unary indices)"),
+        f"import math",
+        f"",
+        f"m = {m}",
+        f"r = {r!r}",
+        f"qc = QuantumCircuit(m, name='staircase')",
+        f"",
+        f"# Tail norms T_k = sqrt(sum_{{j=k}}^{{m}} r^(2j))",
+        f"T = [math.sqrt(sum(r**(2*j) for j in range(k, m + 1))) for k in range(m + 2)]",
+        f"T[-1] = 0.0",
+        f"",
+        f"# Step 0: R_y on qubit 0",
+        f"theta_0 = 2.0 * math.atan2(T[1], 1.0)",
+        f"qc.ry(theta_0, 0)",
+        f"",
+        f"# Steps 1..m-1: cascaded CR_y from q_{{k-1}} to q_k",
+        f"for k in range(1, m):",
+        f"    theta_k = 2.0 * math.atan2(T[k + 1], r ** k)",
+        f"    qc.cry(theta_k, k - 1, k)",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# POLYNOMIAL  f_i = sum_j c_j x_i^j  (Walsh-sparse loading + H layer)
+# ---------------------------------------------------------------------------
+
+def _emit_polynomial(m: int, params: dict) -> str:
+    """Emit standalone code for POLYNOMIAL (Walsh-sparse loading + Hadamard layer)."""
+    coeffs           = params["coeffs"]
+    normalize_domain = params.get("normalize_domain", True)
+
+    lines = [
+        _header(m, f"POLYNOMIAL  coeffs={coeffs}, normalize_domain={normalize_domain}"),
+        f"import numpy as np",
+        f"from qiskit.circuit.library import StatePreparation",
+        f"",
+        f"m = {m}",
+        f"N = 2 ** m",
+        f"coeffs = {coeffs!r}",
+        f"d = len(coeffs) - 1",
+        f"",
+        f"# Evaluate polynomial on the grid.",
+        f"if {normalize_domain} and N > 1:",
+        f"    x = np.arange(N, dtype=float) / (N - 1)",
+        f"else:",
+        f"    x = np.arange(N, dtype=float)",
+        f"f = np.polyval(list(reversed(coeffs)), x)",
+        f"",
+        f"# In-place Walsh-Hadamard transform.",
+        f"walsh = f.copy()",
+        f"h = 1",
+        f"while h < N:",
+        f"    for i in range(0, N, h * 2):",
+        f"        for j in range(i, i + h):",
+        f"            a, b = walsh[j], walsh[j + h]",
+        f"            walsh[j]     = a + b",
+        f"            walsh[j + h] = a - b",
+        f"    h *= 2",
+        f"walsh /= np.sqrt(N)",
+        f"",
+        f"# Zero out Walsh components beyond degree-d (Walsh-sparsity theorem).",
+        f"for k in range(N):",
+        f"    if bin(k).count('1') > d:",
+        f"        walsh[k] = 0.0",
+        f"walsh = walsh / np.linalg.norm(walsh)",
+        f"",
+        f"# Load the sparse Walsh state, then apply Hadamard layer.",
+        f"qc = QuantumCircuit(m, name='polynomial')",
+        f"qc.append(StatePreparation(walsh, label='walsh_load'), range(m))",
+        f"qc = qc.decompose(reps=1)",
+        f"for q in range(m):",
+        f"    qc.h(q)",
     ]
     return "\n".join(lines)
