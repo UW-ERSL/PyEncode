@@ -1278,3 +1278,55 @@ class TestPolynomial:
                     (POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 16)]),
             N=256, validate=True)
         assert info.validated is True
+
+class TestSparseRegressions:
+    """Regression tests for SPARSE loader bugs.
+
+    Gleinig-Hoefler double-X-flanking bug (fixed): certain index patterns
+    produced large errors because _mcry added X-flanking a second time,
+    on top of the explicit 'x' gates already in the gate list.  Minimal
+    reproducer: {0, 1, 3, 5, 6, 9} at m=5 with uniform amplitudes.
+    """
+
+    def test_double_x_flanking_minimal(self):
+        """Minimal reproducer of the double-X-flanking bug."""
+        circuit, _ = encode(SPARSE([(k, 1.0) for k in [0, 1, 3, 5, 6, 9]]),
+                            N=32)
+        expected = np.zeros(32)
+        for k in [0, 1, 3, 5, 6, 9]:
+            expected[k] = 1.0
+        expected /= np.linalg.norm(expected)
+        sv = np.abs(statevector(circuit))
+        np.testing.assert_allclose(sv, expected, atol=1e-10)
+
+    def test_double_x_flanking_polynomial_walsh(self):
+        """The s=11 sparse case from POLYNOMIAL's Walsh spectrum."""
+        loads = [(0, 0.9), (3, 0.006), (5, 0.012), (6, 0.023), (9, 0.023),
+                 (10, 0.046), (12, 0.046), (17, 0.006), (18, 0.012),
+                 (20, 0.023), (24, 0.046)]
+        circuit, _ = encode(SPARSE(loads), N=32)
+        expected = np.zeros(32)
+        for k, a in loads:
+            expected[k] = abs(a)
+        expected /= np.linalg.norm(expected)
+        sv = np.abs(statevector(circuit))
+        np.testing.assert_allclose(sv, expected, atol=1e-10)
+
+    def test_sparse_random_sweep(self):
+        """SPARSE over 50 random configurations — all should be machine precision."""
+        import random
+        random.seed(42)
+        for trial in range(50):
+            m = random.choice([4, 5, 6])
+            N = 2 ** m
+            s = random.randint(2, min(15, N))
+            idx = random.sample(range(N), s)
+            amps = [random.uniform(0.1, 2.0) for _ in idx]
+            circuit, _ = encode(SPARSE(list(zip(idx, amps))), N=N)
+            expected = np.zeros(N)
+            for k, a in zip(idx, amps):
+                expected[k] = abs(a)
+            expected /= np.linalg.norm(expected)
+            sv = np.abs(statevector(circuit))
+            err = float(np.max(np.abs(sv - expected)))
+            assert err < 1e-10, f"trial {trial}: m={m}, idx={idx}, err={err:.2e}"

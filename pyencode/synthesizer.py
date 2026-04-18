@@ -780,16 +780,23 @@ def _apply_gate_to_state(state: dict, gate: tuple, n: int) -> None:
 
 def _mcry(qc: QuantumCircuit, theta: float,
           ctrl_qubits: list, ctrl_vals: list, target: int) -> None:
-    """Multi-controlled Ry with active-low controls via X flanking."""
-    flip = [q for q, v in zip(ctrl_qubits, ctrl_vals) if v == 0]
-    for q in flip:
-        qc.x(q)
+    """Multi-controlled Ry — assumes control qubits are already in the
+    all-1 state when the gate fires.
+
+    The Gleinig-Hoefler path explicitly adds 'x' gates to the gate list
+    to flank the MCRY for active-low controls (see _gleinig_reduce), and
+    _apply_gate_to_state's 'mcry' branch correspondingly ignores
+    ctrl_vals (assumes all controls must be 1).  Adding another layer of
+    X flanking here would double-flip the low-value controls and cause
+    the MCRY to fire on the wrong basis states.
+
+    Parameter ctrl_vals is accepted for interface compatibility with the
+    callers' gate-list encoding, but is intentionally not acted on.
+    """
     if len(ctrl_qubits) == 1:
         qc.cry(theta, ctrl_qubits[0], target)
     else:
         qc.mcry(theta, ctrl_qubits, target)
-    for q in flip:
-        qc.x(q)
 
 
 def _controlled_x(qc, ctrl_qubits, ctrl_vals, target):
@@ -1248,35 +1255,53 @@ def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
     walsh /= np.sqrt(N)
 
     # 3. Extract nonzero Walsh coefficients at Hamming weight <= d.
-    #    Zero out entries beyond the theoretical support so rounding noise
-    #    doesn't leak into higher-weight indices.
+    #    Split into (absolute-value, sign) since the SPARSE loader uses
+    #    magnitudes only; signs are restored by post-hoc phase flips.
+    tol = 1e-12 * max(1.0, float(np.linalg.norm(walsh)))
+    sparse_loads = []   # for the sparse-amplitude loader (magnitudes)
+    neg_indices  = []   # indices needing a post-hoc -1 phase flip
     for k in range(N):
         if bin(k).count("1") > d:
-            walsh[k] = 0.0
+            continue
+        if abs(walsh[k]) > tol:
+            sparse_loads.append({"k": k, "P": abs(float(walsh[k]))})
+            if walsh[k] < 0:
+                neg_indices.append(k)
 
-    walsh_norm = float(np.linalg.norm(walsh))
-    if walsh_norm < 1e-14:
+    if not sparse_loads:
         raise ValueError(
             "POLYNOMIAL: all Walsh coefficients are zero within tolerance."
         )
-    walsh_normalised = walsh / walsh_norm
 
-    # 4. Load the sparse Walsh-coefficient state and apply a Hadamard layer.
-    #    Ideally this uses a Walsh-sparse loader with O(s * m) cost
-    #    (Welch 2014 / Gonzalez-Conde 2024).  The Gleinig-Hoefler SPARSE
-    #    synthesiser currently in this package is known to lose precision
-    #    on dense signed patterns (s >= 11), so we fall back to Qiskit's
-    #    general StatePreparation on the *sparse* Walsh vector.  This is
-    #    numerically correct but produces a circuit whose gate count is
-    #    upper-bounded by the general O(N) bound rather than the
-    #    theoretical O(s * m) = O(m^(d+1)) bound.  A future drop-in
-    #    replacement can restore the asymptotic savings.
-    from qiskit.circuit.library import StatePreparation
+    # 4. Synthesise the sparse Walsh-coefficient state via Gleinig-Hoefler
+    #    at O(s * m) gate cost, where s = sum_{k=0}^{d} C(m, k) = O(m^d).
+    if len(sparse_loads) == 1:
+        qc = _synth_point_load(m, sparse_loads[0])
+    else:
+        qc = _synth_disjoint_point_load(m, {"loads": sparse_loads})
 
     poly_qc = QuantumCircuit(m, name="polynomial")
-    sp = StatePreparation(walsh_normalised, label="walsh_load")
-    poly_qc.append(sp, range(m))
-    poly_qc = poly_qc.decompose(reps=1)
+    poly_qc.compose(qc, inplace=True)
+
+    # Sign-correction: for each Walsh index k with walsh_k < 0, apply a
+    # phase flip on |k>.  Sandwich a multi-controlled Z with X gates that
+    # map |k> to |1...1>.  Each correction costs 2*(m - popcount(k)) + 1
+    # gates; total O(s * m) in the worst case.
+    for k in neg_indices:
+        flip_qubits = [q for q in range(m) if not ((k >> q) & 1)]
+        for q in flip_qubits:
+            poly_qc.x(q)
+        if m == 1:
+            poly_qc.z(0)
+        else:
+            poly_qc.h(m - 1)
+            if m == 2:
+                poly_qc.cx(0, 1)
+            else:
+                poly_qc.mcx(list(range(m - 1)), m - 1)
+            poly_qc.h(m - 1)
+        for q in flip_qubits:
+            poly_qc.x(q)
 
     # 5. Hadamard layer transforms the Walsh register into the target.
     for q in range(m):
