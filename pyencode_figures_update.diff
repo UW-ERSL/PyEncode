@@ -1,0 +1,275 @@
+# PyEncode generate_figures.py update — adds POPCOUNT, STAIRCASE, TENSOR,
+# POLYNOMIAL to the per-pattern figures and gate count table; extends
+# the scaling plot range to m = [6, 8, 10, 12, 16].
+#
+# POLYNOMIAL is deliberately NOT included in the scaling plot.  Its
+# transpiled gate count at modest m has a large constant factor from
+# multi-controlled phase corrections that obscures the clean
+# poly(m)-vs-Qiskit story shown by the other eight patterns.  The
+# gate count table shows POLYNOMIAL honestly at m=6 for d=1,2,3.
+#
+# PREREQUISITE: v1.3 patterns patch + bug-fix patch must already be applied.
+#
+# NOTE: Qiskit transpile at m=16 (N=65536) takes ~3 minutes.
+#
+# Apply with:  git apply pyencode_figures_update.diff
+# ---------------------------------------------------------------
+
+--- a/generate_figures.py	2026-04-18 22:25:51.000000000 +0000
++++ b/generate_figures.py	2026-04-18 23:29:43.516803063 +0000
+@@ -15,7 +15,10 @@
+ import matplotlib.pyplot as plt
+ from matplotlib import rcParams
+ 
+-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, LCU
++from pyencode import (
++    encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
++    POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU,
++)
+ from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
+ 
+ # ── matplotlib style ──────────────────────────────────────────────
+@@ -184,6 +187,87 @@
+     save_circuit(circuit, "geometric_circuit.png", scale=0.6)
+ 
+ 
++def fig_popcount():
++    """POPCOUNT: product state, amplitudes depend only on Hamming weight."""
++    print("\n--- POPCOUNT: r=0.5, N=16 ---")
++    N = 16
++    r = 0.5
++    circuit, info = encode(POPCOUNT(r=r), N=N)
++    print_info("encode", info)
++    pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
++    f = r ** pops
++    plot_vector(f, N, r"POPCOUNT: $f_i = 0.5^{\,\mathrm{popcount}(i)}$, $N=16$",
++                "popcount_vector.png")
++    save_circuit(circuit, "popcount_circuit.png", scale=0.6)
++
++
++def fig_staircase():
++    """STAIRCASE: sparse geometric staircase on unary indices."""
++    print("\n--- STAIRCASE: r=0.5, N=16 ---")
++    N = 16
++    m = int(round(math.log2(N)))
++    r = 0.5
++    circuit, info = encode(STAIRCASE(r=r), N=N)
++    print_info("encode", info)
++    f = np.zeros(N)
++    for k in range(m + 1):
++        f[(1 << k) - 1] = r ** k
++    plot_vector(f, N,
++                r"STAIRCASE: $f_{2^k-1} = 0.5^{\,k}$, $N=16$",
++                "staircase_vector.png")
++    save_circuit(circuit, "staircase_circuit.png", scale=0.8)
++
++
++def fig_polynomial_ramp():
++    """POLYNOMIAL d=1: ramp function (Walsh-sparse construction)."""
++    print("\n--- POLYNOMIAL d=1 (ramp), N=16 ---")
++    N = 16
++    circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=N)
++    print_info("encode", info)
++    x = np.arange(N) / (N - 1)
++    f = x
++    plot_vector(f, N,
++                r"POLYNOMIAL $d=1$: $f(x)=x$ on $[0,1]$, $N=16$",
++                "polynomial_ramp_vector.png", smooth=True)
++    save_circuit(circuit, "polynomial_ramp_circuit.png", scale=0.5)
++
++
++def fig_polynomial_poiseuille():
++    """POLYNOMIAL d=2: Poiseuille parabolic profile."""
++    print("\n--- POLYNOMIAL d=2 (Poiseuille), N=32 ---")
++    N = 32
++    circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=N)
++    print_info("encode", info)
++    x = np.arange(N) / (N - 1)
++    f = 4 * x - 4 * x * x
++    plot_vector(f, N,
++                r"POLYNOMIAL $d=2$: $f(x)=4x(1-x)$ (Poiseuille), $N=32$",
++                "polynomial_poiseuille_vector.png", smooth=True)
++    save_circuit(circuit, "polynomial_poiseuille_circuit.png", scale=0.4)
++
++
++def fig_tensor():
++    """TENSOR: 2D separable state via disjoint subregister composition."""
++    print("\n--- TENSOR: 2D FOURIER x FOURIER ---")
++    N_sub = 16
++    n_x = 2
++    n_y = 3
++    k = np.arange(N_sub)
++    circuit, info = encode(
++        TENSOR([(FOURIER(modes=[(n_x, 1.0, 0)]), N_sub),
++                (FOURIER(modes=[(n_y, 1.0, 0)]), N_sub)]),
++        N=N_sub * N_sub)
++    print_info("encode", info)
++    f_2d = np.outer(
++        np.sin(n_y * 2 * np.pi * k / N_sub),   # MSB subregister (y)
++        np.sin(n_x * 2 * np.pi * k / N_sub),   # LSB subregister (x)
++    )
++    plot_vector_2d(f_2d, N_sub,
++                   r"TENSOR: $\sin(2\pi n_x i/N)\sin(2\pi n_y j/N)$",
++                   "tensor_vector.png")
++    save_circuit(circuit, "tensor_circuit.png", scale=0.6)
++
++
+ def fig_lcu_disjoint():
+     """LCU: two disjoint SQUARE intervals."""
+     print("\n--- LCU disjoint: two SQUARE intervals, N=16 ---")
+@@ -246,23 +330,23 @@
+ 
+ 
+ def fig_poisson():
+-    """2D Poisson separable source."""
+-    print("\n--- 2D Poisson ---")
++    """2D Poisson separable source — demonstrates TENSOR pattern."""
++    print("\n--- 2D Poisson (via TENSOR) ---")
+     N = 32; n_x = 2; n_y = 3
+     k = np.arange(N)
+-    circ_x, info_x = encode(FOURIER(modes=[(n_x, 1.0, 0)]), N=N)
+-    circ_y, info_y = encode(FOURIER(modes=[(n_y, 1.0, 0)]), N=N)
+-    circuit = circ_x.tensor(circ_y)
+-    print(f"  x: {info_x.gate_count} gates, y: {info_y.gate_count} gates, "
+-          f"total: {info_x.gate_count + info_y.gate_count}")
++    circuit, info = encode(
++        TENSOR([(FOURIER(modes=[(n_x, 1.0, 0)]), N),
++                (FOURIER(modes=[(n_y, 1.0, 0)]), N)]),
++        N=N * N)
++    print_info("encode", info)
+     f_2d = np.outer(
+-        np.sin(n_x * 2 * np.pi * k / N),
+-        np.sin(n_y * 2 * np.pi * k / N),
++        np.sin(n_y * 2 * np.pi * k / N),   # MSB subregister (y)
++        np.sin(n_x * 2 * np.pi * k / N),   # LSB subregister (x)
+     )
+     plot_vector_2d(f_2d, N,
+                    r"$\sin(4\pi i/N)\sin(6\pi j/N)$",
+                    "poisson_vector.png")
+-    save_circuit(circuit, "poisson_circuit.png", scale=0.7)
++    save_circuit(circuit, "poisson_circuit.png", scale=0.5)
+ 
+ 
+ def fig_finance():
+@@ -300,8 +384,9 @@
+     to reflect realistic usage rather than power-of-2 boundaries.
+     """
+     print("\n--- Gate Count vs m figure ---")
++    print("  (Qiskit transpile at m=16 takes ~3 minutes; patience.)")
+ 
+-    M_VALS = [4, 6, 8, 10, 12]
++    M_VALS = [6, 8, 10, 12, 16]
+ 
+     patterns = {
+         "SPARSE ($s=2$)":  [],
+@@ -309,6 +394,8 @@
+         "SQUARE":          [],
+         "WALSH":           [],
+         "GEOMETRIC":       [],
++        "POPCOUNT":        [],
++        "STAIRCASE":       [],
+         "FOURIER":         [],
+         "Qiskit (random)": [],
+     }
+@@ -343,6 +430,14 @@
+         _, info = encode(GEOMETRIC(ratio=0.95), N=N)
+         patterns["GEOMETRIC"].append(info.gate_count)
+ 
++        # POPCOUNT: product state with Hamming-weight structure (0 CX, depth 1)
++        _, info = encode(POPCOUNT(r=0.7), N=N)
++        patterns["POPCOUNT"].append(info.gate_count)
++
++        # STAIRCASE: sparse geometric on unary indices
++        _, info = encode(STAIRCASE(r=0.5), N=N)
++        patterns["STAIRCASE"].append(info.gate_count)
++
+         # FOURIER T=1
+         _, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)
+         patterns["FOURIER"].append(info.gate_count)
+@@ -357,6 +452,8 @@
+               f"SQUARE={patterns['SQUARE'][-1]}, "
+               f"WALSH={patterns['WALSH'][-1]}, "
+               f"GEOMETRIC={patterns['GEOMETRIC'][-1]}, "
++              f"POPCOUNT={patterns['POPCOUNT'][-1]}, "
++              f"STAIRCASE={patterns['STAIRCASE'][-1]}, "
+               f"FOURIER={patterns['FOURIER'][-1]}, "
+               f"Qiskit={patterns['Qiskit (random)'][-1]}")
+ 
+@@ -364,13 +461,15 @@
+     fig, ax = plt.subplots(figsize=(6.0, 4.0))
+ 
+     style = {
+-        "SPARSE ($s=2$)":  dict(color="#2166ac", marker="o",  ls="-",  lw=1.6),
+-        "STEP":            dict(color="#4dac26", marker="s",  ls="-",  lw=1.6),
+-        "SQUARE":          dict(color="#d01c8b", marker="^",  ls="-",  lw=1.6),
+-        "WALSH":           dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
+-        "GEOMETRIC":       dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
+-        "FOURIER":         dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
+-        "Qiskit (random)": dict(color="#555555", marker="x",  ls=":",  lw=1.8),
++        "SPARSE ($s=2$)":      dict(color="#2166ac", marker="o",  ls="-",  lw=1.6),
++        "STEP":                dict(color="#4dac26", marker="s",  ls="-",  lw=1.6),
++        "SQUARE":              dict(color="#d01c8b", marker="^",  ls="-",  lw=1.6),
++        "WALSH":               dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
++        "GEOMETRIC":           dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
++        "POPCOUNT":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
++        "STAIRCASE":           dict(color="#e6ab02", marker="<",  ls="-",  lw=1.6),
++        "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
++        "Qiskit (random)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
+     }
+ 
+     for label, counts in patterns.items():
+@@ -404,6 +503,14 @@
+     N = 64
+     k = np.arange(N)
+ 
++    x_cts = np.arange(N, dtype=float) / (N - 1)
++    # Expected vectors for clarity
++    m_bits = int(round(math.log2(N)))
++    staircase_vec = np.zeros(N)
++    for kk in range(m_bits + 1):
++        staircase_vec[(1 << kk) - 1] = 0.5 ** kk
++    popcount_vec = np.array([0.7 ** bin(i).count("1") for i in range(N)])
++
+     cases = [
+         ("SPARSE s=1 (k=20)",    SPARSE([(20, 1.0)]),
+          np.eye(N)[20]),
+@@ -419,14 +526,24 @@
+          np.array([3.0 if i==10 else 4.0 if i==50 else 0.0 for i in range(N)])),
+         ("GEOMETRIC (r=0.95)",   GEOMETRIC(ratio=0.95),
+          0.95 ** np.arange(N)),
++        ("POPCOUNT (r=0.7)",     POPCOUNT(r=0.7),
++         popcount_vec),
++        ("STAIRCASE (r=0.5)",    STAIRCASE(r=0.5),
++         staircase_vec),
++        ("POLYNOMIAL d=1 (ramp)",     POLYNOMIAL(coeffs=[0.0, 1.0]),
++         x_cts),
++        ("POLYNOMIAL d=2 (Poiseuille)", POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]),
++         4 * x_cts - 4 * x_cts * x_cts),
++        ("POLYNOMIAL d=3",       POLYNOMIAL(coeffs=[0.1, 0.5, 1.0, -0.3]),
++         0.1 + 0.5 * x_cts + x_cts ** 2 - 0.3 * x_cts ** 3),
+     ]
+ 
+-    print(f"{'Pattern':<28} {'PyEncode':>10} {'Qiskit':>8}  Complexity")
+-    print("-" * 60)
++    print(f"{'Pattern':<32} {'PyEncode':>10} {'Qiskit':>8}  Complexity")
++    print("-" * 65)
+     for name, vobj, f_vec in cases:
+         circuit, info = encode(vobj, N=N)
+         qk = qiskit_gates(f_vec, N)
+-        print(f"{name:<28} {info.gate_count:>10} {qk:>8}  {info.complexity}")
++        print(f"{name:<32} {info.gate_count:>10} {qk:>8}  {info.complexity}")
+ 
+ 
+ # ===================================================================
+@@ -445,6 +562,11 @@
+     fig_fourier_sine()
+     fig_fourier_multi()
+     fig_geometric()
++    fig_popcount()
++    fig_staircase()
++    fig_polynomial_ramp()
++    fig_polynomial_poiseuille()
++    fig_tensor()
+     fig_lcu_disjoint()
+     fig_lcu_overlap()
+ 
