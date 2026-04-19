@@ -396,7 +396,6 @@ def fig_gate_count_vs_m():
         "GEOMETRIC":       [],
         "POPCOUNT":        [],
         "STAIRCASE":       [],
-        "POLYNOMIAL ($d=1$)": [],
         "FOURIER":         [],
         "Qiskit (random)": [],
     }
@@ -439,12 +438,6 @@ def fig_gate_count_vs_m():
         _, info = encode(STAIRCASE(r=0.5), N=N)
         patterns["STAIRCASE"].append(info.gate_count)
 
-        # POLYNOMIAL d=1 (ramp): Walsh-sparse loading + H layer, O(m^2).
-        # d=1 is the "hero case" for POLYNOMIAL — crosses Qiskit at m~=5
-        # and widens from there.  Higher-d polynomials cross later (see
-        # the gate-count table for d=2, d=3 at m=6).
-        _, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=N)
-        patterns["POLYNOMIAL ($d=1$)"].append(info.gate_count)
 
         # FOURIER T=1
         _, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)
@@ -462,7 +455,6 @@ def fig_gate_count_vs_m():
               f"GEOMETRIC={patterns['GEOMETRIC'][-1]}, "
               f"POPCOUNT={patterns['POPCOUNT'][-1]}, "
               f"STAIRCASE={patterns['STAIRCASE'][-1]}, "
-              f"POLYNOMIAL(d=1)={patterns['POLYNOMIAL ($d=1$)'][-1]}, "
               f"FOURIER={patterns['FOURIER'][-1]}, "
               f"Qiskit={patterns['Qiskit (random)'][-1]}")
 
@@ -477,7 +469,6 @@ def fig_gate_count_vs_m():
         "GEOMETRIC":           dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
         "POPCOUNT":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
         "STAIRCASE":           dict(color="#e6ab02", marker="<",  ls="-",  lw=1.6),
-        "POLYNOMIAL ($d=1$)":  dict(color="#a6761d", marker=">",  ls="-",  lw=1.6),
         "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
         "Qiskit (random)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
     }
