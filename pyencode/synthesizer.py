@@ -489,6 +489,45 @@ def _synth_disjoint_point_load(m: int, params: dict) -> QuantumCircuit:
     return qc
 
 
+def _synth_disjoint_point_load_signed(m: int, params: dict) -> QuantumCircuit:
+    """
+    Prepare a weighted superposition of L ≥ 2 point loads with SIGNED
+    amplitudes:
+
+        |ψ⟩ = (1/‖a‖) Σ_i a_i |k_i⟩,   a_i = P_i  (may be negative)
+
+    Same Gleinig-Hoefler construction as _synth_disjoint_point_load, but
+    carries signs through the pairwise reduction directly.  The key
+    observation is that the merging rotation angle θ = -2·atan2(cx1, cx2)
+    in _gleinig_reduce already handles arbitrary real amplitudes
+    correctly, so we simply skip the abs() step.
+
+    This eliminates the need for a post-hoc multi-controlled-Z
+    phase-flip pass — critical for POLYNOMIAL, where most Walsh
+    coefficients are negative and the phase-flip pass would otherwise
+    dominate the transpiled gate count.
+    """
+    loads = params["loads"]
+    L     = len(loads)
+    assert L >= 2, "Use _synth_point_load for L=1"
+
+    # Normalise amplitudes keeping signs intact
+    amps = np.array([float(load["P"]) for load in loads], dtype=float)
+    norm = np.linalg.norm(amps)
+    if norm < 1e-14:
+        raise ValueError("All point-load magnitudes are zero.")
+    amps = amps / norm
+
+    indices = [int(load["k"]) for load in loads]
+
+    qc = QuantumCircuit(m, name="sparse_load_signed")
+    _gleinig_encode(qc, dict(zip(
+        [_int_to_bits(k, m) for k in indices],
+        amps.tolist()
+    )), m)
+    return qc
+
+
 # ---------------------------------------------------------------------------
 # Gleinig-Hoefler implementation
 # ---------------------------------------------------------------------------
@@ -1255,53 +1294,41 @@ def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
     walsh /= np.sqrt(N)
 
     # 3. Extract nonzero Walsh coefficients at Hamming weight <= d.
-    #    Split into (absolute-value, sign) since the SPARSE loader uses
-    #    magnitudes only; signs are restored by post-hoc phase flips.
+    #    Keep SIGNED amplitudes; the Gleinig-Hoefler loader handles signs
+    #    natively via signed rotation angles (atan2(cx1, cx2)), eliminating
+    #    the multi-controlled-Z phase-flip pass that dominated earlier
+    #    versions' transpiled gate count.
     tol = 1e-12 * max(1.0, float(np.linalg.norm(walsh)))
-    sparse_loads = []   # for the sparse-amplitude loader (magnitudes)
-    neg_indices  = []   # indices needing a post-hoc -1 phase flip
+    sparse_loads = []
     for k in range(N):
         if bin(k).count("1") > d:
             continue
         if abs(walsh[k]) > tol:
-            sparse_loads.append({"k": k, "P": abs(float(walsh[k]))})
-            if walsh[k] < 0:
-                neg_indices.append(k)
+            sparse_loads.append({"k": k, "P": float(walsh[k])})  # SIGNED
 
     if not sparse_loads:
         raise ValueError(
             "POLYNOMIAL: all Walsh coefficients are zero within tolerance."
         )
 
-    # 4. Synthesise the sparse Walsh-coefficient state via Gleinig-Hoefler
-    #    at O(s * m) gate cost, where s = sum_{k=0}^{d} C(m, k) = O(m^d).
+    # 4. Synthesise the signed sparse Walsh state via Gleinig-Hoefler.
+    #    The loader normalises |P_i| internally and absorbs signs into the
+    #    rotation angles; no post-hoc phase corrections are needed.
     if len(sparse_loads) == 1:
-        qc = _synth_point_load(m, sparse_loads[0])
+        # Point load with sign: handle directly (X gates + optional global phase)
+        load = sparse_loads[0]
+        qc = QuantumCircuit(m, name="polynomial_load")
+        k = int(load["k"])
+        for bit in range(m):
+            if (k >> bit) & 1:
+                qc.x(bit)
+        # A single-basis-state with negative amplitude is equivalent to a
+        # global phase of -1, which is unobservable; leave as-is.
     else:
-        qc = _synth_disjoint_point_load(m, {"loads": sparse_loads})
+        qc = _synth_disjoint_point_load_signed(m, {"loads": sparse_loads})
 
     poly_qc = QuantumCircuit(m, name="polynomial")
     poly_qc.compose(qc, inplace=True)
-
-    # Sign-correction: for each Walsh index k with walsh_k < 0, apply a
-    # phase flip on |k>.  Sandwich a multi-controlled Z with X gates that
-    # map |k> to |1...1>.  Each correction costs 2*(m - popcount(k)) + 1
-    # gates; total O(s * m) in the worst case.
-    for k in neg_indices:
-        flip_qubits = [q for q in range(m) if not ((k >> q) & 1)]
-        for q in flip_qubits:
-            poly_qc.x(q)
-        if m == 1:
-            poly_qc.z(0)
-        else:
-            poly_qc.h(m - 1)
-            if m == 2:
-                poly_qc.cx(0, 1)
-            else:
-                poly_qc.mcx(list(range(m - 1)), m - 1)
-            poly_qc.h(m - 1)
-        for q in flip_qubits:
-            poly_qc.x(q)
 
     # 5. Hadamard layer transforms the Walsh register into the target.
     for q in range(m):
