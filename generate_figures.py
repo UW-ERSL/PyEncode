@@ -516,6 +516,133 @@ def fig_gate_count_vs_m():
     plt.close(fig)
     print(f"  saved {FIGDIR}/gate_count_vs_m.png")
 
+def fig_gate_count_vs_m_reduced():
+    """
+    Gate count vs number of qubits m for each PyEncode pattern,
+    compared against Qiskit StatePreparation on a random vector.
+
+    m values: 4, 6, 8, 10, 12  (N = 16 to 4096)
+
+    SQUARE uses non-aligned intervals (k1 = N//4 + 1, k2 = 3*N//4 + 1)
+    to reflect realistic usage rather than power-of-2 boundaries.
+    """
+    print("\n--- Gate Count vs m figure ---")
+    print("  (Qiskit transpile at m=16 takes ~3 minutes; patience.)")
+
+    M_VALS = [6, 8, 10, 12, 16]
+
+    patterns = {
+        "SPARSE ($s=2$)":  [],
+        "STEP":            [],
+        "WALSH":           [],
+        "GEOMETRIC":       [],
+        "POPCOUNT":        [],
+        "STAIRCASE":       [],
+        "FOURIER":         [],
+        "POLYNOMIAL ($d=1$)": [],
+        "Qiskit (random)": [],
+    }
+
+    def pyencode_transpile_total(circuit):
+        """Transpile PyEncode circuit to {CX, U} and sum all gates,
+        for apples-to-apples comparison with Qiskit measurements."""
+        from qiskit import transpile
+        t = transpile(circuit.decompose(reps=DECOMPOSE_REPS),
+                      basis_gates=BASIS_GATES,
+                      optimization_level=OPTIMIZATION_LEVEL)
+        return sum(t.count_ops().values())
+
+    np.random.seed(42)
+
+    for m in M_VALS:
+        N = 2 ** m
+
+        # SPARSE s=2
+        idx1 = min(int(0.3 * N) + 3, N - 2)
+        idx2 = min(int(0.7 * N) + 5, N - 1)
+        c, _ = encode(SPARSE([(idx1, 1.0), (idx2, 2.0)]), N=N)
+        patterns["SPARSE ($s=2$)"].append(pyencode_transpile_total(c))
+
+        # STEP: non-power-of-2 cutoff
+        c, _ = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+        patterns["STEP"].append(pyencode_transpile_total(c))
+
+        # WALSH: mid-register bit, generalized
+        c, _ = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
+        patterns["WALSH"].append(pyencode_transpile_total(c))
+
+        # GEOMETRIC: exponential decay (product state, 0 CX)
+        c, _ = encode(GEOMETRIC(ratio=0.95), N=N)
+        patterns["GEOMETRIC"].append(pyencode_transpile_total(c))
+
+        # POPCOUNT: product state with Hamming-weight structure (0 CX, depth 1)
+        c, _ = encode(POPCOUNT(r=0.7), N=N)
+        patterns["POPCOUNT"].append(pyencode_transpile_total(c))
+
+        # STAIRCASE: sparse geometric on unary indices
+        c, _ = encode(STAIRCASE(r=0.5), N=N)
+        patterns["STAIRCASE"].append(pyencode_transpile_total(c))
+
+        # FOURIER T=1
+        c, _ = encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)
+        patterns["FOURIER"].append(pyencode_transpile_total(c))
+
+        # POLYNOMIAL d=1 (ramp)
+        c, _ = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=N)
+        patterns["POLYNOMIAL ($d=1$)"].append(pyencode_transpile_total(c))
+
+        # Qiskit baseline: random unit vector
+        f_rand = np.random.randn(N)
+        qk = qiskit_gates(f_rand, N)
+        patterns["Qiskit (random)"].append(qk)
+
+        print(f"  m={m}: "
+              f"SPARSE={patterns['SPARSE ($s=2$)'][-1]}, "
+              f"STEP={patterns['STEP'][-1]}, "
+              f"WALSH={patterns['WALSH'][-1]}, "
+              f"GEOMETRIC={patterns['GEOMETRIC'][-1]}, "
+              f"POPCOUNT={patterns['POPCOUNT'][-1]}, "
+              f"STAIRCASE={patterns['STAIRCASE'][-1]}, "
+              f"FOURIER={patterns['FOURIER'][-1]}, "
+              f"POLY_d1={patterns['POLYNOMIAL ($d=1$)'][-1]}, "
+              f"Qiskit={patterns['Qiskit (random)'][-1]}")
+
+    # ── Plot ──────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+
+    style = {
+        "SPARSE ($s=2$)":      dict(color="#2166ac", marker="o",  ls="-",  lw=1.6),
+        "STEP":                dict(color="#4dac26", marker="s",  ls="-",  lw=1.6),
+        "WALSH":               dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
+        "GEOMETRIC":           dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
+        "POPCOUNT":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
+        "STAIRCASE":           dict(color="#e6ab02", marker="<",  ls="-",  lw=1.6),
+        "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
+        "POLYNOMIAL ($d=1$)":  dict(color="#08519c", marker=">",  ls="-.", lw=1.6),
+        "Qiskit (random)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
+    }
+
+    for label, counts in patterns.items():
+        s = style[label]
+        ax.semilogy(M_VALS, counts, label=label,
+                    color=s["color"], marker=s["marker"],
+                    ls=s["ls"], lw=s["lw"], markersize=6)
+
+    ax.set_xlabel("Number of qubits $m$  ($N = 2^m$)")
+    ax.set_ylabel("Transpiled gate count  (log scale)")
+    ax.set_xticks(M_VALS)
+    ax.set_xticklabels([f"$m={m}$\n$N={2**m}$" for m in M_VALS], fontsize=9)
+    ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.01, 0.5),
+              framealpha=0.9)
+    ax.grid(True, which="both", linestyle=":", linewidth=0.5, alpha=0.6)
+    ax.set_title(r"Gate count vs. $m$: PyEncode patterns vs. Qiskit",
+                 fontsize=10, pad=6)
+
+    fig.tight_layout()
+    fig.savefig(f"{FIGDIR}/gate_count_vs_m_reduced.png")
+    plt.close(fig)
+    print(f"  saved {FIGDIR}/gate_count_vs_m_reduced.png")
+
 
 # ===================================================================
 # Gate count table
@@ -602,6 +729,8 @@ if __name__ == "__main__":
     # Gate count scaling figure
     fig_gate_count_vs_m()
 
+    fig_gate_count_vs_m_reduced()
+    
     # Gate count table
     gate_count_table()
 
