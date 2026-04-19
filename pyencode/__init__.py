@@ -46,9 +46,11 @@ from .types import (
 )
 from .recognizer import VectorType
 from .encode import encode
+from .predictor import predict_gates
 
 __all__ = [
     "encode",
+    "predict_gates",
     "EncodingInfo",
     "VectorType",
     # Constructors
@@ -64,4 +66,4 @@ __all__ = [
     "STEP",
     "SQUARE",
 ]
-__version__ = "1.3.0"
+__version__ = "1.4.0"

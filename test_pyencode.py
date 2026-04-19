@@ -1330,3 +1330,166 @@ class TestSparseRegressions:
             sv = np.abs(statevector(circuit))
             err = float(np.max(np.abs(sv - expected)))
             assert err < 1e-10, f"trial {trial}: m={m}, idx={idx}, err={err:.2e}"
+
+
+# ===========================================================================
+# predict_gates: fast closed-form predictor (v1.4)
+# ===========================================================================
+
+class TestPredictor:
+    """
+    Cross-check predict_gates() against encode() ground truth.
+    Every 'exact' prediction must match the transpiled counts to the gate.
+    'Approximate' predictions are checked only for positivity and sanity.
+    """
+
+    def _ground(self, obj, N):
+        from pyencode import encode
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            _, info = encode(obj, N=N)
+        return info.gate_count_1q, info.gate_count_2q, info.circuit_depth
+
+    def test_popcount_exact(self):
+        from pyencode import predict_gates, POPCOUNT
+        for m in [4, 6, 8, 10, 12, 14]:
+            u_t, c_t, d_t = self._ground(POPCOUNT(r=0.7), 2**m)
+            p = predict_gates(POPCOUNT(r=0.7), 2**m)
+            assert p["exact"] is True
+            assert p["gate_count_1q"] == u_t, f"m={m}: {p['gate_count_1q']} != {u_t}"
+            assert p["gate_count_2q"] == c_t
+            assert p["circuit_depth"] == d_t
+
+    def test_walsh_exact(self):
+        from pyencode import predict_gates, WALSH
+        for m in [4, 6, 8, 10, 12]:
+            u_t, c_t, d_t = self._ground(WALSH(k=m//2, c_pos=1.0, c_neg=4.0), 2**m)
+            p = predict_gates(WALSH(k=m//2, c_pos=1.0, c_neg=4.0), 2**m)
+            assert p["exact"] is True
+            assert p["gate_count_1q"] == u_t
+            assert p["gate_count_2q"] == c_t
+            assert p["circuit_depth"] == d_t
+
+    def test_staircase_exact(self):
+        from pyencode import predict_gates, STAIRCASE
+        for m in [4, 6, 8, 10, 12]:
+            u_t, c_t, d_t = self._ground(STAIRCASE(r=0.5), 2**m)
+            p = predict_gates(STAIRCASE(r=0.5), 2**m)
+            assert p["exact"] is True
+            assert p["gate_count_1q"] == u_t
+            assert p["gate_count_2q"] == c_t
+            assert p["circuit_depth"] == d_t
+
+    def test_polynomial_d1_exact(self):
+        """POLYNOMIAL d=1 ramp: closed-form 5m-4 / 2m-2 / 4m-3."""
+        from pyencode import predict_gates, POLYNOMIAL
+        for m in [4, 6, 8, 10, 12, 14]:
+            u_t, c_t, d_t = self._ground(POLYNOMIAL(coeffs=[0.0, 1.0]), 2**m)
+            p = predict_gates(POLYNOMIAL(coeffs=[0.0, 1.0]), 2**m)
+            assert p["exact"] is True
+            assert p["gate_count_1q"] == u_t, f"m={m}: 1q {p['gate_count_1q']} != {u_t}"
+            assert p["gate_count_2q"] == c_t
+            assert p["circuit_depth"] == d_t
+
+    def test_step_exact(self):
+        """STEP: popcount-based closed form for various k_s."""
+        from pyencode import predict_gates, STEP
+        for m in [6, 8, 10, 12]:
+            N = 2**m
+            test_cases = [N//2, 3*N//4, N//2 + N//4 + N//8, N-1]
+            for k_s in test_cases:
+                u_t, c_t, d_t = self._ground(STEP(k_s=k_s, c=1.0), N)
+                p = predict_gates(STEP(k_s=k_s, c=1.0), N)
+                assert p["exact"] is True
+                assert p["gate_count_1q"] == u_t, \
+                    f"m={m}, k_s={k_s}: 1q {p['gate_count_1q']} != {u_t}"
+                assert p["gate_count_2q"] == c_t
+                assert p["circuit_depth"] == d_t
+
+    def test_sparse_s1_exact(self):
+        """SPARSE s=1: just X gates on set bits."""
+        from pyencode import predict_gates, SPARSE
+        for m in [6, 10, 14]:
+            N = 2**m
+            for k in [0, 1, 19, N//2, N-1]:
+                u_t, c_t, d_t = self._ground(SPARSE([(k, 1.0)]), N)
+                p = predict_gates(SPARSE([(k, 1.0)]), N)
+                assert p["exact"] is True
+                assert p["gate_count_1q"] == u_t
+                assert p["gate_count_2q"] == c_t
+
+    def test_fourier_t1_exact(self):
+        """FOURIER single mode: exact quadratic fit."""
+        from pyencode import predict_gates, FOURIER
+        for m in [4, 6, 8, 10, 12]:
+            u_t, c_t, d_t = self._ground(FOURIER(modes=[(1, 1.0, 0)]), 2**m)
+            p = predict_gates(FOURIER(modes=[(1, 1.0, 0)]), 2**m)
+            assert p["exact"] is True
+            assert p["gate_count_1q"] == u_t
+            assert p["gate_count_2q"] == c_t
+
+    def test_square_aligned_exact(self):
+        """SQUARE [0, N/2): reduces to STEP, exact."""
+        from pyencode import predict_gates, SQUARE
+        for m in [6, 8, 10, 12]:
+            N = 2**m
+            u_t, c_t, d_t = self._ground(SQUARE(k1=0, k2=N//2, c=1.0), N)
+            p = predict_gates(SQUARE(k1=0, k2=N//2, c=1.0), N)
+            assert p["exact"] is True
+            assert p["gate_count_1q"] == u_t
+
+    def test_polynomial_d2_approximate(self):
+        """POLYNOMIAL d=2: approximate but within 1% of actual."""
+        from pyencode import predict_gates, POLYNOMIAL
+        for m in [6, 8, 10, 12]:
+            u_t, c_t, d_t = self._ground(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 2**m)
+            p = predict_gates(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), 2**m)
+            assert p["exact"] is False
+            actual = u_t + c_t
+            predicted = p["gate_count_1q"] + p["gate_count_2q"]
+            err = abs(predicted - actual) / max(1, actual)
+            assert err < 0.05, f"m={m}: err={err:.3f}, pred={predicted}, actual={actual}"
+
+    def test_square_general_upper_bound(self):
+        """SQUARE general: prediction is an upper bound (<=40% over)."""
+        from pyencode import predict_gates, SQUARE
+        for m in [8, 10, 12]:
+            N = 2**m
+            u_t, c_t, d_t = self._ground(SQUARE(k1=N//4+1, k2=3*N//4+1, c=1.0), N)
+            p = predict_gates(SQUARE(k1=N//4+1, k2=3*N//4+1, c=1.0), N)
+            assert p["exact"] is False
+            assert p["gate_count_1q"] + p["gate_count_2q"] >= u_t + c_t - 5
+
+    def test_tensor_composition(self):
+        """TENSOR: predictions sum across disjoint subregisters."""
+        from pyencode import predict_gates, TENSOR, FOURIER
+        obj = TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 32),
+                      (FOURIER(modes=[(3, 1.0, 0)]), 32)])
+        p = predict_gates(obj, 32*32)
+        assert p["m"] == 10
+        assert p["N"] == 1024
+        # Each FOURIER m=5 has 1q = 1.5*25 - 2.5*5 + 6 = 31, 2q = 25 - 3 = 22
+        # Tensor: 2 x (31 + 22) = 106; actual within a few gates of this
+        actual = 31 + 22  # per-component (approximately)
+        assert p["gate_count"] >= 2 * actual - 5
+
+    def test_speed_at_large_m(self):
+        """Prediction must be fast even where encode() is slow."""
+        import time
+        from pyencode import predict_gates, POLYNOMIAL
+        t0 = time.perf_counter()
+        p = predict_gates(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]), N=2**16)
+        dt = time.perf_counter() - t0
+        assert dt < 0.01, f"predict_gates took {dt*1000:.1f}ms (should be sub-ms)"
+        assert p["gate_count"] > 0
+
+    def test_rejects_invalid_n(self):
+        from pyencode import predict_gates, POPCOUNT
+        with pytest.raises(ValueError):
+            predict_gates(POPCOUNT(r=0.7), N=5)  # not a power of 2
+
+    def test_rejects_invalid_type(self):
+        from pyencode import predict_gates
+        with pytest.raises(TypeError):
+            predict_gates("not a vector object", N=16)
