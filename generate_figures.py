@@ -399,7 +399,7 @@ def fig_gate_count_vs_m():
         "FOURIER":         [],
         "POLYNOMIAL ($d=1$)": [],
         "POLYNOMIAL ($d=2$)": [],
-        "Qiskit (random)": [],
+        "Qiskit (Shende)": [],
     }
 
     def pyencode_transpile_total(circuit):
@@ -463,7 +463,7 @@ def fig_gate_count_vs_m():
         # Qiskit baseline: random unit vector
         f_rand = np.random.randn(N)
         qk = qiskit_gates(f_rand, N)
-        patterns["Qiskit (random)"].append(qk)
+        patterns["Qiskit (Shende)"].append(qk)
 
         print(f"  m={m}: "
               f"SPARSE={patterns['SPARSE ($s=2$)'][-1]}, "
@@ -476,7 +476,7 @@ def fig_gate_count_vs_m():
               f"FOURIER={patterns['FOURIER'][-1]}, "
               f"POLY_d1={patterns['POLYNOMIAL ($d=1$)'][-1]}, "
               f"POLY_d2={patterns['POLYNOMIAL ($d=2$)'][-1]}, "
-              f"Qiskit={patterns['Qiskit (random)'][-1]}")
+              f"Qiskit={patterns['Qiskit (Shende)'][-1]}")
 
     # ── Plot ──────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(6.5, 4.2))
@@ -492,7 +492,7 @@ def fig_gate_count_vs_m():
         "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
         "POLYNOMIAL ($d=1$)":  dict(color="#08519c", marker=">",  ls="-.", lw=1.6),
         "POLYNOMIAL ($d=2$)":  dict(color="#6a51a3", marker="*",  ls="-.", lw=1.6),
-        "Qiskit (random)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
+        "Qiskit (Shende)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
     }
 
     for label, counts in patterns.items():
@@ -540,7 +540,7 @@ def fig_gate_count_vs_m_reduced():
         "STAIRCASE":       [],
         "FOURIER":         [],
         "POLYNOMIAL ($d=1$)": [],
-        "Qiskit (random)": [],
+        "Qiskit (Shende)": [],
     }
 
     def pyencode_transpile_total(circuit):
@@ -594,7 +594,7 @@ def fig_gate_count_vs_m_reduced():
         # Qiskit baseline: random unit vector
         f_rand = np.random.randn(N)
         qk = qiskit_gates(f_rand, N)
-        patterns["Qiskit (random)"].append(qk)
+        patterns["Qiskit (Shende)"].append(qk)
 
         print(f"  m={m}: "
               f"SPARSE={patterns['SPARSE ($s=2$)'][-1]}, "
@@ -605,7 +605,7 @@ def fig_gate_count_vs_m_reduced():
               f"STAIRCASE={patterns['STAIRCASE'][-1]}, "
               f"FOURIER={patterns['FOURIER'][-1]}, "
               f"POLY_d1={patterns['POLYNOMIAL ($d=1$)'][-1]}, "
-              f"Qiskit={patterns['Qiskit (random)'][-1]}")
+              f"Qiskit={patterns['Qiskit (Shende)'][-1]}")
 
     # ── Plot ──────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(6.5, 4.2))
@@ -619,7 +619,7 @@ def fig_gate_count_vs_m_reduced():
         "STAIRCASE":           dict(color="#e6ab02", marker="<",  ls="-",  lw=1.6),
         "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
         "POLYNOMIAL ($d=1$)":  dict(color="#08519c", marker=">",  ls="-.", lw=1.6),
-        "Qiskit (random)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
+        "Qiskit (Shende)":     dict(color="#555555", marker="x",  ls=":",  lw=1.8),
     }
 
     for label, counts in patterns.items():
