@@ -161,11 +161,16 @@ class GEOMETRIC(_VectorObj):
     so the quantum state is a product state prepared by m independent
     R_y rotations — one per qubit, zero entangling gates, depth 1.
 
-    With start > 0, the support is the power-of-2-aligned window
-    [start, N).  The construction prepares the geometric sequence on the
-    lower log2(N - start) qubits and applies X gates on upper qubits to
-    shift the window into place.  The resulting circuit is still O(m)
-    with zero two-qubit gates.
+    With start > 0, there are two implementation tiers:
+
+    Tier 1 (power-of-2-aligned): If the window width w = N - start is a 
+    power of 2 AND start is a multiple of w, uses an efficient construction
+    with geometric product state on lower qubits + X gates on upper qubits.
+    Gate count: log2(w) + popcount(start/w), zero two-qubit gates, depth 1.
+
+    Tier 2 (arbitrary offset): For any other start value, uses sparse
+    encoding techniques to synthesize the geometric amplitudes directly.
+    Gate count: O(w*m) where w = N - start, includes two-qubit gates.
 
     Parameters
     ----------
@@ -174,11 +179,9 @@ class GEOMETRIC(_VectorObj):
         Typical values: 0 < ratio < 1 for decay, ratio > 1 for growth.
     start : int, optional (default 0)
         Starting index of the geometric sequence. Amplitudes below this
-        index are zero. Tier 1 constraint: the window width w = N - start
-        must be a power of 2 AND start must be a multiple of w (so that
-        the interval [start, N) is power-of-2-aligned). Valid examples at
-        N=64: start=0, 32, 48, 56, 60, 62, 63. A non-aligned start (e.g.
-        start=10 at N=64) raises ValueError.
+        index are zero. Any value 0 <= start < N is supported.
+        Tier 1 examples at N=64: start=0, 32, 48, 56, 60, 62, 63.
+        Tier 2 examples at N=64: start=4, 10, 17, etc.
     c : float, optional
         Leading amplitude (default 1.0). Only affects normalization.
 
@@ -186,7 +189,8 @@ class GEOMETRIC(_VectorObj):
     --------
     >>> circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
     >>> circuit, info = encode(GEOMETRIC(ratio=0.5), N=16)
-    >>> circuit, info = encode(GEOMETRIC(ratio=0.9, start=32), N=64)
+    >>> circuit, info = encode(GEOMETRIC(ratio=0.9, start=32), N=64)  # tier 1
+    >>> circuit, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)  # tier 2
     """
     def __init__(self, ratio, start=0, c=1.0):
         self.vector_type = VectorType.GEOMETRIC

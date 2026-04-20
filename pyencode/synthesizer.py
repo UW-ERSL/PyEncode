@@ -1084,15 +1084,15 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
 
     With start > 0, prepares the offset sequence
         f_i = c * ratio^(i - start)   for i in [start, N),
-        f_i = 0                       for i in [0, start),
-    under the tier-1 alignment constraint that w = N - start is a power
-    of 2 and start is a multiple of w.  The geometric product state is
-    built on the lower log2(w) qubits; X gates on the upper qubits shift
-    the window into the interval [start, N) without any two-qubit gates.
+        f_i = 0                       for i in [0, start).
 
-    Gate count: log2(w) R_y rotations + popcount(start/w) X gates.
-    Two-qubit gate count: 0.
-    Depth: 1.
+    Tier-1 special case (power-of-2-aligned): Uses the efficient construction
+    with geometric product state on lower qubits + X gates on upper qubits.
+    Gate count: log2(w) + popcount(start/w), depth 1, zero CX.
+
+    Tier-2 general case (arbitrary offset): Synthesizes the geometric amplitudes
+    within the window [start, N) using sparse encoding techniques.
+    Gate count: O(w*m) where w = N - start, includes two-qubit gates.
 
     Parameters
     ----------
@@ -1100,8 +1100,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
         Number of qubits (N = 2^m).
     params : dict
         Must contain 'ratio' (float, > 0, != 1).
-        Optional 'start' (int, default 0).  See validation in _helpers.py
-        for the tier-1 alignment constraint.
+        Optional 'start' (int, default 0).
         Optional 'c' (float, default 1.0) — only affects normalization.
     """
     ratio = params["ratio"]
@@ -1118,24 +1117,43 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
             qc.ry(theta_j, j)
         return qc
 
-    # Offset construction (tier 1): aligned window [start, N).
-    # Build geometric on the lower m_low qubits; apply X on upper qubits
-    # whose bit is set in (start // w).
+    # Check for tier-1 special case (power-of-2-aligned)
     w = N - start
-    m_low = int(round(math.log2(w)))
+    if (w & (w - 1)) == 0 and start % w == 0:
+        # Tier 1: efficient aligned construction
+        m_low = int(round(math.log2(w)))
+        # Geometric product state on low qubits
+        for j in range(m_low):
+            r_pow = ratio ** (2 ** j)
+            theta_j = 2.0 * math.atan(r_pow)
+            qc.ry(theta_j, j)
+        # Upper qubits: X gates per binary decomposition of start // w
+        upper_val = start // w
+        for j in range(m - m_low):
+            if (upper_val >> j) & 1:
+                qc.x(m_low + j)
+        return qc
 
-    # Geometric product state on low qubits
-    for j in range(m_low):
-        r_pow = ratio ** (2 ** j)
-        theta_j = 2.0 * math.atan(r_pow)
-        qc.ry(theta_j, j)
-
-    # Upper qubits: X gates per binary decomposition of start // w
-    upper_val = start // w
-    for j in range(m - m_low):
-        if (upper_val >> j) & 1:
-            qc.x(m_low + j)
-
+    # Tier 2: general construction for arbitrary offset
+    # Strategy: Use sparse encoding for the specific geometric amplitudes in [start, N)
+    
+    # Build amplitude dictionary for sparse encoding
+    amplitudes = {}
+    for i in range(start, N):
+        amp = ratio ** (i - start)
+        # Convert to n-bit representation (LSB first for _gleinig_encode)
+        bits = tuple((i >> j) & 1 for j in range(m))
+        amplitudes[bits] = amp
+    
+    # Normalize
+    if amplitudes:
+        norm = math.sqrt(sum(a*a for a in amplitudes.values()))
+        for bits in amplitudes:
+            amplitudes[bits] /= norm
+        
+        # Use Gleinig-Hoefler sparse encoding
+        _gleinig_encode(qc, amplitudes, m)
+    
     return qc
 
 # ---------------------------------------------------------------------------

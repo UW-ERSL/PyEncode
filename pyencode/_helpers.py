@@ -144,20 +144,7 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
             raise ValueError(
                 f"GEOMETRIC start must satisfy 0 <= start < N; got start={start}, N={N}."
             )
-        if start > 0:
-            w = N - start
-            if (w & (w - 1)) != 0:
-                raise ValueError(
-                    f"GEOMETRIC with start={start} requires the window "
-                    f"width w = N - start = {w} to be a power of 2."
-                )
-            if start % w != 0:
-                raise ValueError(
-                    f"GEOMETRIC with start={start} requires the interval "
-                    f"[start, N) to be power-of-2-aligned, i.e. start must "
-                    f"be a multiple of w = N - start = {w}.  Valid examples "
-                    f"at N={N}: start in {{0}} ∪ {{N - 2^k : k=0..log2(N)-1}}."
-                )
+# Tier-2: No alignment constraint - any start value 0 <= start < N is supported
         result["ratio"] = ratio
         result["start"] = start
         result["c"] = float(result["c"])
@@ -221,6 +208,16 @@ def _synthesize_and_build_info(
         aligned = (w > 0) and ((w & (w - 1)) == 0) and (k1 % w == 0)
         if k1 == 0 or aligned:
             complexity = "O(m)"
+    
+    # GEOMETRIC: override complexity for tier-2 arbitrary offset cases
+    if pattern.load_type == VectorType.GEOMETRIC:
+        start = pattern.params.get("start", 0)
+        if start > 0:
+            N = 2 ** m
+            w = N - start
+            # Check if it's tier-1 (power-of-2-aligned) or tier-2 (arbitrary)
+            if not ((w & (w - 1)) == 0 and start % w == 0):
+                complexity = "O(w*m)"  # Tier-2 arbitrary offset
 
     info = EncodingInfo(
         vector_type=pattern.load_type.name,
