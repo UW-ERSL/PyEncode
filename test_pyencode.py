@@ -735,15 +735,46 @@ class TestGeometric:
         assert info.gate_count_1q == 6  # 3 R_y + 3 X
         assert info.gate_count_2q == 0
 
-    def test_start_non_aligned_raises_error(self):
-        """Non-aligned start should raise ValueError with helpful message."""
-        with pytest.raises(ValueError, match="window width.*power of 2"):
-            encode(GEOMETRIC(ratio=0.5, start=10), N=64)  # 64-10=54, not power of 2
+    def test_start_non_aligned_tier2(self):
+        """Tier-2: Non-aligned start values now work with arbitrary offset support."""
+        # Test case 1: start=10, N=64 (w=54, not power of 2) 
+        circuit, info = encode(GEOMETRIC(ratio=0.5, start=10), N=64)
+        assert info.complexity == "O(w*m)"  # Should be tier-2
+        assert info.gate_count_2q > 0       # Should have two-qubit gates
+        assert info.success_probability == 1.0
+        
+        # Verify correct amplitudes
+        expected = np.zeros(64)
+        expected[10:] = 0.5 ** np.arange(54)
+        assert_encodes(circuit, expected)
 
-    def test_start_non_multiple_raises_error(self):
-        """start must be multiple of window width."""
-        with pytest.raises(ValueError, match="window width.*power of 2"):
-            encode(GEOMETRIC(ratio=0.5, start=40), N=64)  # 64-40=24, not power of 2
+    def test_start_non_multiple_tier2(self):
+        """Tier-2: start values that are non-multiples of window width now work."""
+        # Test case 2: start=40, N=64 (w=24, not power of 2)
+        circuit, info = encode(GEOMETRIC(ratio=0.5, start=40), N=64)
+        assert info.complexity == "O(w*m)"  # Should be tier-2
+        assert info.gate_count_2q > 0       # Should have two-qubit gates
+        assert info.success_probability == 1.0
+        
+        # Verify correct amplitudes  
+        expected = np.zeros(64)
+        expected[40:] = 0.5 ** np.arange(24)
+        assert_encodes(circuit, expected)
+
+    def test_start_tier2_user_case(self):
+        """Tier-2: User's specific case (start=4, N=256) should work perfectly."""
+        circuit, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)
+        
+        # Should be tier-2 with appropriate gate counts
+        assert info.complexity == "O(w*m)"
+        assert circuit.size() > 1000        # Should be thousands of gates
+        assert info.gate_count_2q > 1000    # Should have many two-qubit gates
+        assert info.success_probability == 1.0
+        
+        # Verify correct amplitudes in a few spots
+        expected = np.zeros(256)
+        expected[4:] = 0.8 ** np.arange(252)
+        assert_encodes(circuit, expected, tol=1e-4)  # Relaxed tolerance for large circuits
 
     def test_start_validation_bounds(self):
         """start must be in range [0, N)."""
