@@ -693,6 +693,91 @@ class TestGeometric:
         assert info.vector_type == "LCU"
         assert 0 < info.success_probability <= 1.0
 
+    # === start parameter tests ===
+
+    def test_start_zero_backward_compatibility(self):
+        """start=0 should be identical to the original GEOMETRIC."""
+        c1, i1 = encode(GEOMETRIC(ratio=0.7), N=16)
+        c2, i2 = encode(GEOMETRIC(ratio=0.7, start=0), N=16)
+        sv1 = np.array(statevector(c1))
+        sv2 = np.array(statevector(c2))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-15)
+        assert i1.gate_count == i2.gate_count
+
+    def test_start_aligned_half(self):
+        """start=N/2: geometric decay starting at midpoint."""
+        circuit, info = encode(GEOMETRIC(ratio=0.5, start=32), N=64)
+        expected = np.zeros(64)
+        expected[32:] = 0.5 ** np.arange(32)  # 0.5^0, 0.5^1, ..., 0.5^31
+        assert_encodes(circuit, expected)
+        # Check gate count: log2(32)=5 geometric rotations + 1 X gate on top qubit
+        assert info.gate_count_1q == 6  # 5 R_y + 1 X
+        assert info.gate_count_2q == 0
+        assert info.circuit_depth == 1
+
+    def test_start_aligned_three_quarters(self):
+        """start=3N/4: geometric in the upper quarter."""
+        circuit, info = encode(GEOMETRIC(ratio=0.6, start=48), N=64)
+        expected = np.zeros(64)
+        expected[48:] = 0.6 ** np.arange(16)  # decay for 16 elements
+        assert_encodes(circuit, expected)
+        # log2(16)=4 rotations + 2 X gates (48/16 = 3 = 11 binary)
+        assert info.gate_count_1q == 6  # 4 R_y + 2 X
+        assert info.gate_count_2q == 0
+
+    def test_start_aligned_near_end(self):
+        """start=56 at N=64: geometric in just the last 8 slots."""
+        circuit, info = encode(GEOMETRIC(ratio=0.3, start=56), N=64)
+        expected = np.zeros(64)
+        expected[56:] = 0.3 ** np.arange(8)
+        assert_encodes(circuit, expected)
+        # log2(8)=3 rotations + 3 X gates (56/8 = 7 = 111 binary)
+        assert info.gate_count_1q == 6  # 3 R_y + 3 X
+        assert info.gate_count_2q == 0
+
+    def test_start_non_aligned_raises_error(self):
+        """Non-aligned start should raise ValueError with helpful message."""
+        with pytest.raises(ValueError, match="window width.*power of 2"):
+            encode(GEOMETRIC(ratio=0.5, start=10), N=64)  # 64-10=54, not power of 2
+
+    def test_start_non_multiple_raises_error(self):
+        """start must be multiple of window width."""
+        with pytest.raises(ValueError, match="window width.*power of 2"):
+            encode(GEOMETRIC(ratio=0.5, start=40), N=64)  # 64-40=24, not power of 2
+
+    def test_start_validation_bounds(self):
+        """start must be in range [0, N)."""
+        with pytest.raises(ValueError, match="start < N"):
+            encode(GEOMETRIC(ratio=0.5, start=64), N=64)
+        with pytest.raises(ValueError, match="non-negative"):
+            GEOMETRIC(ratio=0.5, start=-1)
+
+    def test_start_validate_mode(self):
+        """Validation should work correctly with start parameter."""
+        circuit, info = encode(GEOMETRIC(ratio=0.8, start=8), N=16, validate=True)
+        assert info.validated is True
+        expected = np.zeros(16)
+        expected[8:] = 0.8 ** np.arange(8)
+        np.testing.assert_allclose(np.abs(info.vector), expected, atol=1e-10)
+
+    def test_start_emitted_code_runs(self):
+        """Emitted code should work for start offset."""
+        circuit, info = encode(GEOMETRIC(ratio=0.9, start=16), N=32)
+        namespace = {}
+        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(np.array(statevector(circuit)))
+        sv_emit = np.abs(np.array(statevector(namespace["qc"])))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
+
+    def test_start_custom_c_normalization(self):
+        """c parameter still works with start offset."""
+        c1, _ = encode(GEOMETRIC(ratio=0.7, start=8, c=1.0), N=16)
+        c2, _ = encode(GEOMETRIC(ratio=0.7, start=8, c=3.0), N=16)
+        sv1 = np.abs(np.array(statevector(c1)))
+        sv2 = np.abs(np.array(statevector(c2)))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
 
 class TestScaling:
     """
@@ -1488,6 +1573,37 @@ class TestPredictor:
         from pyencode import predict_gates, POPCOUNT
         with pytest.raises(ValueError):
             predict_gates(POPCOUNT(r=0.7), N=5)  # not a power of 2
+
+    def test_geometric_start_prediction(self):
+        """Predict GEOMETRIC with start offset: log2(w) + popcount(start/w) gates."""
+        from pyencode import predict_gates, encode, GEOMETRIC
+        import warnings
+        
+        # Test cases: (N, start, expected_1q_gates)
+        test_cases = [
+            (64, 0,  6),   # vanilla: m=6 rotations
+            (64, 32, 6),   # start=N/2: log2(32)=5 + popcount(1)=1 = 6
+            (64, 48, 6),   # start=3N/4: log2(16)=4 + popcount(3)=2 = 6
+            (32, 24, 5),   # start=3N/4: log2(8)=3 + popcount(3)=2 = 5
+            (16, 8,  4),   # start=N/2: log2(8)=3 + popcount(1)=1 = 4
+        ]
+        
+        for N, start, expected_1q in test_cases:
+            p = predict_gates(GEOMETRIC(ratio=0.7, start=start), N)
+            assert p["exact"] is False  # transpiler may optimize small rotations
+            assert p["gate_count_1q"] == expected_1q, \
+                f"N={N}, start={start}: pred {p['gate_count_1q']} != expected {expected_1q}"
+            assert p["gate_count_2q"] == 0
+            assert p["circuit_depth"] == 1
+            
+            # Cross-check against actual encode() for a few cases
+            if N <= 32:  # avoid slow encode() for large N in tests
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    _, info = encode(GEOMETRIC(ratio=0.7, start=start), N)
+                # Prediction should be exact or close for aligned offsets
+                assert p["gate_count_1q"] == info.gate_count_1q, \
+                    f"N={N}, start={start}: predicted {p['gate_count_1q']} != actual {info.gate_count_1q}"
 
     def test_rejects_invalid_type(self):
         from pyencode import predict_gates

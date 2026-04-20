@@ -133,12 +133,33 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
 
     elif vector_type == VectorType.GEOMETRIC:
         result.setdefault("c", 1.0)
+        result.setdefault("start", 0)
         ratio = float(result["ratio"])
         if ratio <= 0:
             raise ValueError(f"GEOMETRIC ratio must be positive, got {ratio}.")
         if abs(ratio - 1.0) < 1e-14:
             raise ValueError("GEOMETRIC ratio=1.0 is a uniform vector; use STEP(k_s=N).")
+        start = int(result["start"])
+        if start < 0 or start >= N:
+            raise ValueError(
+                f"GEOMETRIC start must satisfy 0 <= start < N; got start={start}, N={N}."
+            )
+        if start > 0:
+            w = N - start
+            if (w & (w - 1)) != 0:
+                raise ValueError(
+                    f"GEOMETRIC with start={start} requires the window "
+                    f"width w = N - start = {w} to be a power of 2."
+                )
+            if start % w != 0:
+                raise ValueError(
+                    f"GEOMETRIC with start={start} requires the interval "
+                    f"[start, N) to be power-of-2-aligned, i.e. start must "
+                    f"be a multiple of w = N - start = {w}.  Valid examples "
+                    f"at N={N}: start in {{0}} ∪ {{N - 2^k : k=0..log2(N)-1}}."
+                )
         result["ratio"] = ratio
+        result["start"] = start
         result["c"] = float(result["c"])
 
     return result
@@ -286,7 +307,11 @@ def _build_expected_vector(
     if lt == VectorType.GEOMETRIC:
         ratio = p["ratio"]
         c = p.get("c", 1.0)
-        f = c * (ratio ** np.arange(N, dtype=float))
+        start = p.get("start", 0)
+        f = np.zeros(N, dtype=float)
+        if start < N:
+            idx = np.arange(start, N)
+            f[start:] = c * (ratio ** (idx - start))
         return f
 
     if lt == VectorType.POPCOUNT:
@@ -342,7 +367,12 @@ def _build_component_vector(comp: _VectorObj, N: int):
     if comp.vector_type == VectorType.GEOMETRIC:
         ratio = p["ratio"]
         c = p.get("c", 1.0)
-        return c * (ratio ** np.arange(N, dtype=float))
+        start = p.get("start", 0)
+        f = np.zeros(N, dtype=float)
+        if start < N:
+            idx = np.arange(start, N)
+            f[start:] = c * (ratio ** (idx - start))
+        return f
     if comp.vector_type == VectorType.POPCOUNT:
         r = p["r"]
         c = p.get("c", 1.0)

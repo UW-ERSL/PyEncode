@@ -149,20 +149,36 @@ class FOURIER(_VectorObj):
 
 
 class GEOMETRIC(_VectorObj):
-    """GEOMETRIC(ratio, c) — exponential decay / geometric sequence. O(m) gates.
+    """GEOMETRIC(ratio, start=0, c=1.0) — geometric sequence, optionally offset.
 
-    Prepares a state proportional to f_i = c * ratio^i for i = 0, ..., N-1.
+    Prepares a state proportional to:
+      f_i = c * ratio^(i - start)   for i in [start, N),
+      f_i = 0                       for i in [0, start).
 
-    The vector is multiplicatively separable over the bits of i:
+    With start=0 (default), the vector is multiplicatively separable over
+    the bits of i:
       f_i = c * ratio^(sum_j b_j * 2^j) = c * prod_j ratio^(b_j * 2^j)
     so the quantum state is a product state prepared by m independent
-    R_y rotations — one per qubit, zero entangling gates.
+    R_y rotations — one per qubit, zero entangling gates, depth 1.
+
+    With start > 0, the support is the power-of-2-aligned window
+    [start, N).  The construction prepares the geometric sequence on the
+    lower log2(N - start) qubits and applies X gates on upper qubits to
+    shift the window into place.  The resulting circuit is still O(m)
+    with zero two-qubit gates.
 
     Parameters
     ----------
     ratio : float
         Base of the geometric sequence. Must satisfy 0 < ratio and ratio != 1.
         Typical values: 0 < ratio < 1 for decay, ratio > 1 for growth.
+    start : int, optional (default 0)
+        Starting index of the geometric sequence. Amplitudes below this
+        index are zero. Tier 1 constraint: the window width w = N - start
+        must be a power of 2 AND start must be a multiple of w (so that
+        the interval [start, N) is power-of-2-aligned). Valid examples at
+        N=64: start=0, 32, 48, 56, 60, 62, 63. A non-aligned start (e.g.
+        start=10 at N=64) raises ValueError.
     c : float, optional
         Leading amplitude (default 1.0). Only affects normalization.
 
@@ -170,8 +186,9 @@ class GEOMETRIC(_VectorObj):
     --------
     >>> circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
     >>> circuit, info = encode(GEOMETRIC(ratio=0.5), N=16)
+    >>> circuit, info = encode(GEOMETRIC(ratio=0.9, start=32), N=64)
     """
-    def __init__(self, ratio, c=1.0):
+    def __init__(self, ratio, start=0, c=1.0):
         self.vector_type = VectorType.GEOMETRIC
         ratio = float(ratio)
         if ratio <= 0:
@@ -180,7 +197,10 @@ class GEOMETRIC(_VectorObj):
             raise ValueError(
                 "GEOMETRIC ratio=1.0 is a uniform vector; use STEP(k_s=N) instead."
             )
-        self.params = {"ratio": ratio, "c": float(c)}
+        start = int(start)
+        if start < 0:
+            raise ValueError(f"GEOMETRIC start must be non-negative, got {start}.")
+        self.params = {"ratio": ratio, "start": start, "c": float(c)}
 
 
 class POPCOUNT(_VectorObj):
@@ -636,8 +656,8 @@ _PARAM_SCHEMAS = {
     },
     VectorType.GEOMETRIC: {
         "required": {"ratio"},
-        "optional": {"c"},
-        "description": "ratio=<base of geometric sequence>",
+        "optional": {"c", "start"},
+        "description": "ratio=<base of geometric sequence>, start=<starting index (default 0)>",
     },
     VectorType.POPCOUNT: {
         "required": {"r"},

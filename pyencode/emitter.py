@@ -806,24 +806,57 @@ def _emit_walsh(m: int, params: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _emit_geometric(m: int, params: dict) -> str:
-    """Emit circuit code for GEOMETRIC (product-state R_y per qubit)."""
+    """Emit circuit code for GEOMETRIC (product-state R_y per qubit, optional offset)."""
     import math as _math
     ratio = params["ratio"]
     c = params.get("c", 1.0)
+    start = params.get("start", 0)
+
+    if start == 0:
+        lines = [
+            _header(m, f"GEOMETRIC  ratio={ratio}, c={c}"),
+            f"import math",
+            f"",
+            f"m = {m}",
+            f"ratio = {ratio!r}",
+            f"qc = QuantumCircuit(m, name='geometric')",
+            f"",
+            f"# Product state: each qubit j gets R_y(2*arctan(ratio^(2^j)))",
+            f"for j in range(m):",
+            f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
+            f"    qc.ry(theta_j, j)",
+        ]
+        return "\n".join(lines)
+
+    # Offset construction: aligned window [start, N).
+    N = 2 ** m
+    w = N - start
+    m_low = int(round(_math.log2(w)))
+    upper_val = start // w
+    upper_x_qubits = [m_low + j for j in range(m - m_low) if (upper_val >> j) & 1]
 
     lines = [
-        _header(m, f"GEOMETRIC  ratio={ratio}, c={c}"),
+        _header(m, f"GEOMETRIC  ratio={ratio}, start={start}, c={c}"),
         f"import math",
         f"",
         f"m = {m}",
         f"ratio = {ratio!r}",
+        f"start = {start}",
+        f"m_low = {m_low}     # log2(N - start)",
         f"qc = QuantumCircuit(m, name='geometric')",
         f"",
-        f"# Product state: each qubit j gets R_y(2*arctan(ratio^(2^j)))",
-        f"for j in range(m):",
+        f"# Build geometric product state on lower m_low qubits",
+        f"for j in range(m_low):",
         f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
         f"    qc.ry(theta_j, j)",
+        f"",
+        f"# Shift window to [start, N) via X gates on selected upper qubits",
     ]
+    if upper_x_qubits:
+        for q in upper_x_qubits:
+            lines.append(f"qc.x({q})")
+    else:
+        lines.append(f"# (no X gates needed for this start value)")
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------

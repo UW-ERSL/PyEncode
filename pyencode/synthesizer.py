@@ -1073,23 +1073,26 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     """
-    GEOMETRIC: exponential decay / geometric sequence as a product state.
+    GEOMETRIC: geometric sequence as a product state, optionally offset.
 
-    The vector f_i = c * ratio^i is multiplicatively separable over the
-    bits of i:
-        f_i = c * ratio^(sum_j b_j 2^j) = c * prod_j ratio^(b_j 2^j)
-
-    Each qubit j is independently prepared by a single R_y rotation:
+    With start=0 (default), prepares f_i = c * ratio^i for i in [0, N) via
+    m independent R_y rotations:
         R_y(theta_j)|0>  with  theta_j = 2 * arctan(ratio^(2^j))
 
-    This produces:
-        |psi> = bigotimes_j (|0> + ratio^(2^j) |1>) / norm_j
+    which produces the product state
+        |psi> = bigotimes_j (|0> + ratio^(2^j) |1>) / norm_j.
 
-    which, after normalization, encodes the amplitudes proportional to
-    ratio^i across the computational basis.
+    With start > 0, prepares the offset sequence
+        f_i = c * ratio^(i - start)   for i in [start, N),
+        f_i = 0                       for i in [0, start),
+    under the tier-1 alignment constraint that w = N - start is a power
+    of 2 and start is a multiple of w.  The geometric product state is
+    built on the lower log2(w) qubits; X gates on the upper qubits shift
+    the window into the interval [start, N) without any two-qubit gates.
 
-    Gate count: m single-qubit R_y gates, zero entangling gates.
-    Complexity: O(m).
+    Gate count: log2(w) R_y rotations + popcount(start/w) X gates.
+    Two-qubit gate count: 0.
+    Depth: 1.
 
     Parameters
     ----------
@@ -1097,23 +1100,41 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
         Number of qubits (N = 2^m).
     params : dict
         Must contain 'ratio' (float, > 0, != 1).
+        Optional 'start' (int, default 0).  See validation in _helpers.py
+        for the tier-1 alignment constraint.
         Optional 'c' (float, default 1.0) — only affects normalization.
     """
     ratio = params["ratio"]
+    start = params.get("start", 0)
+    N = 2 ** m
 
     qc = QuantumCircuit(m, name="geometric")
 
-    for j in range(m):
-        # For qubit j, we want the state:
-        #   alpha_j |0> + beta_j |1>
-        # where beta_j / alpha_j = ratio^(2^j)
-        #
-        # R_y(theta)|0> = cos(theta/2)|0> + sin(theta/2)|1>
-        # so sin(theta/2)/cos(theta/2) = tan(theta/2) = ratio^(2^j)
-        # => theta_j = 2 * arctan(ratio^(2^j))
+    if start == 0:
+        # Original construction: product state on full register
+        for j in range(m):
+            r_pow = ratio ** (2 ** j)
+            theta_j = 2.0 * math.atan(r_pow)
+            qc.ry(theta_j, j)
+        return qc
+
+    # Offset construction (tier 1): aligned window [start, N).
+    # Build geometric on the lower m_low qubits; apply X on upper qubits
+    # whose bit is set in (start // w).
+    w = N - start
+    m_low = int(round(math.log2(w)))
+
+    # Geometric product state on low qubits
+    for j in range(m_low):
         r_pow = ratio ** (2 ** j)
         theta_j = 2.0 * math.atan(r_pow)
         qc.ry(theta_j, j)
+
+    # Upper qubits: X gates per binary decomposition of start // w
+    upper_val = start // w
+    for j in range(m - m_low):
+        if (upper_val >> j) & 1:
+            qc.x(m_low + j)
 
     return qc
 

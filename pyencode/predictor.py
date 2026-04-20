@@ -176,16 +176,31 @@ def _predict_walsh(m: int, params: dict) -> dict:
 
 
 def _predict_geometric(m: int, params: dict) -> dict:
-    """GEOMETRIC: m R_y rotations. Transpiler may collapse small-angle
-    rotations; we return m as an upper bound. Exact = False."""
-    # We could introspect the ratio to detect small-angle collapse,
-    # but the conservative answer is m.
+    """GEOMETRIC: m R_y rotations (or log2(w) + popcount(start/w) gates
+    if offset is specified). Transpiler may collapse small-angle rotations;
+    we return the upper bound. Exact = False."""
+    start = params.get("start", 0)
+    if start == 0:
+        # Vanilla: m rotations, 0 CX, depth 1
+        return dict(
+            gate_count_1q=m,
+            gate_count_2q=0,
+            circuit_depth=1,
+            complexity="O(m)",
+            exact=False,  # transpiler sometimes collapses far-from-0 rotations
+        )
+    # Offset (tier 1): log2(w) rotations + popcount(start/w) X gates
+    N = 1 << m
+    w = N - start
+    m_low = int(round(math.log2(w)))
+    upper_val = start // w
+    x_gates = bin(upper_val).count("1")
     return dict(
-        gate_count_1q=m,
+        gate_count_1q=m_low + x_gates,
         gate_count_2q=0,
         circuit_depth=1,
         complexity="O(m)",
-        exact=False,  # transpiler sometimes collapses far-from-0 rotations
+        exact=False,  # transpiler sometimes collapses small rotations
     )
 
 
