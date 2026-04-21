@@ -12,7 +12,8 @@ everything from index 11 onward follows a GEOMETRIC decay.
         <------- SPARSE prefix, support = {2,5,7} ------|--- [11, 256) --->
 
 PARTITION handles this in a single ancilla-free circuit with
-success probability 1, whereas LCU would need an ancilla plus
+success probability 1, whereas SUM (the ancilla-based counterpart)
+would need an ancilla plus
 controlled component circuits.
 
 Run with:  python examples/partition_example.py
@@ -30,7 +31,7 @@ if _REPO_ROOT not in sys.path:
 import numpy as np
 from qiskit.quantum_info import Statevector
 
-from pyencode import encode, PARTITION, SPARSE, GEOMETRIC, LCU
+from pyencode import encode, PARTITION, SPARSE, GEOMETRIC, SUM
 
 
 # ---------------------------------------------------------------------
@@ -63,20 +64,21 @@ print(f"  ancilla qubits:                      0")
 print(f"  success probability:                 {info_p.success_probability}")
 
 # ---------------------------------------------------------------------
-# Reference: same state constructed via LCU (ancilla + PREP/SELECT)
+# Reference: same state constructed via SUM (implemented as LCU:
+# ancilla + PREP/SELECT)
 # ---------------------------------------------------------------------
 
 import warnings
 with warnings.catch_warnings():
-    warnings.simplefilter("ignore")   # LCU may warn about overlap detection
+    warnings.simplefilter("ignore")   # SUM may warn about overlap detection
     qc_l, info_l = encode(
-        LCU([(1.0, SPARSE(sparse_entries)),
+        SUM([(1.0, SPARSE(sparse_entries)),
              (1.0, GEOMETRIC(ratio=geometric_ratio, start=geometric_start))]),
         N=N)
 
 print()
 print("=" * 64)
-print("LCU baseline (same disjoint state, ancilla-based)")
+print("SUM baseline -- same disjoint state via LCU (ancilla-based)")
 print("=" * 64)
 print(info_l)
 
@@ -86,11 +88,11 @@ print(info_l)
 
 print()
 print("=" * 64)
-print("PARTITION vs LCU")
+print("PARTITION vs SUM")
 print("=" * 64)
 print(f"  PARTITION gate count: {info_p.gate_count:>6d}")
-print(f"  LCU       gate count: {info_l.gate_count:>6d}")
-print(f"  ratio (LCU/PARTITION): {info_l.gate_count / info_p.gate_count:.2f}x")
+print(f"  SUM       gate count: {info_l.gate_count:>6d}")
+print(f"  ratio (SUM/PARTITION): {info_l.gate_count / info_p.gate_count:.2f}x")
 
 # ---------------------------------------------------------------------
 # Correctness check against analytical reference vector

@@ -57,20 +57,25 @@ The inner loop runs 5,000 predictions in under a second. Without `predict_gates`
 
 ## Composite constructors
 
-`predict_gates` handles TENSOR and LCU by recursing into components:
+`predict_gates` handles TENSOR, SUM, and PARTITION by recursing into components:
 
 ```python
-from pyencode import predict_gates, TENSOR, LCU, FOURIER, SQUARE
+from pyencode import predict_gates, TENSOR, SUM, PARTITION, FOURIER, SQUARE, SPARSE, GEOMETRIC
 
 # TENSOR sums over disjoint subregisters
 obj = TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 32),
               (FOURIER(modes=[(3, 1.0, 0)]), 32)])
 p = predict_gates(obj, N=32*32)    # m=10, gate_count ~119
 
-# LCU sums components with ancilla overhead
-obj = LCU([(0.5, SQUARE(k1=0, k2=8, c=1.0)),
+# SUM: weighted superposition (ancilla-based via the LCU technique)
+obj = SUM([(0.5, SQUARE(k1=0, k2=8, c=1.0)),
            (0.5, SQUARE(k1=8, k2=16, c=1.0))])
 p = predict_gates(obj, N=16)
+
+# PARTITION: disjoint-support composition (ancilla-free, p = 1)
+obj = PARTITION([SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+                 GEOMETRIC(ratio=0.8, start=11)])
+p = predict_gates(obj, N=256)
 ```
 
 ## When to use encode() instead

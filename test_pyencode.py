@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU, PARTITION
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, SUM, LCU, PARTITION
 
 
 # ---------------------------------------------------------------------------
@@ -25,8 +25,8 @@ def statevector(circuit):
     return np.array(Statevector(circuit))
 
 
-def assert_encodes_lcu(circuit, expected_f, n_anc, tol=1e-4):
-    """Verify LCU circuit by post-selecting ancilla on |0> subspace."""
+def assert_encodes_sum(circuit, expected_f, n_anc, tol=1e-4):
+    """Verify SUM circuit (LCU Protocol 1) by post-selecting ancilla on |0>."""
     from qiskit.quantum_info import Statevector
     N = len(expected_f)
     norm = np.linalg.norm(expected_f)
@@ -40,8 +40,13 @@ def assert_encodes_lcu(circuit, expected_f, n_anc, tol=1e-4):
     simulated = np.abs(sv_anc0 / norm_anc0)
     np.testing.assert_allclose(
         simulated, expected, atol=tol,
-        err_msg=f"LCU post-selected state mismatch.\nGot:      {np.round(simulated,4)}\nExpected: {np.round(expected,4)}"
+        err_msg=f"SUM post-selected state mismatch.\nGot:      {np.round(simulated,4)}\nExpected: {np.round(expected,4)}"
     )
+
+
+# Backward-compat: existing tests that reference ``assert_encodes_lcu``
+# continue to work.  Remove after all tests are updated.
+assert_encodes_lcu = assert_encodes_sum
 
 
 def assert_encodes(circuit, expected_f, tol=1e-5):
@@ -441,17 +446,17 @@ class TestWalsh:
 
 
 # ===================================================================
-# LCU
+# SUM  (weighted superposition, implemented via the LCU technique)
 # ===================================================================
 
-class TestLCU:
+class TestSum:
 
     def test_two_disjoint_squares_correct_state(self):
         """Two disjoint SQUARE intervals: post-selected state is correct."""
         circuit, info = encode(
-            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
-        assert info.vector_type == "LCU"
+        assert info.vector_type == "SUM"
         # p = sum_j beta_j^4 = 2*(1/sqrt(2))^4 = 0.5 for 2 equal-weight disjoint
         assert abs(info.success_probability - 0.5) < 1e-6
         expected = np.ones(8, dtype=float)
@@ -460,7 +465,7 @@ class TestLCU:
     def test_two_disjoint_squares_unequal_weights(self):
         """Disjoint SQUARE with different weights: post-selected state correct."""
         circuit, info = encode(
-            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (4.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
         assert 0 < info.success_probability < 1.0
         expected = np.array([1,1,1,1,4,4,4,4], dtype=float)
@@ -469,7 +474,7 @@ class TestLCU:
     def test_three_disjoint_squares(self):
         """Three disjoint intervals — 2 ancilla qubits."""
         circuit, info = encode(
-            LCU([(1.0, SQUARE(k1=0,  k2=4,  c=2.0)),
+            SUM([(1.0, SQUARE(k1=0,  k2=4,  c=2.0)),
                  (1.0, SQUARE(k1=4,  k2=8,  c=3.0)),
                  (1.0, SQUARE(k1=8,  k2=16, c=1.0))]), N=16)
         assert 0 < info.success_probability <= 1.0
@@ -479,7 +484,7 @@ class TestLCU:
     def test_disjoint_step_square(self):
         """STEP + SQUARE with disjoint support: post-selected state correct."""
         circuit, info = encode(
-            LCU([(1.0, STEP(k_s=4,  c=2.0)),
+            SUM([(1.0, STEP(k_s=4,  c=2.0)),
                  (1.0, SQUARE(k1=4, k2=8, c=3.0))]), N=8)
         assert 0 < info.success_probability <= 1.0
         expected = np.array([2,2,2,2,3,3,3,3], dtype=float)
@@ -491,7 +496,7 @@ class TestLCU:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             circuit, info = encode(
-                LCU([(1.0, STEP(k_s=8,   c=1.0)),
+                SUM([(1.0, STEP(k_s=8,   c=1.0)),
                      (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
             assert len(w) == 1
             assert "overlapping" in str(w[0].message).lower()
@@ -500,33 +505,33 @@ class TestLCU:
         assert info.success_probability > 0.0
 
     def test_single_component(self):
-        """Single-component LCU reduces to plain encode."""
-        c1, i1 = encode(LCU([(1.0, STEP(k_s=4, c=1.0))]), N=8)
+        """Single-component SUM reduces to plain encode."""
+        c1, i1 = encode(SUM([(1.0, STEP(k_s=4, c=1.0))]), N=8)
         c2, i2 = encode(STEP(k_s=4, c=1.0), N=8)
         assert i1.gate_count == i2.gate_count
 
     def test_validate_disjoint(self):
         _, info = encode(
-            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (1.0, SQUARE(k1=4, k2=8, c=2.0))]),
             N=8, validate=True)
         assert info.validated
 
     def test_negative_weight_raises(self):
         with pytest.raises(ValueError, match="positive"):
-            LCU([(-1.0, STEP(k_s=4, c=1.0))])
+            SUM([(-1.0, STEP(k_s=4, c=1.0))])
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):
-            LCU([])
+            SUM([])
 
     def test_bad_component_raises(self):
         with pytest.raises(TypeError):
-            LCU([(1.0, "not a VectorObj")])
+            SUM([(1.0, "not a VectorObj")])
 
     def test_success_probability_in_info(self):
         _, info = encode(
-            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
         assert hasattr(info, 'success_probability')
         assert 0.0 < info.success_probability <= 1.0
@@ -685,12 +690,12 @@ class TestGeometric:
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
-        """GEOMETRIC can be used as an LCU component."""
+        """GEOMETRIC can be used as a SUM component."""
         circuit, info = encode(
-            LCU([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, GEOMETRIC(ratio=0.5))]),
             N=16)
-        assert info.vector_type == "LCU"
+        assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     # === start parameter tests ===
@@ -1013,12 +1018,12 @@ class TestGeometricDyadic:
         np.testing.assert_allclose(np.abs(info.vector), ref, atol=1e-10)
 
     def test_lcu_composability(self):
-        """A dyadic-regime GEOMETRIC still works as an LCU component."""
+        """A dyadic-regime GEOMETRIC still works as a SUM component."""
         qc, info = encode(
-            LCU([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, GEOMETRIC(ratio=0.5, start=5))]),
             N=16)
-        assert info.vector_type == "LCU"
+        assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_emitted_code_runs_and_matches(self):
@@ -1254,12 +1259,12 @@ class TestPopcount:
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
-        """POPCOUNT can be used as an LCU component."""
+        """POPCOUNT can be used as a SUM component."""
         circuit, info = encode(
-            LCU([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, POPCOUNT(r=0.5))]),
             N=16)
-        assert info.vector_type == "LCU"
+        assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_hamming_weight_structure(self):
@@ -1380,10 +1385,10 @@ class TestStaircase:
 
     def test_lcu_composability(self):
         circuit, info = encode(
-            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (2.0, STAIRCASE(r=0.5))]),
             N=16)
-        assert info.vector_type == "LCU"
+        assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
 
 
@@ -1607,12 +1612,12 @@ class TestPolynomial:
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
-        """POLYNOMIAL can be used as an LCU component."""
+        """POLYNOMIAL can be used as a SUM component."""
         circuit, info = encode(
-            LCU([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, POLYNOMIAL(coeffs=[0.0, 1.0]))]),
             N=16)
-        assert info.vector_type == "LCU"
+        assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_tensor_composability(self):
@@ -2056,7 +2061,7 @@ class TestPartition:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")   # LCU may warn about overlap
             _, info_l = encode(
-                LCU([(1.0, SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)])),
+                SUM([(1.0, SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)])),
                      (1.0, GEOMETRIC(ratio=0.8, start=11))]),
                 N=256)
         # Use total gate_count as the comparison metric since LCU's
@@ -2333,3 +2338,73 @@ class TestConstructorRepr:
         exec(compile(info.circuit_code, "<partition>", "exec"), ns)
         assert ns["info"].success_probability == 1.0
         assert ns["info"].gate_count == info.gate_count
+
+
+# ===================================================================
+# Backward-compat: LCU -> SUM rename
+# ===================================================================
+
+class TestLcuDeprecated:
+    """
+    ``LCU`` has been renamed to ``SUM``.  The old name remains importable
+    and callable as a deprecated alias for one release cycle.
+
+    These tests verify:
+      - ``LCU`` still imports from ``pyencode`` (back-compat)
+      - calling ``LCU(...)`` issues a ``DeprecationWarning``
+      - the returned object is a ``SUM`` and encodes identically
+      - ``VectorType.LCU`` is the same enum member as ``VectorType.SUM``
+      - ``isinstance(LCU(...), SUM)`` holds
+    """
+
+    def test_lcu_import_still_works(self):
+        from pyencode import LCU as _LCU, SUM as _SUM
+        # Both symbols are present in the public API.
+        assert _LCU is not None
+        assert _SUM is not None
+
+    def test_lcu_call_issues_deprecation_warning(self):
+        """Calling LCU(...) must emit a DeprecationWarning recommending SUM."""
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                 (1.0, SQUARE(k1=4, k2=8, c=1.0))])
+            deprecations = [w for w in caught
+                            if issubclass(w.category, DeprecationWarning)]
+            assert len(deprecations) == 1
+            msg = str(deprecations[0].message)
+            assert "LCU" in msg and "SUM" in msg
+            assert "deprecated" in msg.lower()
+
+    def test_lcu_produces_equivalent_sum_object(self):
+        """LCU(...) must return a SUM instance with identical params."""
+        import warnings
+        components = [(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                      (1.0, SQUARE(k1=4, k2=8, c=1.0))]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            via_lcu = LCU(components)
+            via_sum = SUM(components)
+        assert isinstance(via_lcu, SUM)
+        assert via_lcu.params == via_sum.params
+        assert via_lcu.vector_type == via_sum.vector_type
+
+    def test_lcu_encodes_same_circuit_as_sum(self):
+        """encode() via the deprecated LCU name produces the same circuit."""
+        import warnings
+        components = [(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+                      (1.0, SQUARE(k1=4, k2=8, c=1.0))]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            qc_lcu, info_lcu = encode(LCU(components), N=8)
+        qc_sum, info_sum = encode(SUM(components), N=8)
+        assert info_lcu.vector_type == info_sum.vector_type == "SUM"
+        assert info_lcu.gate_count == info_sum.gate_count
+        assert info_lcu.success_probability == info_sum.success_probability
+
+    def test_vector_type_lcu_is_sum(self):
+        """VectorType.LCU aliases VectorType.SUM (same enum member)."""
+        assert VectorType.LCU is VectorType.SUM
+        # And the name returned by .name is the primary one ("SUM").
+        assert VectorType.LCU.name == "SUM"

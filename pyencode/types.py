@@ -410,7 +410,7 @@ class TENSOR(_VectorObj):
     Prepared state:
         |psi> = |f^(1)> otimes |f^(2)> otimes ... otimes |f^(K)>
 
-    Unlike LCU (which SUPERPOSES components via an ancilla), TENSOR places
+    Unlike SUM (which SUPERPOSES components via an ancilla), TENSOR places
     components on DISJOINT qubit registers.  No ancilla is needed, the
     success probability is 1, and there is no post-selection.
 
@@ -474,18 +474,26 @@ class TENSOR(_VectorObj):
         self.params = {"components": comp_list, "sizes": sizes}
 
 
-class LCU(_VectorObj):
-    """LCU([(w1, VectorObj1), (w2, VectorObj2), ...]) — linear combination via ancilla.
+class SUM(_VectorObj):
+    """SUM([(w1, VectorObj1), (w2, VectorObj2), ...]) — weighted superposition.
 
     Prepares a weighted superposition of structured component states:
       |psi> ∝ sum_j w_j |f^(j)>
 
-    using ceil(log2(r)) ancilla qubits and controlled component circuits.
+    For components with pairwise-disjoint support, prefer ``PARTITION``
+    instead — it prepares the same state with no ancilla and success
+    probability 1.  ``SUM`` is the general-purpose alternative that
+    handles overlapping or weighted combinations via an ancilla register.
 
-    When all components have disjoint support (e.g. multiple SQUARE intervals),
-    success probability is exactly 1.0 and the ancilla uncomputes cleanly.
-    For overlapping components, success probability p < 1.0 and post-selection
-    or amplitude amplification is required.
+    Implementation: the Linear Combination of Unitaries (LCU) technique
+    of Childs & Wiebe 2012, using ceil(log2(r)) ancilla qubits and
+    controlled component circuits.
+
+    When all components have disjoint support (e.g. multiple SQUARE
+    intervals) the ancilla uncomputes cleanly and the success probability
+    is exactly 1.0.  For overlapping components, success probability
+    p < 1.0 and post-selection or amplitude amplification is required
+    (a warning is issued in that case).
 
     Parameters
     ----------
@@ -495,22 +503,28 @@ class LCU(_VectorObj):
 
     Examples
     --------
-    >>> # Piecewise-constant: two disjoint intervals (p=1)
+    >>> # Piecewise-constant: two disjoint intervals (p = 1)
     >>> circuit, info = encode(
-    ...     LCU([(1.0, SQUARE(k1=0,  k2=8,  c=1.0)),
+    ...     SUM([(1.0, SQUARE(k1=0,  k2=8,  c=1.0)),
     ...          (4.0, SQUARE(k1=8,  k2=16, c=1.0))]), N=16)
     >>> # info.success_probability -> 1.0
+    >>> # (For this specific disjoint case, PARTITION is cheaper.)
 
-    >>> # Mixed patterns: overlapping (p<1, warning issued)
+    >>> # Mixed patterns: overlapping (p < 1, warning issued)
     >>> circuit, info = encode(
-    ...     LCU([(1.0, STEP(k_s=8, c=1.0)),
+    ...     SUM([(1.0, STEP(k_s=8, c=1.0)),
     ...          (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
     >>> # UserWarning: overlapping support, p < 1.0
+
+    References
+    ----------
+    Childs & Wiebe, *Quantum Inf. Comput.* 12(11-12), 2012.
+    Berry, Childs, Cleve, Kothari & Somma, *Phys. Rev. Lett.* 114(9), 2015.
     """
     def __init__(self, components):
-        self.vector_type = VectorType.LCU
+        self.vector_type = VectorType.SUM
         if not components:
-            raise ValueError("LCU requires at least one component.")
+            raise ValueError("SUM requires at least one component.")
         weights = []
         objs = []
         for item in components:
@@ -518,20 +532,43 @@ class LCU(_VectorObj):
                 w, obj = item
             except (TypeError, ValueError):
                 raise TypeError(
-                    f"LCU expects (weight, VectorObj) tuples, got {item!r}."
+                    f"SUM expects (weight, VectorObj) tuples, got {item!r}."
                 )
             if not isinstance(obj, _VectorObj):
                 raise TypeError(
-                    f"LCU component must be a VectorObj, got {type(obj).__name__}."
+                    f"SUM component must be a VectorObj, got {type(obj).__name__}."
                 )
             w = float(w)
             if w <= 0:
                 raise ValueError(
-                    f"LCU weights must be positive, got {w}."
+                    f"SUM weights must be positive, got {w}."
                 )
             weights.append(w)
             objs.append(obj)
         self.params = {"weights": weights, "components": objs}
+
+
+def LCU(components):
+    """Deprecated alias for ``SUM``.
+
+    ``LCU`` has been renamed to ``SUM`` to describe the mathematical
+    object (a weighted sum of structured states) rather than the
+    implementation technique.  The underlying algorithm remains the
+    Linear Combination of Unitaries method of Childs & Wiebe 2012;
+    see ``SUM`` for full details.
+
+    This alias is kept for backward compatibility and will be removed
+    in a future release.  New code should use ``SUM``.
+    """
+    import warnings
+    warnings.warn(
+        "LCU is deprecated and will be removed in a future release; "
+        "use SUM instead.  (The implementation is unchanged -- SUM is "
+        "the new name for the same constructor.)",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return SUM(components)
 
 
 class PARTITION(_VectorObj):
@@ -541,8 +578,8 @@ class PARTITION(_VectorObj):
     provided those supports are pairwise disjoint.  The composition is
     deterministic: no ancilla, no post-selection, success probability 1.
 
-    This is the ancilla-free counterpart of LCU.  When components happen
-    to have disjoint support, PARTITION is strictly cheaper than LCU and
+    This is the ancilla-free counterpart of SUM.  When components happen
+    to have disjoint support, PARTITION is strictly cheaper than SUM and
     avoids the need for amplitude amplification.
 
     Algorithm
@@ -577,7 +614,7 @@ class PARTITION(_VectorObj):
 
     Disallowed components: FOURIER, WALSH, POPCOUNT, STAIRCASE, POLYNOMIAL
     have full or dense support and cannot participate in a disjoint
-    partition.  Use LCU instead if such a component is required.
+    partition.  Use SUM instead if such a component is required.
 
     Parameters
     ----------
@@ -628,7 +665,7 @@ class PARTITION(_VectorObj):
                     f"PARTITION component type {item.vector_type.name} has "
                     f"full or dense support and cannot be part of a disjoint "
                     f"partition.  Allowed types: SPARSE, STEP, SQUARE, "
-                    f"GEOMETRIC.  Use LCU instead for overlapping or "
+                    f"GEOMETRIC.  Use SUM instead for overlapping or "
                     f"dense-support combinations."
                 )
             comp_list.append(item)
@@ -664,7 +701,7 @@ class EncodingInfo:
         Standalone Qiskit source that builds the same circuit.
     success_probability : float
         Post-selection probability (1.0 for single-pattern constructors;
-        p in (0,1] for LCU).
+        p in (0,1] for SUM).
     vector : np.ndarray or None
         The classically constructed amplitude vector f, populated only
         when validate=True. Requires O(2^m) memory. None otherwise.

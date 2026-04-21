@@ -17,7 +17,7 @@ from matplotlib import rcParams
 
 from pyencode import (
     encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU,
+    POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, SUM,
 )
 from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 
@@ -269,11 +269,11 @@ def fig_tensor():
 
 
 def fig_lcu_disjoint():
-    """LCU: two disjoint SQUARE intervals."""
-    print("\n--- LCU disjoint: two SQUARE intervals, N=16 ---")
+    """SUM: two disjoint SQUARE intervals (ancilla-based; PARTITION is cheaper here)."""
+    print("\n--- SUM disjoint: two SQUARE intervals, N=16 ---")
     N = 16
     circuit, info = encode(
-        LCU([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
+        SUM([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
              (3.0, SQUARE(k1=8, k2=16, c=1.0))]),
         N=N)
     print_info("encode", info)
@@ -281,28 +281,28 @@ def fig_lcu_disjoint():
     f = np.zeros(N)
     f[:8] = 1.0; f[8:] = 3.0
     plot_vector(f, N,
-                r"LCU (disjoint): $f_{[:8]}=1,\;f_{[8:]}=3$, $N=16$",
+                r"SUM (disjoint): $f_{[:8]}=1,\;f_{[8:]}=3$, $N=16$",
                 "lcu_disjoint_vector.png")
     save_circuit(circuit, "lcu_disjoint_circuit.png", scale=0.5)
 
 
 def fig_lcu_overlap():
-    """LCU: overlapping STEP + FOURIER."""
+    """SUM: overlapping STEP + FOURIER (requires post-selection)."""
     import warnings
-    print("\n--- LCU overlapping: STEP + FOURIER, N=16 ---")
+    print("\n--- SUM overlapping: STEP + FOURIER, N=16 ---")
     N = 16
     k = np.arange(N)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         circuit, info = encode(
-            LCU([(1.0, STEP(k_s=16, c=1.0)),
+            SUM([(1.0, STEP(k_s=16, c=1.0)),
                  (1.0, FOURIER(modes=[(1, 1.0, 0)]))]),
             N=N)
     print_info("encode", info)
     print(f"  success_probability = {info.success_probability:.4f}")
     f = np.ones(N) + np.sin(2 * np.pi * k / N)
     plot_vector(f, N,
-                r"LCU (overlap): uniform $+$ $\sin(2\pi i/N)$, $N=16$",
+                r"SUM (overlap): uniform $+$ $\sin(2\pi i/N)$, $N=16$",
                 "lcu_overlap_vector.png", smooth=True)
     save_circuit(circuit, "lcu_overlap_circuit.png", scale=0.4)
 
@@ -350,11 +350,11 @@ def fig_poisson():
 
 
 def fig_finance():
-    """Quantum finance: piecewise-constant distribution via LCU of SQUARE bins."""
-    print("\n--- Quantum Finance (LCU) ---")
+    """Quantum finance: piecewise-constant distribution via SUM of SQUARE bins."""
+    print("\n--- Quantum Finance (SUM) ---")
     N = 16
     circuit, info = encode(
-        LCU([(0.10, SQUARE(k1=0,  k2=4,  c=1.0)),
+        SUM([(0.10, SQUARE(k1=0,  k2=4,  c=1.0)),
              (0.40, SQUARE(k1=4,  k2=8,  c=1.0)),
              (0.35, SQUARE(k1=8,  k2=12, c=1.0)),
              (0.15, SQUARE(k1=12, k2=16, c=1.0))]),

@@ -709,21 +709,27 @@ def _compute_success_probability(weights, component_vectors):
 # LCU encoding
 # ---------------------------------------------------------------------------
 
-def _encode_lcu(lcu_obj, N, validate, tol):
+def _encode_sum(sum_obj, N, validate, tol):
     """
-    Encode an LCU constructor: weighted superposition of component states.
+    Encode a SUM constructor: weighted superposition of component states.
+
+    Implementation: the Linear Combination of Unitaries (LCU) technique
+    of Childs & Wiebe 2012 — an ancilla register in superposition selects
+    which component circuit is applied, then PREP† uncomputes the ancilla.
+    Post-selecting the ancilla on |0> yields the target pure state.
 
     For disjoint-support components (STEP, SQUARE, SPARSE combinations):
       - success_probability = 1.0, no warning
+      - (PARTITION is a strictly cheaper alternative for this case.)
     For overlapping components:
       - success_probability < 1.0, UserWarning issued
     """
     import warnings
     from .synthesizer import synthesize as _synthesize
-    from .types import LCU as LCU_type, EncodingInfo
+    from .types import SUM as SUM_type, EncodingInfo
 
-    weights   = lcu_obj.params["weights"]
-    comp_objs = lcu_obj.params["components"]
+    weights   = sum_obj.params["weights"]
+    comp_objs = sum_obj.params["components"]
     K = len(comp_objs)
     m = int(round(math.log2(N)))
 
@@ -753,7 +759,7 @@ def _encode_lcu(lcu_obj, N, validate, tol):
     p_success = _compute_success_probability(weights, component_vectors)
     if not disjoint:
         warnings.warn(
-            f"LCU components have overlapping support. "
+            f"SUM components have overlapping support. "
             f"Success probability p={p_success:.4f}. "
             f"Post-selection on ancilla |0> required; "
             f"use amplitude amplification for repeated preparation.",
@@ -767,16 +773,16 @@ def _encode_lcu(lcu_obj, N, validate, tol):
     scaled = np.sqrt(np.array(weights, dtype=float) * norms)
     Z      = np.linalg.norm(scaled)
     if Z < 1e-14:
-        raise ValueError("LCU: combined vector is zero.")
+        raise ValueError("SUM: combined vector is zero.")
     weights_norm = scaled / Z
 
     # Synthesise component circuits
     component_circuits = [_synthesize(pat) for pat in component_patterns]
 
-    # Build LCU circuit
+    # Build the LCU circuit (Childs-Wiebe Protocol 1: PREP + ctrl-U + PREP_dagger)
     n_anc       = math.ceil(math.log2(K))
     total_qubits = m + n_anc
-    qc          = QuantumCircuit(total_qubits, name="lcu")
+    qc          = QuantumCircuit(total_qubits, name="sum")
     data_qubits = list(range(m))
     anc_qubits  = list(range(m, total_qubits))
 
@@ -795,7 +801,6 @@ def _encode_lcu(lcu_obj, N, validate, tol):
             qc.x(q)
 
     # Step 3: apply PREP_dagger to uncompute ancilla
-    # This is the key step for Protocol 1 pure-state LCU.
     # After this, post-selecting ancilla=|0> gives the target pure state.
     anc_prep_circ = QuantumCircuit(n_anc)
     _prepare_amplitude_ancilla(anc_prep_circ, weights_norm, K, n_anc, list(range(n_anc)))
@@ -805,10 +810,10 @@ def _encode_lcu(lcu_obj, N, validate, tol):
     complexity  = f"O({K}·m)"
 
     # Generate standalone circuit code by extracting gates
-    circuit_code = _emit_lcu_circuit_code(qc, m, n_anc, comp_objs, weights)
+    circuit_code = _emit_sum_circuit_code(qc, m, n_anc, comp_objs, weights)
 
     info = EncodingInfo(
-        vector_type="LCU",
+        vector_type="SUM",
         N=N,
         m=m,
         gate_count=total_gates,
@@ -833,13 +838,13 @@ def _encode_lcu(lcu_obj, N, validate, tol):
     return qc, info
 
 
-def _emit_lcu_circuit_code(qc, m, n_anc, comp_objs, weights):
-    """Extract gate-level code from an LCU circuit."""
+def _emit_sum_circuit_code(qc, m, n_anc, comp_objs, weights):
+    """Extract gate-level code from a SUM circuit (LCU Protocol 1)."""
     total_qubits = m + n_anc
     decomposed = qc.decompose(reps=3)
 
     lines = [
-        f"# PyEncode — emitted circuit: LCU — extracted from synthesized circuit",
+        f"# PyEncode — emitted circuit: SUM (LCU Protocol 1) — extracted from synthesized circuit",
         f"# m = {m} data qubits + {n_anc} ancilla = {total_qubits} total",
         f"# Components: {[c.vector_type.name for c in comp_objs]}",
         f"# Weights: {list(weights)}",
@@ -1141,7 +1146,7 @@ def _partition_check_disjoint(all_atoms, N):
         if lo < prev_end:
             raise ValueError(
                 f"PARTITION components overlap at indices "
-                f"[{lo}, {min(prev_end, hi)}).  Use LCU instead for "
+                f"[{lo}, {min(prev_end, hi)}).  Use SUM instead for "
                 f"overlapping or weighted combinations."
             )
         prev_end = hi

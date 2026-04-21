@@ -41,7 +41,8 @@ from .types import (
     STAIRCASE,
     TENSOR,
     POLYNOMIAL,
-    LCU,
+    SUM,
+    LCU,              # deprecated alias for SUM; retained for backward compat
     PARTITION,
     EncodingInfo,
 )
@@ -63,7 +64,8 @@ __all__ = [
     "STAIRCASE",
     "TENSOR",
     "POLYNOMIAL",
-    "LCU",
+    "SUM",
+    "LCU",            # deprecated alias; emits DeprecationWarning on use
     "PARTITION",
     "STEP",
     "SQUARE",

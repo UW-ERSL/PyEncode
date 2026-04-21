@@ -46,7 +46,9 @@ class VectorType(Enum):
     SPARSE          = auto()   # Gleinig-Hoefler: s point masses at arbitrary indices
     FOURIER         = auto()   # T sinusoidal modes via inverse QFT
     WALSH           = auto()   # k-th Walsh function: X_k + H^{otimes m}, O(m) gates
-    LCU             = auto()   # linear combination of unitaries via ancilla
+    SUM             = auto()   # weighted superposition of components (via
+                               # the Linear Combination of Unitaries technique:
+                               # ancilla + controlled component circuits)
     GEOMETRIC       = auto()   # exponential decay c^i — product state, O(m) Ry gates
     POPCOUNT        = auto()   # f_i ∝ r^popcount(i) — identical Ry per qubit, depth 1
     STAIRCASE       = auto()   # f_{2^k-1} = r^k — cascaded CR_y on unary indices, O(m)
@@ -55,6 +57,12 @@ class VectorType(Enum):
     PARTITION       = auto()   # disjoint-support composition of bounded-support
                                # patterns; no ancilla, p = 1, O(L*m) gates with
                                # L = total atoms across components
+
+
+# Backward-compat alias for the LCU -> SUM rename.  VectorType.LCU refers to
+# the same enum member as VectorType.SUM; code that compares with either
+# identifier continues to work.  New code should use VectorType.SUM.
+VectorType.LCU = VectorType.SUM
 
 
 

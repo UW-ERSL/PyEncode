@@ -23,7 +23,7 @@ SQUARE (general interval) the counts depend on specific index bit
 patterns in ways that transpilation further optimizes, so predictions
 are UPPER BOUNDS; the 'exact' field in the returned dict is False.
 
-For the composite constructors (LCU, TENSOR) predictions sum the
+For the composite constructors (SUM, TENSOR) predictions sum the
 component predictions plus composition overhead.
 
 Returned dict
@@ -48,7 +48,7 @@ from typing import Any
 
 from .types import (
     _VectorObj, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    POPCOUNT, STAIRCASE, POLYNOMIAL, TENSOR, LCU, PARTITION,
+    POPCOUNT, STAIRCASE, POLYNOMIAL, TENSOR, SUM, PARTITION,
 )
 from .recognizer import VectorType
 
@@ -349,7 +349,7 @@ def _predict_polynomial(m: int, params: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Composite predictors: LCU and TENSOR
+# Composite predictors: SUM and TENSOR
 # ---------------------------------------------------------------------------
 
 def _predict_tensor(vec_obj: TENSOR) -> dict:
@@ -384,11 +384,15 @@ def _predict_tensor(vec_obj: TENSOR) -> dict:
     )
 
 
-def _predict_lcu(vec_obj: LCU, N: int) -> dict:
-    """LCU: sum of component predictions plus ancilla-preparation overhead.
-    The ancilla register has ceil(log2(r)) qubits and requires its own
-    amplitude encoding (typically O(r) gates since it's a dense r-dim
-    vector), plus r controlled component circuits."""
+def _predict_sum(vec_obj: SUM, N: int) -> dict:
+    """SUM: sum of component predictions plus ancilla-preparation overhead.
+
+    The SUM constructor is implemented via the Linear Combination of
+    Unitaries technique (Childs & Wiebe 2012): an ancilla register in
+    superposition of ceil(log2(r)) qubits selects which component
+    circuit to apply, then PREP† uncomputes it.  Each component is
+    wrapped in a controlled gate (1q -> 1q + CX, CX -> 2 CX + u).
+    """
     weights = vec_obj.params["weights"]
     components = vec_obj.params["components"]
     r = len(components)
@@ -419,7 +423,7 @@ def _predict_lcu(vec_obj: LCU, N: int) -> dict:
     total_depth += 2 * r
 
     return dict(
-        vector_type="LCU",
+        vector_type="SUM",
         N=N,
         m=m + ancilla_qubits,
         gate_count_1q=total_1q,
@@ -485,7 +489,7 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
         if lo < prev_end:
             raise ValueError(
                 f"PARTITION components overlap at indices "
-                f"[{lo}, {min(prev_end, hi)}).  Use LCU instead for "
+                f"[{lo}, {min(prev_end, hi)}).  Use SUM instead for "
                 f"overlapping or weighted combinations."
             )
         prev_end = hi
@@ -587,7 +591,7 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
 
     Parameters
     ----------
-    VectorObj : _VectorObj, LCU, TENSOR, or list of _VectorObj
+    VectorObj : _VectorObj, SUM, TENSOR, or list of _VectorObj
         Any valid argument to encode().
     N : int
         Vector length (power of 2).  Must match the total vector length
@@ -615,8 +619,8 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
     # Composite constructors
     if isinstance(VectorObj, TENSOR):
         return _predict_tensor(VectorObj)
-    if isinstance(VectorObj, LCU):
-        return _predict_lcu(VectorObj, N)
+    if isinstance(VectorObj, SUM):
+        return _predict_sum(VectorObj, N)
     if isinstance(VectorObj, PARTITION):
         return _predict_partition(VectorObj, N)
     if isinstance(VectorObj, list):
@@ -642,7 +646,7 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
         raise TypeError(
             f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "
             f"FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, POLYNOMIAL, "
-            f"LCU, TENSOR, PARTITION), got {type(VectorObj).__name__}."
+            f"SUM, TENSOR, PARTITION), got {type(VectorObj).__name__}."
         )
 
     if N <= 0 or (N & (N - 1)) != 0:

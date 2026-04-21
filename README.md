@@ -16,7 +16,7 @@ Requires Python 3.10+ and Qiskit 2.3+.
 ## Quick Start
 
 ```python
-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU
+from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, SUM, PARTITION
 
 # Basis vector at index 19 (Hamming weight 3 → 3 gates)
 circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
@@ -54,11 +54,17 @@ circuit, info = encode(
             (FOURIER(modes=[(3, 1.0, 0)]), 32)]),
     N=32 * 32)
 
-# Weighted superposition of patterns via LCU
+# Weighted superposition of patterns via SUM (implemented using the LCU technique)
 circuit, info = encode(
-    LCU([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
+    SUM([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
          (3.0, SQUARE(k1=8, k2=16, c=1.0))]),
     N=16)
+
+# Ancilla-free disjoint-support composition via PARTITION
+circuit, info = encode(
+    PARTITION([SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+               GEOMETRIC(ratio=0.8, start=11)]),
+    N=256)
 ```
 
 Every call returns `(circuit, info)` where `circuit` is a Qiskit
@@ -79,7 +85,8 @@ statevector-validated amplitude vector.
 | Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
 | Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
 | Fourier    | `FOURIER(modes=[...])`        | O(m²)              | Gonzalez-Conde / Moosa       |
-| LCU        | `LCU([(w, VectorObj), ...])`  | Σ component costs  | Childs / Babbush             |
+| Sum        | `SUM([(w, VectorObj), ...])`  | Σ component costs  | Childs & Wiebe (LCU, 2012)   |
+| Partition  | `PARTITION([VectorObj, ...])` | O(L·m), ancilla-free | Bentley & Saxe (1980) + Gleinig & Hoefler (2021) |
 | Tensor     | `TENSOR([(VectorObj, N_i), ...])` | Σ component costs, depth = max | Composition rule (this work) |
 
 Here m = log₂(N) is the number of qubits and N is the vector length.
@@ -108,7 +115,7 @@ Each `encode()` call returns an `EncodingInfo` with:
 - `gate_count_1q`, `gate_count_2q` — U and CX counts after transpilation to {cx, u}
 - `circuit_depth` — circuit depth after transpilation to {cx, u} (determines minimum execution time when gates on disjoint qubits run in parallel; may differ from the raw circuit depth visible via `print(circuit)`)
 - `complexity` — asymptotic class (e.g. `"O(m)"`, `"O(m²)"`)
-- `success_probability` — 1.0 for single patterns; p ∈ (0,1] for LCU
+- `success_probability` — 1.0 for single patterns and PARTITION; p ∈ (0,1] for SUM with overlapping supports
 - `circuit_code` — standalone Qiskit snippet reproducing the circuit
 - `validated` — True if statevector validation was performed
 - `vector` — amplitude vector (only when `validate=True`; requires O(2^m) memory)
