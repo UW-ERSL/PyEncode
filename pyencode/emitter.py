@@ -806,12 +806,20 @@ def _emit_walsh(m: int, params: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _emit_geometric(m: int, params: dict) -> str:
-    """Emit circuit code for GEOMETRIC (product-state R_y per qubit, optional offset)."""
+    """Emit circuit code for GEOMETRIC.  Three regimes (see synthesizer):
+
+        (a) start == 0                  : plain product state
+        (b) single aligned dyadic block : product state on low bits + X's
+        (c) general                     : dyadic decomposition, Gleinig anchor
+                                          load + multi-controlled R_y spreads
+    """
     import math as _math
     ratio = params["ratio"]
     c = params.get("c", 1.0)
     start = params.get("start", 0)
+    N = 2 ** m
 
+    # Regime (a)
     if start == 0:
         lines = [
             _header(m, f"GEOMETRIC  ratio={ratio}, c={c}"),
@@ -828,35 +836,58 @@ def _emit_geometric(m: int, params: dict) -> str:
         ]
         return "\n".join(lines)
 
-    # Offset construction: aligned window [start, N).
-    N = 2 ** m
+    # Regime (b): single aligned dyadic block
     w = N - start
-    m_low = int(round(_math.log2(w)))
-    upper_val = start // w
-    upper_x_qubits = [m_low + j for j in range(m - m_low) if (upper_val >> j) & 1]
+    aligned = (w & (w - 1)) == 0 and start % w == 0
+    if aligned:
+        m_low = w.bit_length() - 1
+        upper_val = start // w
+        upper_x_qubits = [m_low + j for j in range(m - m_low)
+                          if (upper_val >> j) & 1]
+        lines = [
+            _header(m, f"GEOMETRIC  ratio={ratio}, start={start}, c={c}"),
+            f"import math",
+            f"",
+            f"m = {m}",
+            f"ratio = {ratio!r}",
+            f"start = {start}",
+            f"m_low = {m_low}     # log2(N - start)",
+            f"qc = QuantumCircuit(m, name='geometric')",
+            f"",
+            f"# Build geometric product state on lower m_low qubits",
+            f"for j in range(m_low):",
+            f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
+            f"    qc.ry(theta_j, j)",
+            f"",
+            f"# Shift window to [start, N) via X gates on selected upper qubits",
+        ]
+        if upper_x_qubits:
+            for q in upper_x_qubits:
+                lines.append(f"qc.x({q})")
+        else:
+            lines.append(f"# (no X gates needed for this start value)")
+        return "\n".join(lines)
 
+    # Regime (c): dyadic decomposition.  The algorithm is Gleinig-Hoefler
+    # anchor load + multi-controlled R_y spread per block -- non-trivial
+    # to reproduce inline.  Emit a descriptive skeleton; the framework's
+    # auto-fallback (emitter.emit_code) will detect the "synthesized
+    # internally" marker and replace this with the gate-level extraction
+    # from the synthesized circuit.  Same pattern as SPARSE(s>1).
+    from .synthesizer import _dyadic_decomposition
+    blocks = _dyadic_decomposition(start, N)
     lines = [
-        _header(m, f"GEOMETRIC  ratio={ratio}, start={start}, c={c}"),
-        f"import math",
+        _header(m, f"GEOMETRIC  ratio={ratio}, start={start}, c={c} "
+                   f"(dyadic regime, [start,N) not power-of-2-aligned)"),
         f"",
         f"m = {m}",
-        f"ratio = {ratio!r}",
-        f"start = {start}",
-        f"m_low = {m_low}     # log2(N - start)",
         f"qc = QuantumCircuit(m, name='geometric')",
-        f"",
-        f"# Build geometric product state on lower m_low qubits",
-        f"for j in range(m_low):",
-        f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
-        f"    qc.ry(theta_j, j)",
-        f"",
-        f"# Shift window to [start, N) via X gates on selected upper qubits",
+        f"# Dyadic decomposition of [{start}, {N}) into {len(blocks)} blocks:",
+        f"# dyadic_blocks = {blocks}",
+        f"# Each block is a (a_k, j_k) covering [a_k, a_k + 2**j_k).",
+        f"# Assembly: Gleinig-Hoefler anchor load + multi-controlled R_y",
+        f"# spread per block  (circuit synthesized internally by PyEncode)",
     ]
-    if upper_x_qubits:
-        for q in upper_x_qubits:
-            lines.append(f"qc.x({q})")
-    else:
-        lines.append(f"# (no X gates needed for this start value)")
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------

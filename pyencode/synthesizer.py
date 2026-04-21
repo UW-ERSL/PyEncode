@@ -1073,88 +1073,237 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     """
-    GEOMETRIC: geometric sequence as a product state, optionally offset.
+    GEOMETRIC: prepare |psi> proportional to
+        sum_{i=start}^{N-1}  ratio^(i - start) |i>            on m qubits,
+    zero elsewhere.  Three internal regimes are selected automatically:
 
-    With start=0 (default), prepares f_i = c * ratio^i for i in [0, N) via
-    m independent R_y rotations:
-        R_y(theta_j)|0>  with  theta_j = 2 * arctan(ratio^(2^j))
+      (a) start == 0
+          Plain product state.  m R_y gates, 0 CX, depth 1.
+          Theta_j = 2*arctan(ratio^(2^j)) on qubit j.
 
-    which produces the product state
-        |psi> = bigotimes_j (|0> + ratio^(2^j) |1>) / norm_j.
+      (b) [start, N) is a single dyadic block
+          i.e. w = N-start is a power of two AND start % w == 0.
+          log2(w) R_y gates on the low qubits plus X gates on the upper
+          qubits that encode start // w.  Still depth 1, 0 CX.
 
-    With start > 0, prepares the offset sequence
-        f_i = c * ratio^(i - start)   for i in [start, N),
-        f_i = 0                       for i in [0, start).
+      (c) Otherwise  (truly offset, non-aligned start)
+          Dyadic decomposition of [start, N) into L <= m aligned blocks
+          {(a_k, j_k)} with block k covering [a_k, a_k + 2^j_k).  Each
+          block already matches regime (b), so the full state is the
+          weighted superposition (with disjoint supports)
 
-    Tier-1 special case (power-of-2-aligned): Uses the efficient construction
-    with geometric product state on lower qubits + X gates on upper qubits.
-    Gate count: log2(w) + popcount(start/w), depth 1, zero CX.
+              |psi> = sum_k (w_k / Z) |block_k>,
 
-    Tier-2 general case (arbitrary offset): Synthesizes the geometric amplitudes
-    within the window [start, N) using sparse encoding techniques.
-    Gate count: O(w*m) where w = N - start, includes two-qubit gates.
+              w_k = ratio^(a_k - start) * sqrt( (ratio^(2*2^j_k) - 1)
+                                                 / (ratio^2 - 1) ),
+
+          Assembly: Gleinig-Hoefler on the L anchor points {|a_k>} to
+          load the weights  (O(L*m) = O(m^2)), followed by a
+          multi-controlled R_y on each free bit of each block to spread
+          the anchor amplitude across the block (O(m^2) aggregate).
+          Total: O(m^2) gates, no ancilla, post-selection probability 1
+          (the blocks are disjoint).
 
     Parameters
     ----------
     m : int
         Number of qubits (N = 2^m).
     params : dict
-        Must contain 'ratio' (float, > 0, != 1).
-        Optional 'start' (int, default 0).
-        Optional 'c' (float, default 1.0) — only affects normalization.
+        Required:  'ratio' (float, > 0, != 1).
+        Optional:  'start' (int, default 0, 0 <= start < N).
+                   'c'     (float, default 1.0) — affects only normalisation.
+
+    References
+    ----------
+    Xie et al. 2025 (product-state form of r^i).
+    Gleinig & Hoefler, DAC 2021 (sparse anchor-loading step).
+    Bentley & Saxe, J. Algorithms 1(4), 1980 (dyadic interval decomposition).
     """
     ratio = params["ratio"]
     start = params.get("start", 0)
-    N = 2 ** m
+    N = 1 << m
 
     qc = QuantumCircuit(m, name="geometric")
 
+    # --- Regime (a): plain full-register product state -------------------
     if start == 0:
-        # Original construction: product state on full register
         for j in range(m):
-            r_pow = ratio ** (2 ** j)
-            theta_j = 2.0 * math.atan(r_pow)
-            qc.ry(theta_j, j)
+            qc.ry(2.0 * math.atan(ratio ** (1 << j)), j)
         return qc
 
-    # Check for tier-1 special case (power-of-2-aligned)
+    # --- Regime (b): single dyadic block covering [start, N) -------------
     w = N - start
     if (w & (w - 1)) == 0 and start % w == 0:
-        # Tier 1: efficient aligned construction
-        m_low = int(round(math.log2(w)))
-        # Geometric product state on low qubits
+        m_low = w.bit_length() - 1
         for j in range(m_low):
-            r_pow = ratio ** (2 ** j)
-            theta_j = 2.0 * math.atan(r_pow)
-            qc.ry(theta_j, j)
-        # Upper qubits: X gates per binary decomposition of start // w
+            qc.ry(2.0 * math.atan(ratio ** (1 << j)), j)
         upper_val = start // w
         for j in range(m - m_low):
             if (upper_val >> j) & 1:
                 qc.x(m_low + j)
         return qc
 
-    # Tier 2: general construction for arbitrary offset
-    # Strategy: Use sparse encoding for the specific geometric amplitudes in [start, N)
-    
-    # Build amplitude dictionary for sparse encoding
-    amplitudes = {}
-    for i in range(start, N):
-        amp = ratio ** (i - start)
-        # Convert to n-bit representation (LSB first for _gleinig_encode)
-        bits = tuple((i >> j) & 1 for j in range(m))
-        amplitudes[bits] = amp
-    
-    # Normalize
-    if amplitudes:
-        norm = math.sqrt(sum(a*a for a in amplitudes.values()))
-        for bits in amplitudes:
-            amplitudes[bits] /= norm
-        
-        # Use Gleinig-Hoefler sparse encoding
-        _gleinig_encode(qc, amplitudes, m)
-    
+    # --- Regime (c): dyadic decomposition of [start, N) ------------------
+    blocks = _dyadic_decomposition(start, N)
+    _dyadic_geometric_assemble(qc, m, ratio, start, blocks)
     return qc
+
+
+# ---------------------------------------------------------------------------
+# Helpers for GEOMETRIC regime (c)
+# ---------------------------------------------------------------------------
+
+def _dyadic_decomposition(s: int, N: int) -> list:
+    """
+    Decompose the half-open interval [s, N) into maximal power-of-two-aligned
+    dyadic blocks.
+
+    Each returned block is a pair (a_k, j_k) representing the interval
+    [a_k, a_k + 2^j_k),  with  a_k % 2^j_k == 0.  The blocks are disjoint,
+    cover [s, N) exactly, and their count L satisfies L <= m = log2 N.
+
+    Classical cost: O(L) integer ops.
+
+    Algorithm: walk left-to-right, greedily picking the largest aligned
+    block starting at the current position that fits inside [s, N).
+    At position `cur`, the largest admissible j is
+        j = min( trailing_zeros(cur),  floor(log2(N - cur)) )
+    with the first term dropped when cur == 0.
+
+    Reference: Bentley & Saxe, J. Algorithms 1(4):301-358, 1980
+    (decomposable searching).  Standard primitive in segment trees /
+    Fenwick trees (Fenwick, SPE 24(3), 1994).
+
+    Parameters
+    ----------
+    s : int
+        Inclusive left endpoint (0 <= s < N).
+    N : int
+        Exclusive right endpoint, must be a power of 2.
+
+    Returns
+    -------
+    list[tuple[int, int]]
+        Sequence of (a_k, j_k) in strictly increasing a_k order.
+    """
+    blocks = []
+    cur = s
+    while cur < N:
+        room = N - cur                       # largest j with 2^j <= room
+        mx = room.bit_length() - 1
+        if cur == 0:
+            j = mx
+        else:
+            tz = (cur & -cur).bit_length() - 1   # trailing zeros of cur
+            j = tz if tz < mx else mx
+        blocks.append((cur, j))
+        cur += 1 << j
+    return blocks
+
+
+def _dyadic_geometric_assemble(qc: QuantumCircuit,
+                               m: int,
+                               ratio: float,
+                               start: int,
+                               blocks: list) -> None:
+    """
+    Build the GEOMETRIC circuit for regime (c) into `qc` (acts on all m
+    qubits).  `blocks` is the output of _dyadic_decomposition(start, N).
+
+    Two-step assembly:
+
+      Step 1.  Gleinig-Hoefler sparse-state preparation on the L anchor
+               points {|a_k>}_{k=0..L-1} with weights w_k/Z.
+               After this step, the register is in
+                   |psi_anchor> = sum_k (w_k/Z) |a_k>.
+
+      Step 2.  For each block with j_k >= 1 and each free bit j in
+               {0, 1, ..., j_k - 1}, apply R_y(2*arctan(ratio^(2^j))) on
+               qubit j controlled on the upper (m - j_k) qubits matching
+               the bit pattern  a_k >> j_k.  Because the lower j_k bits
+               of a_k are zero (alignment), every qubit being rotated
+               starts in |0> within the controlled subspace, so the
+               standard product-state formula applies.
+
+    The weights are
+        w_k^2 = ratio^(2*(a_k - start)) * (ratio^(2*2^j_k) - 1) / (ratio^2 - 1)
+              = sum_{i in block_k} ratio^(2*(i - start))
+    so that sum_k w_k^2 = Z^2 = sum_{i=start}^{N-1} ratio^(2*(i - start)).
+
+    Correctness sketch: after step 2, the amplitude on |a_k + i> for
+    i in [0, 2^j_k) is  (w_k/Z) * ratio^i / sqrt(w_k^2 / ratio^(2*(a_k-start)))
+    = ratio^(a_k + i - start) / Z,  which matches the target state.
+    """
+    r = ratio
+    r2 = r * r
+
+    # Block weights (unnormalised anchor amplitudes, all non-negative).
+    weights = []
+    for (a_k, j_k) in blocks:
+        # block_norm^2 = (r^(2*2^j_k) - 1) / (r^2 - 1)  for r != 1
+        size = 1 << j_k
+        if abs(r2 - 1.0) < 1e-14:
+            block_norm2 = float(size)
+        else:
+            block_norm2 = (r2 ** size - 1.0) / (r2 - 1.0)
+        weights.append((r ** (a_k - start)) * math.sqrt(block_norm2))
+    Z = math.sqrt(sum(w * w for w in weights))
+
+    # Step 1: load anchor superposition via Gleinig-Hoefler on L points.
+    anchor_state = {}
+    for (a_k, _j_k), w_k in zip(blocks, weights):
+        bits = tuple((a_k >> q) & 1 for q in range(m))     # LSB-first
+        anchor_state[bits] = w_k / Z
+    if len(anchor_state) == 1:
+        # Degenerate (L=1) — single aligned block handled by regime (b),
+        # but guard anyway: just X-load the bit pattern.
+        (only_bits,) = anchor_state.keys()
+        for q, b in enumerate(only_bits):
+            if b:
+                qc.x(q)
+    else:
+        _gleinig_encode(qc, anchor_state, m)
+
+    # Step 2: spread each anchor across its block via MC-R_y on free bits.
+    # Blocks with j_k == 0 (singletons) contribute nothing here.
+    for (a_k, j_k) in blocks:
+        if j_k == 0:
+            continue
+        ctrl_qubits = list(range(j_k, m))          # upper qubits
+        ctrl_pattern = [(a_k >> q) & 1 for q in ctrl_qubits]
+        for j in range(j_k):                       # free (lower) bits
+            theta_j = 2.0 * math.atan(r ** (1 << j))
+            _mcry_on_pattern(qc, theta_j, ctrl_qubits, ctrl_pattern, target=j)
+
+
+def _mcry_on_pattern(qc: QuantumCircuit,
+                     theta: float,
+                     ctrl_qubits: list,
+                     ctrl_pattern: list,
+                     target: int) -> None:
+    """
+    Apply R_y(theta) on `target` controlled on `ctrl_qubits` being in the
+    arbitrary-bit-pattern `ctrl_pattern` (same length as ctrl_qubits, each
+    entry 0 or 1).  Standard X-flip sandwich around Qiskit's mcry.
+
+    When ctrl_qubits is empty, reduces to an uncontrolled R_y.
+    When len(ctrl_qubits) == 1, uses the native 1-qubit controlled R_y.
+    """
+    if not ctrl_qubits:
+        qc.ry(theta, target)
+        return
+    # Flip controls that should be 0 so that the "all-ones" mcry fires on
+    # the requested pattern.
+    for q, bit in zip(ctrl_qubits, ctrl_pattern):
+        if bit == 0:
+            qc.x(q)
+    if len(ctrl_qubits) == 1:
+        qc.cry(theta, ctrl_qubits[0], target)
+    else:
+        qc.mcry(theta, ctrl_qubits, target, None, mode="noancilla")
+    for q, bit in zip(ctrl_qubits, ctrl_pattern):
+        if bit == 0:
+            qc.x(q)
 
 # ---------------------------------------------------------------------------
 # POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical R_y gates)

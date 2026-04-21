@@ -735,46 +735,45 @@ class TestGeometric:
         assert info.gate_count_1q == 6  # 3 R_y + 3 X
         assert info.gate_count_2q == 0
 
-    def test_start_non_aligned_tier2(self):
-        """Tier-2: Non-aligned start values now work with arbitrary offset support."""
-        # Test case 1: start=10, N=64 (w=54, not power of 2) 
+    def test_start_dyadic_small(self):
+        """Dyadic regime: start=10, N=64 (w=54, not power-of-2-aligned)."""
         circuit, info = encode(GEOMETRIC(ratio=0.5, start=10), N=64)
-        assert info.complexity == "O(w*m)"  # Should be tier-2
-        assert info.gate_count_2q > 0       # Should have two-qubit gates
-        assert info.success_probability == 1.0
-        
-        # Verify correct amplitudes
+        assert info.complexity == "O(m^2)"
+        assert info.gate_count_2q > 0          # must have entangling gates
+        assert info.success_probability == 1.0  # disjoint-support blocks
+
         expected = np.zeros(64)
         expected[10:] = 0.5 ** np.arange(54)
         assert_encodes(circuit, expected)
 
-    def test_start_non_multiple_tier2(self):
-        """Tier-2: start values that are non-multiples of window width now work."""
-        # Test case 2: start=40, N=64 (w=24, not power of 2)
+    def test_start_dyadic_non_multiple(self):
+        """Dyadic regime: start=40, N=64 (w=24, aligned in multi-block sense)."""
         circuit, info = encode(GEOMETRIC(ratio=0.5, start=40), N=64)
-        assert info.complexity == "O(w*m)"  # Should be tier-2
-        assert info.gate_count_2q > 0       # Should have two-qubit gates
+        assert info.complexity == "O(m^2)"
+        assert info.gate_count_2q > 0
         assert info.success_probability == 1.0
-        
-        # Verify correct amplitudes  
+
         expected = np.zeros(64)
         expected[40:] = 0.5 ** np.arange(24)
         assert_encodes(circuit, expected)
 
-    def test_start_tier2_user_case(self):
-        """Tier-2: User's specific case (start=4, N=256) should work perfectly."""
+    def test_start_dyadic_user_case(self):
+        """Dyadic regime: the motivating case start=4, N=256."""
         circuit, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)
-        
-        # Should be tier-2 with appropriate gate counts
-        assert info.complexity == "O(w*m)"
-        assert circuit.size() > 1000        # Should be thousands of gates
-        assert info.gate_count_2q > 1000    # Should have many two-qubit gates
+        assert info.complexity == "O(m^2)"
         assert info.success_probability == 1.0
-        
-        # Verify correct amplitudes in a few spots
+
+        # Gate-count ceiling: the previous sparse-fallback took ~17k gates
+        # for this case.  The dyadic construction must be bounded by O(m^2)
+        # ~= 64 * (const), so well under a few thousand.
+        assert info.gate_count < 2500, (
+            f"Dyadic regime gate count {info.gate_count} exceeds the O(m^2) "
+            f"budget; the old sparse fallback produced ~17 000 gates."
+        )
+
         expected = np.zeros(256)
         expected[4:] = 0.8 ** np.arange(252)
-        assert_encodes(circuit, expected, tol=1e-4)  # Relaxed tolerance for large circuits
+        assert_encodes(circuit, expected, tol=1e-4)
 
     def test_start_validation_bounds(self):
         """start must be in range [0, N)."""
@@ -808,6 +807,235 @@ class TestGeometric:
         sv1 = np.abs(np.array(statevector(c1)))
         sv2 = np.abs(np.array(statevector(c2)))
         np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+
+# ===================================================================
+# GEOMETRIC  --  dyadic-decomposition (regime c) dedicated tests
+# ===================================================================
+
+class TestGeometricDyadic:
+    """
+    Correctness + complexity tests for the regime-(c) dyadic path of
+    _synth_geometric, where [start, N) is NOT a single aligned dyadic
+    block and the synthesizer decomposes the support into up to m
+    power-of-2-aligned sub-blocks.
+
+    References
+    ----------
+    Bentley & Saxe, J. Algorithms 1(4), 1980 -- dyadic interval split.
+    Gleinig & Hoefler, DAC 2021                -- sparse anchor load.
+    """
+
+    # ------------------------------------------------------------------
+    # Dyadic-decomposition helper (pure combinatorics, no quantum state)
+    # ------------------------------------------------------------------
+
+    def test_decomposition_covers_interval_exactly(self):
+        """Union of dyadic blocks equals [start, N) exactly, disjointly."""
+        from pyencode.synthesizer import _dyadic_decomposition
+        for (s, N) in [(1, 16), (5, 16), (7, 32), (100, 1024),
+                       (123, 1024), (3, 256), (255, 256)]:
+            blocks = _dyadic_decomposition(s, N)
+            covered = set()
+            for (a, j) in blocks:
+                rng = range(a, a + (1 << j))
+                # No overlap with previously-covered indices
+                assert covered.isdisjoint(rng), (
+                    f"Overlap at (s={s}, N={N}) block ({a},{j})")
+                covered.update(rng)
+            assert covered == set(range(s, N)), (
+                f"Coverage mismatch at (s={s}, N={N})")
+
+    def test_decomposition_blocks_aligned(self):
+        """Every block (a_k, j_k) must satisfy a_k % 2^j_k == 0."""
+        from pyencode.synthesizer import _dyadic_decomposition
+        for (s, N) in [(1, 16), (5, 16), (7, 32), (123, 1024)]:
+            for (a, j) in _dyadic_decomposition(s, N):
+                assert a % (1 << j) == 0, (
+                    f"Misaligned block ({a},{j}) in (s={s}, N={N})")
+
+    def test_decomposition_at_most_m_blocks(self):
+        """Standard dyadic bound: L <= m = log2 N for any s in [0, N)."""
+        from pyencode.synthesizer import _dyadic_decomposition
+        for m in [4, 6, 8, 10, 12]:
+            N = 1 << m
+            for s in [1, 3, 7, N // 3, N // 2 + 1, N - 1]:
+                if s >= N:
+                    continue
+                L = len(_dyadic_decomposition(s, N))
+                assert L <= m, f"L={L} > m={m} for (s={s}, N={N})"
+
+    # ------------------------------------------------------------------
+    # Regime-selection: aligned vs dyadic
+    # ------------------------------------------------------------------
+
+    def test_regime_aligned_reports_Om(self):
+        """Aligned start (regime b) reports O(m) and uses 0 CX gates."""
+        # start = N/2, N/4*k, etc. -- all single-block dyadic
+        for (r, s, N) in [(0.5, 32, 64), (0.7, 48, 64), (0.3, 56, 64),
+                          (0.9, 128, 256)]:
+            _, info = encode(GEOMETRIC(ratio=r, start=s), N=N)
+            assert info.complexity == "O(m)", (
+                f"(s={s}, N={N}): got {info.complexity}")
+            assert info.gate_count_2q == 0
+
+    def test_regime_dyadic_reports_Om2(self):
+        """Non-aligned start (regime c) reports O(m^2), non-zero CX."""
+        for (r, s, N) in [(0.5, 5, 16), (0.8, 4, 256), (0.9, 100, 1024),
+                          (0.7, 1, 128), (0.3, 123, 256)]:
+            _, info = encode(GEOMETRIC(ratio=r, start=s), N=N)
+            assert info.complexity == "O(m^2)", (
+                f"(s={s}, N={N}): got {info.complexity}")
+            assert info.gate_count_2q > 0
+
+    # ------------------------------------------------------------------
+    # State-vector correctness across the parameter space
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _reference(ratio, start, N):
+        f = np.zeros(N)
+        f[start:] = ratio ** np.arange(N - start)
+        return f / np.linalg.norm(f)
+
+    def test_statevector_exhaustive_small(self):
+        """Exhaustive correctness for N in {8, 16, 32}, all start, a few ratios."""
+        for N in [8, 16, 32]:
+            for r in [0.3, 0.5, 0.8, 1.5]:
+                for s in range(1, N):
+                    qc, _ = encode(GEOMETRIC(ratio=r, start=s), N=N)
+                    sv = np.abs(np.array(statevector(qc)))
+                    ref = np.abs(self._reference(r, s, N))
+                    np.testing.assert_allclose(
+                        sv, ref, atol=1e-8,
+                        err_msg=f"(r={r}, s={s}, N={N})"
+                    )
+
+    def test_statevector_larger_N(self):
+        """Spot-check correctness at m = 8, 9, 10."""
+        for N in [256, 512, 1024]:
+            for s in [1, 3, 7, 100, N // 3, N - 3]:
+                if s >= N:
+                    continue
+                qc, _ = encode(GEOMETRIC(ratio=0.9, start=s), N=N)
+                sv = np.abs(np.array(statevector(qc)))
+                ref = np.abs(self._reference(0.9, s, N))
+                np.testing.assert_allclose(
+                    sv, ref, atol=1e-6,
+                    err_msg=f"(s={s}, N={N})"
+                )
+
+    def test_zeros_before_start(self):
+        """Amplitudes on |i> for i < start must be exactly zero."""
+        for (r, s, N) in [(0.5, 5, 16), (0.8, 4, 256), (0.9, 100, 1024)]:
+            qc, _ = encode(GEOMETRIC(ratio=r, start=s), N=N)
+            sv = np.array(statevector(qc))
+            assert np.max(np.abs(sv[:s])) < 1e-10, (
+                f"Non-zero amplitude before start (s={s}, N={N}): "
+                f"max={np.max(np.abs(sv[:s])):.2e}"
+            )
+
+    def test_c_only_affects_normalization(self):
+        """The c parameter is a pure scalar prefactor (normalised out)."""
+        for (r, s, N) in [(0.7, 5, 32), (0.8, 4, 256)]:
+            qc1, _ = encode(GEOMETRIC(ratio=r, start=s, c=1.0), N=N)
+            qc2, _ = encode(GEOMETRIC(ratio=r, start=s, c=7.3), N=N)
+            sv1 = np.abs(np.array(statevector(qc1)))
+            sv2 = np.abs(np.array(statevector(qc2)))
+            np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+    def test_ratio_above_and_below_one(self):
+        """Growth (r>1) and decay (r<1) both work in the dyadic regime."""
+        for r in [0.2, 0.5, 0.95, 1.05, 1.5, 2.0]:
+            qc, _ = encode(GEOMETRIC(ratio=r, start=5), N=32)
+            sv = np.abs(np.array(statevector(qc)))
+            ref = np.abs(self._reference(r, 5, 32))
+            np.testing.assert_allclose(sv, ref, atol=1e-8,
+                                       err_msg=f"ratio={r}")
+
+    # ------------------------------------------------------------------
+    # Complexity / cost-reduction benchmarks
+    # ------------------------------------------------------------------
+
+    def test_gate_count_polynomial_in_m(self):
+        """Total gate count grows as O(m^2), not O(N)."""
+        counts = []
+        for m in [4, 6, 8, 10]:
+            N = 1 << m
+            _, info = encode(GEOMETRIC(ratio=0.9, start=3), N=N)
+            counts.append(info.gate_count)
+        # Cubic fit c0 + c1*m + c2*m^2 should bound the growth; gate count
+        # at m=10 should be at most ~ 30 * (m=10)^2 = 3000, not 2^10 * 10.
+        assert counts[-1] < 50 * (10 ** 2), (
+            f"Gate count {counts[-1]} at m=10 exceeds quadratic budget.")
+        # Monotone in m for a fixed start
+        assert counts == sorted(counts), (
+            f"Gate count not monotone in m: {counts}")
+
+    def test_gate_count_beats_old_sparse_fallback(self):
+        """
+        Old sparse fallback produced O((N-s)*m) gates.  New dyadic
+        construction must be strictly, materially smaller for any start
+        whose [start,N) has more than ~ m non-zero amplitudes.
+        """
+        # User's reported case
+        _, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)
+        # Old: ~ 17 000 gates.  Dyadic is O(m^2) = 64 * const; under 2 000 easily.
+        assert info.gate_count < 2000, (
+            f"Expected < 2000 gates, got {info.gate_count} "
+            f"(old sparse fallback produced ~17 000)."
+        )
+
+    def test_gate_count_worst_case_start_one(self):
+        """
+        start=1 gives the maximum number of dyadic blocks (L = m) and is
+        therefore the stress case.  Must still be sub-cubic.
+        """
+        for m in [5, 7, 9]:
+            N = 1 << m
+            _, info = encode(GEOMETRIC(ratio=0.9, start=1), N=N)
+            # Very loose bound: 100 * m^2.  Guards against accidental O(N*m).
+            assert info.gate_count < 100 * m * m, (
+                f"m={m}: {info.gate_count} gates exceeds 100*m^2 budget.")
+
+    # ------------------------------------------------------------------
+    # Validation + LCU composability
+    # ------------------------------------------------------------------
+
+    def test_validate_mode(self):
+        """validate=True returns the classically-constructed reference vector."""
+        qc, info = encode(GEOMETRIC(ratio=0.7, start=5),
+                          N=16, validate=True)
+        assert info.validated is True
+        # info.vector is UNnormalized (matches existing regime-b convention)
+        ref = np.zeros(16)
+        ref[5:] = 0.7 ** np.arange(11)
+        np.testing.assert_allclose(np.abs(info.vector), ref, atol=1e-10)
+
+    def test_lcu_composability(self):
+        """A dyadic-regime GEOMETRIC still works as an LCU component."""
+        qc, info = encode(
+            LCU([(1.0, STEP(k_s=8, c=1.0)),
+                 (2.0, GEOMETRIC(ratio=0.5, start=5))]),
+            N=16)
+        assert info.vector_type == "LCU"
+        assert 0 < info.success_probability <= 1.0
+
+    def test_emitted_code_runs_and_matches(self):
+        """Regime-(c) emitted code must run standalone and reproduce |psi>.
+
+        The framework's auto-fallback substitutes a gate-level extraction
+        for the inline skeleton, so the snippet must be fully executable
+        and give the same state vector as the originally-synthesized
+        circuit.  Same guarantee as regimes (a) and (b).
+        """
+        qc, info = encode(GEOMETRIC(ratio=0.8, start=5), N=32)
+        namespace = {"QuantumCircuit": QuantumCircuit}
+        exec(compile(info.circuit_code, "<emit>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(np.array(statevector(qc)))
+        sv_emit = np.abs(np.array(statevector(namespace["qc"])))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
 
 class TestScaling:

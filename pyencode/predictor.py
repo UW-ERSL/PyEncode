@@ -176,47 +176,91 @@ def _predict_walsh(m: int, params: dict) -> dict:
 
 
 def _predict_geometric(m: int, params: dict) -> dict:
-    """GEOMETRIC: tier-1 (O(m)) or tier-2 (O(w*m)) depending on alignment.
-    Transpiler may collapse small-angle rotations; we return the upper bound."""
+    """GEOMETRIC: three regimes (see synthesizer._synth_geometric).
+
+    Regime (a) start == 0                       : m R_y gates, 0 CX, depth 1.
+    Regime (b) single dyadic block              : log2(w) + popcount(start/w)
+                                                   1-qubit gates, 0 CX, depth 1.
+    Regime (c) general dyadic decomposition     : O(m^2) gates total,
+                                                   bounded by
+                                                     anchors (L*m) + spread
+                                                     (sum_k j_k * (m - j_k))
+                                                   multi-controlled ops.
+
+    Transpiler may collapse small-angle rotations; returned counts are
+    upper bounds.
+    """
     start = params.get("start", 0)
     N = 1 << m
-    
+
+    # Regime (a)
     if start == 0:
-        # Vanilla: m rotations, 0 CX, depth 1
         return dict(
             gate_count_1q=m,
             gate_count_2q=0,
             circuit_depth=1,
             complexity="O(m)",
-            exact=False,  # transpiler sometimes collapses far-from-0 rotations
+            exact=False,
         )
-    
+
     w = N - start
-    
-    # Check for tier-1 special case (power-of-2-aligned)
+
+    # Regime (b): single dyadic block
     if (w & (w - 1)) == 0 and start % w == 0:
-        # Tier 1: log2(w) rotations + popcount(start/w) X gates
-        m_low = int(round(math.log2(w)))
+        m_low = w.bit_length() - 1
         upper_val = start // w
         x_gates = bin(upper_val).count("1")
         return dict(
             gate_count_1q=m_low + x_gates,
             gate_count_2q=0,
             circuit_depth=1,
-            complexity="O(m)",  # Tier-1 is still O(m)
+            complexity="O(m)",
             exact=False,
         )
-    
-    # Tier 2: arbitrary offset using sparse encoding (Gleinig-Hoefler)
-    # Conservative estimate: O(w * m) gates where w = N - start
-    # This is based on the sparse encoding having roughly w non-zero amplitudes
-    est_gates_1q = min(w * m, 10 * m * m)  # cap at reasonable upper bound
-    est_gates_2q = min(w * m // 3, 5 * m * m)  # controlled operations
+
+    # Regime (c): dyadic decomposition.  Analytical O(m^2) bound.
+    # Anchor load (Gleinig-Hoefler on L anchors): O(L * m) 1q + 2q gates.
+    # Spread step: for block k with j_k free bits and (m - j_k) controls,
+    # each MC-R_y decomposes into O(m - j_k) CX + O(m - j_k) 1q.
+    # Aggregate spread cost: sum_k j_k * (m - j_k)  <=  m^2 / 4.
+    #
+    # Build the decomposition inline to get tight per-instance counts
+    # without running the synthesizer.
+    blocks = []
+    cur = start
+    while cur < N:
+        room = N - cur
+        mx = room.bit_length() - 1
+        if cur == 0:
+            j = mx
+        else:
+            tz = (cur & -cur).bit_length() - 1
+            j = tz if tz < mx else mx
+        blocks.append((cur, j))
+        cur += 1 << j
+    L = len(blocks)
+
+    # Anchor step (Gleinig-Hoefler): L anchors, up to m gates per reduction.
+    anchor_1q = L * m
+    anchor_2q = L * m                   # conservative
+
+    # Spread step: sum_k j_k * (m - j_k + 1) per-gate cost.
+    spread_1q = 0
+    spread_2q = 0
+    for (_a_k, j_k) in blocks:
+        ctrl_w = m - j_k
+        # Each MC-R_y with ctrl_w controls: roughly ctrl_w 1q + ctrl_w 2q
+        # (Qiskit's noancilla decomposition).  ctrl_w == 1 is native CR_y.
+        cost_1q = max(1, ctrl_w)
+        cost_2q = max(1, ctrl_w)
+        spread_1q += j_k * cost_1q
+        spread_2q += j_k * cost_2q
+
     return dict(
-        gate_count_1q=est_gates_1q,
-        gate_count_2q=est_gates_2q,
-        circuit_depth=m * m,  # conservative depth estimate
-        complexity="O(w*m)",  # ← FIXED: Tier-2 is O(w*m)
+        gate_count_1q=anchor_1q + spread_1q,
+        gate_count_2q=anchor_2q + spread_2q,
+        circuit_depth=anchor_1q + anchor_2q + spread_1q + spread_2q,
+        complexity="O(m^2)",
         exact=False,
     )
 

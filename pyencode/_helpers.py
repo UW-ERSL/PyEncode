@@ -209,15 +209,19 @@ def _synthesize_and_build_info(
         if k1 == 0 or aligned:
             complexity = "O(m)"
     
-    # GEOMETRIC: override complexity for tier-2 arbitrary offset cases
+    # GEOMETRIC: override complexity for dyadic (non-aligned) case.
+    # Regimes:
+    #   (a) start == 0                                    : O(m)
+    #   (b) [start, N) is a single aligned dyadic block   : O(m)
+    #   (c) otherwise                                     : O(m^2)
     if pattern.load_type == VectorType.GEOMETRIC:
         start = pattern.params.get("start", 0)
         if start > 0:
             N = 2 ** m
             w = N - start
-            # Check if it's tier-1 (power-of-2-aligned) or tier-2 (arbitrary)
-            if not ((w & (w - 1)) == 0 and start % w == 0):
-                complexity = "O(w*m)"  # Tier-2 arbitrary offset
+            aligned = (w & (w - 1)) == 0 and start % w == 0
+            if not aligned:
+                complexity = "O(m^2)"
 
     info = EncodingInfo(
         vector_type=pattern.load_type.name,
