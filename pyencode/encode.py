@@ -70,6 +70,11 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
         from ._helpers import _encode_tensor
         return _encode_tensor(VectorObj, N, validate=validate, tol=tol)
 
+    from .types import PARTITION as _PARTITION
+    if isinstance(VectorObj, _PARTITION):
+        from ._helpers import _encode_partition
+        return _encode_partition(VectorObj, N, validate=validate, tol=tol)
+
     if not isinstance(VectorObj, _VectorObj):
         raise TypeError(
             f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "

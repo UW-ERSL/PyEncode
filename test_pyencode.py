@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, LCU, PARTITION
 
 
 # ---------------------------------------------------------------------------
@@ -1868,3 +1868,361 @@ class TestPredictor:
         from pyencode import predict_gates
         with pytest.raises(TypeError):
             predict_gates("not a vector object", N=16)
+
+
+# ===================================================================
+# PARTITION  --  disjoint-support composition (ancilla-free, p = 1)
+# ===================================================================
+
+class TestPartition:
+    """
+    Tests for the PARTITION constructor: ancilla-free composition of
+    bounded-support components with pairwise-disjoint support.
+
+    Covers:
+      - motivating SPARSE + GEOMETRIC case
+      - multi-SQUARE piecewise-constant
+      - STEP + GEOMETRIC tail
+      - mixed-type disjoint unions
+      - overlap detection (raises ValueError)
+      - rejection of dense-support component types
+      - exhaustive correctness on small N
+      - gate-count scaling O(L * m)
+      - comparison against the LCU equivalent (lower CX count)
+      - validate=True round-trip
+      - emitted code round-trip
+    """
+
+    @staticmethod
+    def _build_expected(components, N):
+        """Sum classical component vectors (disjoint supports, so
+        no weight rebalancing is needed)."""
+        f = np.zeros(N, dtype=float)
+        for comp in components:
+            p = comp.params
+            vt = comp.vector_type
+            if vt.name == "SPARSE":
+                for load in p["loads"]:
+                    f[int(load["k"])] += float(load["P"])
+            elif vt.name == "STEP":
+                f[:int(p["k_s"])] += float(p.get("c", 1.0))
+            elif vt.name == "SQUARE":
+                f[int(p["k1"]):int(p["k2"])] += float(p.get("c", 1.0))
+            elif vt.name == "GEOMETRIC":
+                r = float(p["ratio"])
+                c = float(p.get("c", 1.0))
+                s = int(p.get("start", 0))
+                f[s:] += c * (r ** np.arange(N - s))
+        return f
+
+    # ------------------------------------------------------------------
+    # Motivating case
+    # ------------------------------------------------------------------
+
+    def test_sparse_plus_geometric_tail(self):
+        """The user's example: SPARSE prefix, GEOMETRIC tail, N=256."""
+        components = [
+            SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+            GEOMETRIC(ratio=0.8, start=11),
+        ]
+        qc, info = encode(PARTITION(components), N=256)
+        assert info.vector_type == "PARTITION"
+        assert info.success_probability == 1.0
+        assert info.complexity.startswith("O(L")
+        # No ancilla qubits: the register width is exactly m.
+        assert qc.num_qubits == int(round(math.log2(256)))
+
+        expected = self._build_expected(components, 256)
+        expected /= np.linalg.norm(expected)
+        sv = np.abs(statevector(qc))
+        np.testing.assert_allclose(sv, np.abs(expected), atol=1e-7)
+
+    def test_motivating_case_beats_lcu_cx_count(self):
+        """PARTITION should produce fewer gates than LCU for the same
+        disjoint combination, since no ancilla + no PREP/SELECT overhead."""
+        components = [
+            SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+            GEOMETRIC(ratio=0.8, start=11),
+        ]
+        _, info_p = encode(PARTITION(components), N=256)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")   # LCU may warn about overlap
+            _, info_l = encode(
+                LCU([(1.0, SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)])),
+                     (1.0, GEOMETRIC(ratio=0.8, start=11))]),
+                N=256)
+        # Use total gate_count as the comparison metric since LCU's
+        # transpile-based 2q count may be None for some combinations.
+        assert info_p.gate_count < info_l.gate_count, (
+            f"PARTITION total={info_p.gate_count} should beat "
+            f"LCU total={info_l.gate_count}.")
+        # And PARTITION uses no ancilla.
+        assert info_p.N == 256 and info_p.m == 8
+
+    # ------------------------------------------------------------------
+    # Multi-component piecewise-constant
+    # ------------------------------------------------------------------
+
+    def test_multi_square_piecewise_constant(self):
+        """Three disjoint SQUARE intervals with distinct amplitudes."""
+        components = [SQUARE(k1=0, k2=4, c=1.0),
+                      SQUARE(k1=8, k2=12, c=2.0),
+                      SQUARE(k1=14, k2=16, c=3.0)]
+        qc, info = encode(PARTITION(components), N=16)
+        assert info.success_probability == 1.0
+
+        expected = self._build_expected(components, 16)
+        expected /= np.linalg.norm(expected)
+        np.testing.assert_allclose(
+            np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
+
+    def test_step_plus_geometric_tail(self):
+        """STEP plateau followed by GEOMETRIC decay starting at k_s."""
+        components = [STEP(k_s=8, c=1.0),
+                      GEOMETRIC(ratio=0.7, start=8, c=1.0)]
+        qc, info = encode(PARTITION(components), N=32)
+        assert info.success_probability == 1.0
+
+        expected = self._build_expected(components, 32)
+        expected /= np.linalg.norm(expected)
+        np.testing.assert_allclose(
+            np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
+
+    def test_sparse_interleaved_with_squares(self):
+        """SPARSE singletons interleaved with SQUARE blocks."""
+        components = [
+            SQUARE(k1=0, k2=2, c=1.0),
+            SPARSE([(3, 2.5)]),
+            SQUARE(k1=5, k2=9, c=0.5),
+            SPARSE([(10, 4.0), (13, -1.5)]),
+        ]
+        qc, info = encode(PARTITION(components), N=16)
+        assert info.success_probability == 1.0
+
+        expected = self._build_expected(components, 16)
+        expected /= np.linalg.norm(expected)
+        np.testing.assert_allclose(
+            np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
+
+    def test_signed_sparse_amplitudes(self):
+        """Signed sparse values are correctly preserved (Gleinig handles
+        sign through the anchor state; spread preserves sign uniformly)."""
+        components = [SPARSE([(2, -0.6), (7, 0.4)]),
+                      GEOMETRIC(ratio=0.5, start=8)]
+        qc, info = encode(PARTITION(components), N=16)
+        expected = self._build_expected(components, 16)
+        expected /= np.linalg.norm(expected)
+        # Include phase this time (full complex match, not just |sv|).
+        sv = statevector(qc).real
+        # Fix any global sign
+        sign = np.sign(np.dot(sv, expected))
+        if sign < 0:
+            sv = -sv
+        np.testing.assert_allclose(sv, expected, atol=1e-10)
+
+    # ------------------------------------------------------------------
+    # Error paths
+    # ------------------------------------------------------------------
+
+    def test_overlap_raises(self):
+        """Overlapping supports must raise ValueError."""
+        with pytest.raises(ValueError, match="overlap"):
+            encode(PARTITION([STEP(k_s=8), SQUARE(k1=4, k2=12)]), N=16)
+
+    def test_sparse_overlap_raises(self):
+        """A SPARSE singleton inside another segment's interval is an overlap."""
+        with pytest.raises(ValueError, match="overlap"):
+            encode(PARTITION([SQUARE(k1=0, k2=8, c=1.0),
+                              SPARSE([(3, 0.5)])]),
+                   N=16)
+
+    def test_duplicate_sparse_raises(self):
+        """Two SPARSE atoms at the same index is a degenerate overlap."""
+        with pytest.raises(ValueError, match="overlap"):
+            encode(PARTITION([SPARSE([(3, 0.5)]),
+                              SPARSE([(3, 0.7)])]),
+                   N=16)
+
+    def test_rejects_fourier_component(self):
+        """FOURIER has full support; cannot participate in a PARTITION."""
+        with pytest.raises(TypeError, match="PARTITION"):
+            PARTITION([SPARSE([(0, 1.0)]),
+                       FOURIER(modes=[(1, 1.0, 0)])])
+
+    def test_rejects_walsh_component(self):
+        with pytest.raises(TypeError, match="PARTITION"):
+            PARTITION([WALSH(k=0), SQUARE(k1=4, k2=8)])
+
+    def test_rejects_popcount_component(self):
+        with pytest.raises(TypeError, match="PARTITION"):
+            PARTITION([POPCOUNT(r=0.5), STEP(k_s=4)])
+
+    def test_empty_components_raises(self):
+        with pytest.raises(ValueError, match="at least one"):
+            PARTITION([])
+
+    def test_non_vectorobj_raises(self):
+        with pytest.raises(TypeError, match="VectorObj"):
+            PARTITION([(1.0, STEP(k_s=4))])   # LCU-style tuple, not allowed
+
+    # ------------------------------------------------------------------
+    # Correctness sweeps
+    # ------------------------------------------------------------------
+
+    def test_exhaustive_small_N(self):
+        """Sweep a few disjoint combinations for small N."""
+        scenarios = [
+            [SPARSE([(0, 1.0)]), GEOMETRIC(ratio=0.5, start=1)],
+            [SQUARE(k1=0, k2=2, c=2.0), GEOMETRIC(ratio=0.7, start=2)],
+            [SPARSE([(1, 0.5), (3, 0.8)]), GEOMETRIC(ratio=0.6, start=4)],
+            [STEP(k_s=4, c=1.5), SPARSE([(5, 0.3), (7, -0.4)])],
+        ]
+        for components in scenarios:
+            qc, info = encode(PARTITION(components), N=8)
+            expected = self._build_expected(components, 8)
+            expected /= np.linalg.norm(expected)
+            sv = np.abs(statevector(qc))
+            np.testing.assert_allclose(
+                sv, np.abs(expected), atol=1e-10,
+                err_msg=f"Mismatch on {components}")
+
+    def test_single_component_delegates(self):
+        """PARTITION with a single component must still be correct."""
+        for comp in [SPARSE([(3, 0.7)]), STEP(k_s=8, c=1.0),
+                     SQUARE(k1=2, k2=6, c=1.0), GEOMETRIC(ratio=0.8, start=4)]:
+            qc, info = encode(PARTITION([comp]), N=16)
+            assert info.success_probability == 1.0
+            expected = self._build_expected([comp], 16)
+            expected /= np.linalg.norm(expected)
+            np.testing.assert_allclose(
+                np.abs(statevector(qc)), np.abs(expected), atol=1e-10,
+                err_msg=f"Single-component PARTITION wrong for {comp}")
+
+    # ------------------------------------------------------------------
+    # Scaling / complexity
+    # ------------------------------------------------------------------
+
+    def test_scaling_sub_cubic_in_m(self):
+        """Total gate count must grow as O(L*m) = O(m^2), not O(N)."""
+        counts = []
+        for m in [5, 7, 9]:
+            N = 1 << m
+            components = [
+                SPARSE([(1, 0.5), (3, 0.3)]),
+                GEOMETRIC(ratio=0.9, start=7),
+            ]
+            _, info = encode(PARTITION(components), N=N)
+            counts.append(info.gate_count)
+        # Loose budget: 100 * m^2 at m = 9 -> 8100.
+        assert counts[-1] < 100 * (9 ** 2), (
+            f"Gate count {counts[-1]} exceeds the O(L*m) budget.")
+        # Monotone in m.
+        assert counts == sorted(counts)
+
+    def test_success_probability_always_one(self):
+        """PARTITION is ancilla-free; success_probability is always 1."""
+        for components in [
+            [SPARSE([(0, 0.5), (15, 0.7)])],
+            [SQUARE(k1=0, k2=8, c=1.0)],
+            [SPARSE([(1, 0.3)]), GEOMETRIC(ratio=0.8, start=2)],
+            [STEP(k_s=4), SQUARE(k1=4, k2=8), GEOMETRIC(ratio=0.5, start=8)],
+        ]:
+            _, info = encode(PARTITION(components), N=16)
+            assert info.success_probability == 1.0
+
+    # ------------------------------------------------------------------
+    # Validate + emitted-code round-trip
+    # ------------------------------------------------------------------
+
+    def test_validate_mode(self):
+        """validate=True materialises the classical reference vector."""
+        components = [SPARSE([(1, 0.4)]), GEOMETRIC(ratio=0.7, start=2)]
+        _, info = encode(PARTITION(components), N=16, validate=True)
+        assert info.validated is True
+        ref = self._build_expected(components, 16)
+        np.testing.assert_allclose(np.abs(info.vector), np.abs(ref),
+                                   atol=1e-10)
+
+    def test_emitted_code_runs(self):
+        """The emitted code must round-trip through exec() to the same circuit."""
+        components = [SPARSE([(2, 0.5)]), GEOMETRIC(ratio=0.6, start=4)]
+        qc, info = info_first = encode(PARTITION(components), N=16)
+        ns = {}
+        exec(compile(info.circuit_code, "<emit>", "exec"), ns)
+        # The snippet sets up the same PARTITION call; gate counts must match.
+        assert ns["info"].success_probability == 1.0
+        assert ns["info"].gate_count == info.gate_count
+
+
+# ===================================================================
+# Constructor-repr round-trip tests
+# ===================================================================
+
+class TestConstructorRepr:
+    """
+    Regression tests for the ``_VectorObj.__repr__`` contract:
+    ``eval(repr(obj))`` must reconstruct an equivalent object.
+
+    Motivation: the internal params dict keys do not always match the
+    constructor's keyword arguments (SPARSE stores under 'loads' but
+    takes 'entries'), so the base-class repr would produce unevaluable
+    output for SPARSE.  This class ensures the overrides remain in place
+    and that every emitter-visible constructor round-trips cleanly.
+    """
+
+    def test_sparse_repr_round_trips(self):
+        x = SPARSE([(2, 0.3), (5, 0.5), (7, -0.7)])
+        y = eval(repr(x))
+        assert isinstance(y, SPARSE)
+        assert repr(x) == repr(y)
+
+    def test_sparse_repr_uses_entries_form(self):
+        """Repr must use the constructor's positional 'entries' form, not
+        the internal 'loads=[{...}, ...]' dict form."""
+        r = repr(SPARSE([(2, 0.3)]))
+        assert "loads" not in r
+        assert "entries" not in r   # positional, not kwarg
+        assert r == "SPARSE([(2, 0.3)])"
+
+    def test_other_constructors_round_trip(self):
+        """STEP, SQUARE, GEOMETRIC, WALSH, POPCOUNT, STAIRCASE use
+        constructor-compatible param names, so the base repr works."""
+        for obj in [STEP(k_s=4),
+                    SQUARE(k1=2, k2=6),
+                    GEOMETRIC(ratio=0.7, start=3),
+                    WALSH(k=1),
+                    POPCOUNT(r=0.5),
+                    STAIRCASE(r=0.8)]:
+            y = eval(repr(obj))
+            assert type(y) is type(obj)
+            assert repr(y) == repr(obj), (
+                f"Repr round-trip failed for {obj}: {repr(obj)!r} -> {repr(y)!r}")
+
+    def test_tensor_emitter_exec_round_trip_with_sparse(self):
+        """TENSOR's emitted code must run even when a component is SPARSE
+        (regression for the 'loads=' repr bug + the commented-out imports bug)."""
+        qc, info = encode(
+            TENSOR([(SPARSE([(1, 0.5), (3, 0.7)]), 4),
+                    (STEP(k_s=4), 4)]),
+            N=16,
+        )
+        ns = {}
+        exec(compile(info.circuit_code, "<tensor>", "exec"), ns)
+        assert "qc" in ns
+        # The snippet reconstructs the same logical circuit.
+        ref_sv = np.abs(statevector(qc))
+        emit_sv = np.abs(statevector(ns["qc"]))
+        np.testing.assert_allclose(ref_sv, emit_sv, atol=1e-10)
+
+    def test_partition_emitter_exec_round_trip_with_sparse(self):
+        """PARTITION's emitted code with a SPARSE component must round-trip."""
+        qc, info = encode(
+            PARTITION([SPARSE([(2, 0.5), (7, -0.3)]),
+                       GEOMETRIC(ratio=0.7, start=8)]),
+            N=16,
+        )
+        ns = {}
+        exec(compile(info.circuit_code, "<partition>", "exec"), ns)
+        assert ns["info"].success_probability == 1.0
+        assert ns["info"].gate_count == info.gate_count

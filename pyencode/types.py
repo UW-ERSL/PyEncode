@@ -113,6 +113,15 @@ class SPARSE(_VectorObj):
             raise ValueError("SPARSE requires at least one entry.")
         self.params = {"loads": loads}
 
+    def __repr__(self):
+        # Override the default _VectorObj.__repr__: the constructor takes
+        # `entries=[(k, v), ...]` but the internal params dict uses key
+        # 'loads' (list of {"k":..., "P":...} dicts).  Without this
+        # override, ``eval(repr(obj))`` fails with an unknown-kwarg error,
+        # which breaks every emitter that serialises components via {obj!r}.
+        entries = [(ld["k"], ld["P"]) for ld in self.params["loads"]]
+        return f"SPARSE({entries!r})"
+
 
 class FOURIER(_VectorObj):
     """FOURIER(modes=[(n, A, phi), ...]) — T sinusoidal modes via inverse QFT.
@@ -525,6 +534,107 @@ class LCU(_VectorObj):
         self.params = {"weights": weights, "components": objs}
 
 
+class PARTITION(_VectorObj):
+    """PARTITION([comp1, comp2, ...]) — disjoint-support composition.
+
+    Prepares a state whose support is the *union* of component supports,
+    provided those supports are pairwise disjoint.  The composition is
+    deterministic: no ancilla, no post-selection, success probability 1.
+
+    This is the ancilla-free counterpart of LCU.  When components happen
+    to have disjoint support, PARTITION is strictly cheaper than LCU and
+    avoids the need for amplitude amplification.
+
+    Algorithm
+    ---------
+    Each component is decomposed into atoms of one of two kinds:
+      - singleton atom  (a_k, value_k)         -- a SPARSE point mass,
+      - dyadic block    (a_k, j_k, c_at_a, r)  -- a power-of-2-aligned
+                                                  block of width 2^j_k,
+                                                  with internal amplitude
+                                                  c_at_a * r^(i - a_k)
+                                                  for i in [a_k, a_k + 2^j_k).
+
+    Component -> atoms:
+      SPARSE([(x_i, v_i)])           : one singleton per (x_i, v_i).
+      STEP(k_s, c), SQUARE(k1, k2, c): dyadic decomposition of [0, k_s)
+                                       (resp. [k1, k2)), ratio = 1.
+      GEOMETRIC(ratio, start, c)     : dyadic decomposition of [start, N),
+                                       ratio inherited.
+
+    Circuit:
+      1. Gleinig-Hoefler sparse state preparation on the L anchor points
+         {|a_k>} with weights w_k = sign_k * |c_at_a_k| * sqrt(block_norm)
+         where block_norm = (r^(2*2^j_k) - 1) / (r^2 - 1) for a dyadic
+         block (or 1 for a singleton).
+      2. For each block with j_k >= 1, a multi-controlled R_y per free
+         bit, controlled on upper qubits matching (a_k >> j_k), spreads
+         the anchor amplitude across the block according to its internal
+         ratio r.
+
+    Cost: O(L * m) total gates, where L is the total number of atoms
+    summed across components.  No ancilla, success_probability == 1.
+
+    Disallowed components: FOURIER, WALSH, POPCOUNT, STAIRCASE, POLYNOMIAL
+    have full or dense support and cannot participate in a disjoint
+    partition.  Use LCU instead if such a component is required.
+
+    Parameters
+    ----------
+    components : list of _VectorObj
+        Bounded-support constructors (SPARSE, STEP, SQUARE, GEOMETRIC).
+        Supports must be pairwise disjoint under the chosen N; the
+        framework verifies this and raises ValueError on overlap.
+
+    Examples
+    --------
+    >>> # Sparse prefix + geometric tail on 256 indices
+    >>> circuit, info = encode(
+    ...     PARTITION([
+    ...         SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+    ...         GEOMETRIC(ratio=0.8, start=11),
+    ...     ]),
+    ...     N=256)
+    >>> info.success_probability   # 1.0, no post-selection
+
+    >>> # Multi-interval piecewise-constant
+    >>> circuit, info = encode(
+    ...     PARTITION([SQUARE(k1=0,  k2=4,  c=1.0),
+    ...                SQUARE(k1=8,  k2=12, c=2.0),
+    ...                SQUARE(k1=14, k2=16, c=3.0)]),
+    ...     N=16)
+
+    References
+    ----------
+    Gleinig & Hoefler, DAC 2021          (sparse state preparation step).
+    Bentley & Saxe, J. Algorithms, 1980  (dyadic interval decomposition).
+    """
+    def __init__(self, components):
+        self.vector_type = VectorType.PARTITION
+        if not components:
+            raise ValueError("PARTITION requires at least one component.")
+        comp_list = []
+        for item in components:
+            if not isinstance(item, _VectorObj):
+                raise TypeError(
+                    f"PARTITION component must be a VectorObj "
+                    f"(SPARSE, STEP, SQUARE, or GEOMETRIC), got "
+                    f"{type(item).__name__}."
+                )
+            if item.vector_type not in (VectorType.SPARSE, VectorType.STEP,
+                                        VectorType.SQUARE,
+                                        VectorType.GEOMETRIC):
+                raise TypeError(
+                    f"PARTITION component type {item.vector_type.name} has "
+                    f"full or dense support and cannot be part of a disjoint "
+                    f"partition.  Allowed types: SPARSE, STEP, SQUARE, "
+                    f"GEOMETRIC.  Use LCU instead for overlapping or "
+                    f"dense-support combinations."
+                )
+            comp_list.append(item)
+        self.params = {"components": comp_list}
+
+
 # ---------------------------------------------------------------------------
 # Return type
 # ---------------------------------------------------------------------------
@@ -624,6 +734,7 @@ _COMPLEXITY = {
     VectorType.POPCOUNT: "O(m)",
     VectorType.STAIRCASE: "O(m)",
     VectorType.POLYNOMIAL: "O(m^(d+1))",
+    VectorType.PARTITION: "O(L\u00b7m)",
     VectorType.UNKNOWN: "O(2^m)",
 }
 

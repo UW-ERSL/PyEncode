@@ -42,6 +42,7 @@ from .types import (
     TENSOR,
     POLYNOMIAL,
     LCU,
+    PARTITION,
     EncodingInfo,
 )
 from .recognizer import VectorType
@@ -63,6 +64,7 @@ __all__ = [
     "TENSOR",
     "POLYNOMIAL",
     "LCU",
+    "PARTITION",
     "STEP",
     "SQUARE",
 ]

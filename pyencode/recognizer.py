@@ -52,6 +52,9 @@ class VectorType(Enum):
     STAIRCASE       = auto()   # f_{2^k-1} = r^k — cascaded CR_y on unary indices, O(m)
     TENSOR          = auto()   # disjoint-subregister composition (formalises circ1.tensor(circ2))
     POLYNOMIAL      = auto()   # degree-d polynomial — Walsh-sparse loading + H-layer, O(m^{d+1})
+    PARTITION       = auto()   # disjoint-support composition of bounded-support
+                               # patterns; no ancilla, p = 1, O(L*m) gates with
+                               # L = total atoms across components
 
 
 

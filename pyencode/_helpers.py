@@ -1042,13 +1042,13 @@ def _encode_tensor(tensor_obj, N, validate, tol):
 
 def _emit_tensor_code(comp_objs, sizes):
     """Emit standalone reconstruction code for a TENSOR composition."""
+    type_names = sorted({obj.vector_type.name for obj in comp_objs})
     lines = [
         "# PyEncode — emitted circuit: TENSOR composition",
         "# Each component is synthesised on its own subregister;",
         "# components are combined via QuantumCircuit.tensor().",
         "",
-        "from pyencode import encode",
-        f"# from pyencode import {', '.join(sorted({obj.vector_type.name for obj in comp_objs}))}",
+        f"from pyencode import encode, {', '.join(type_names)}",
         "",
         "# Component circuits:",
     ]
@@ -1061,4 +1061,250 @@ def _emit_tensor_code(comp_objs, sizes):
     lines.append("qc = subcircuits[0]")
     lines.append("for nxt in subcircuits[1:]:")
     lines.append("    qc = nxt.tensor(qc)")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# PARTITION encoding: disjoint-support composition (ancilla-free, p = 1)
+# ---------------------------------------------------------------------------
+
+def _partition_atoms(comp, N):
+    """
+    Decompose a single PARTITION component into a list of atoms:
+        (anchor_index a_k,
+         log2-block-width j_k  (0 for singletons),
+         amplitude c_at_a       at i = a_k (signed),
+         ratio r                (1.0 for singletons and STEP/SQUARE)).
+
+    Each atom has internal amplitudes
+        f_i = c_at_a * r**(i - a_k)   for i in [a_k, a_k + 2**j_k),
+    so the full segment reads off as the union of these atoms.
+
+    References
+    ----------
+    Bentley & Saxe, J. Algorithms 1(4):301-358, 1980 (dyadic split).
+    """
+    from .synthesizer import _dyadic_decomposition
+    p = comp.params
+    atoms = []
+    if comp.vector_type == VectorType.SPARSE:
+        for load in p["loads"]:
+            atoms.append((int(load["k"]), 0, float(load["P"]), 1.0))
+        return atoms
+    if comp.vector_type == VectorType.STEP:
+        c = float(p.get("c", 1.0))
+        k_s = int(p["k_s"])
+        if k_s <= 0:
+            return atoms
+        for (a_k, j_k) in _dyadic_decomposition(0, k_s):
+            atoms.append((a_k, j_k, c, 1.0))
+        return atoms
+    if comp.vector_type == VectorType.SQUARE:
+        c = float(p.get("c", 1.0))
+        k1 = int(p["k1"])
+        k2 = int(p["k2"])
+        if k2 <= k1:
+            return atoms
+        for (a_k, j_k) in _dyadic_decomposition(k1, k2):
+            atoms.append((a_k, j_k, c, 1.0))
+        return atoms
+    if comp.vector_type == VectorType.GEOMETRIC:
+        r = float(p["ratio"])
+        c_seg = float(p.get("c", 1.0))
+        start = int(p.get("start", 0))
+        if start >= N:
+            return atoms
+        for (a_k, j_k) in _dyadic_decomposition(start, N):
+            c_at_a = c_seg * (r ** (a_k - start))
+            atoms.append((a_k, j_k, c_at_a, r))
+        return atoms
+    raise TypeError(
+        f"PARTITION: component type {comp.vector_type.name} is not "
+        f"decomposable into anchored blocks."
+    )
+
+
+def _partition_check_disjoint(all_atoms, N):
+    """
+    Verify that the union of [a_k, a_k + 2**j_k) over all atoms is a
+    disjoint sub-family of [0, N).  On overlap, raise ValueError citing
+    the first offending index range.
+    """
+    intervals = [(a_k, a_k + (1 << j_k)) for (a_k, j_k, _, _) in all_atoms]
+    intervals.sort()
+    prev_end = 0
+    for (lo, hi) in intervals:
+        if lo < 0 or hi > N:
+            raise ValueError(
+                f"PARTITION: atom [{lo}, {hi}) falls outside [0, {N})."
+            )
+        if lo < prev_end:
+            raise ValueError(
+                f"PARTITION components overlap at indices "
+                f"[{lo}, {min(prev_end, hi)}).  Use LCU instead for "
+                f"overlapping or weighted combinations."
+            )
+        prev_end = hi
+
+
+def _encode_partition(part_obj, N, validate, tol):
+    """
+    Encode a PARTITION constructor: disjoint-support composition.
+
+    Algorithm (see PARTITION docstring for full math):
+      1. Gather atoms from every component  (singletons or dyadic blocks).
+      2. Verify the atoms have pairwise-disjoint support in [0, N).
+      3. Compute anchor weights w_k including sign and block norm.
+      4. Gleinig-Hoefler sparse load on the L anchor points.
+      5. For each block atom with j_k >= 1, multi-controlled R_y per
+         free bit, controlled on upper qubits matching (a_k >> j_k),
+         spreads the anchor across the block using the atom's ratio.
+
+    Cost: O(L * m) gates, no ancilla, success_probability = 1.
+    """
+    from .synthesizer import (
+        _gleinig_encode, _mcry_on_pattern,
+    )
+    from .types import EncodingInfo
+
+    m = int(round(math.log2(N)))
+    if (1 << m) != N:
+        raise ValueError(f"PARTITION: N={N} must be a power of 2.")
+
+    comp_objs = part_obj.params["components"]
+
+    # Step 1: gather atoms per component, validating each component's
+    # own parameter schema against the global N.
+    all_atoms = []
+    per_comp_atoms = []
+    for comp in comp_objs:
+        _validate_params(comp.vector_type, N, comp.params)
+        atoms = _partition_atoms(comp, N)
+        per_comp_atoms.append(atoms)
+        all_atoms.extend(atoms)
+
+    if not all_atoms:
+        raise ValueError("PARTITION: all components have empty support.")
+
+    # Step 2: disjointness check.  Raises on overlap.
+    _partition_check_disjoint(all_atoms, N)
+
+    # Step 3: anchor weights (signed, unnormalised).
+    #     w_k = c_at_a * sqrt( (r^(2*2^j) - 1) / (r^2 - 1) )    for r != 1
+    #     w_k = c_at_a * sqrt( 2^j )                            for r == 1
+    #     w_k = c_at_a                                          for j == 0
+    anchor_weights = []
+    for (a_k, j_k, c_at_a, r) in all_atoms:
+        if j_k == 0:
+            anchor_weights.append(c_at_a)
+            continue
+        size = 1 << j_k
+        if abs(r - 1.0) < 1e-14:
+            block_norm2 = float(size)
+        else:
+            r2 = r * r
+            block_norm2 = (r2 ** size - 1.0) / (r2 - 1.0)
+        anchor_weights.append(c_at_a * math.sqrt(block_norm2))
+
+    Z = math.sqrt(sum(w * w for w in anchor_weights))
+    if Z < 1e-14:
+        raise ValueError("PARTITION: combined vector has zero norm.")
+
+    # Step 4: Gleinig-Hoefler anchor load.
+    qc = QuantumCircuit(m, name="partition")
+    anchor_state = {}
+    for (a_k, _j_k, _c, _r), w_k in zip(all_atoms, anchor_weights):
+        bits = tuple((a_k >> q) & 1 for q in range(m))     # LSB-first
+        anchor_state[bits] = w_k / Z
+
+    if len(anchor_state) == 1:
+        # Single anchor: X-load only, no Gleinig machinery needed.
+        (only_bits,) = anchor_state.keys()
+        for q, b in enumerate(only_bits):
+            if b:
+                qc.x(q)
+    else:
+        _gleinig_encode(qc, anchor_state, m)
+
+    # Step 5: spread each non-singleton block via MC-R_y on free bits.
+    for (a_k, j_k, _c_at_a, r) in all_atoms:
+        if j_k == 0:
+            continue
+        ctrl_qubits = list(range(j_k, m))
+        ctrl_pattern = [(a_k >> q) & 1 for q in ctrl_qubits]
+        for j in range(j_k):
+            if abs(r - 1.0) < 1e-14:
+                # r = 1: uniform block, theta_j = pi/2 for every free bit,
+                # reproducing the H-like product state (|0>+|1>)/sqrt(2).
+                theta_j = math.pi / 2.0
+            else:
+                theta_j = 2.0 * math.atan(r ** (1 << j))
+            _mcry_on_pattern(qc, theta_j, ctrl_qubits, ctrl_pattern, target=j)
+
+    # Optional classical validation.
+    validated_flag = False
+    f_vec = None
+    if validate:
+        f_vec = np.zeros(N, dtype=float)
+        for comp in comp_objs:
+            f_vec += _build_component_vector(comp, N)
+        _validate_circuit(qc, f_vec, tol)
+        validated_flag = True
+
+    # Transpiled gate counts.
+    gate_count_1q = None
+    gate_count_2q = None
+    circuit_depth = None
+    try:
+        from qiskit import transpile as qk_transpile
+        transpiled = qk_transpile(qc, basis_gates=["cx", "u"],
+                                  optimization_level=3)
+        ops = transpiled.count_ops()
+        gate_count_1q = ops.get("u", 0)
+        gate_count_2q = ops.get("cx", 0)
+        circuit_depth = transpiled.depth()
+    except Exception:
+        pass
+
+    L = len(all_atoms)
+    info = EncodingInfo(
+        vector_type="PARTITION",
+        N=N,
+        m=m,
+        gate_count=sum(qc.count_ops().values()),
+        complexity="O(L\u00b7m)",
+        validated=validated_flag,
+        params={
+            "K": len(comp_objs),
+            "L": L,
+            "components": [obj.vector_type.name for obj in comp_objs],
+        },
+        circuit_code=_emit_partition_code(comp_objs, N),
+        vector=f_vec,
+        gate_count_1q=gate_count_1q,
+        gate_count_2q=gate_count_2q,
+        circuit_depth=circuit_depth,
+        success_probability=1.0,
+    )
+    return qc, info
+
+
+def _emit_partition_code(comp_objs, N):
+    """Emit standalone reconstruction code for a PARTITION composition."""
+    type_names = sorted({obj.vector_type.name for obj in comp_objs})
+    lines = [
+        "# PyEncode -- emitted circuit: PARTITION composition",
+        "# Components have pairwise-disjoint support; the framework",
+        "# assembles a single ancilla-free circuit via Gleinig-Hoefler",
+        "# anchor load + multi-controlled R_y spread per dyadic block.",
+        "",
+        f"from pyencode import encode, PARTITION, {', '.join(type_names)}",
+        "",
+        f"N = {N}",
+        "components = [",
+    ]
+    for obj in comp_objs:
+        lines.append(f"    {obj!r},")
+    lines.append("]")
+    lines.append("qc, info = encode(PARTITION(components), N=N)")
     return "\n".join(lines)
