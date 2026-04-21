@@ -48,7 +48,7 @@ from typing import Any
 
 from .types import (
     _VectorObj, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    POPCOUNT, STAIRCASE, POLYNOMIAL, TENSOR, LCU,
+    POPCOUNT, STAIRCASE, POLYNOMIAL, TENSOR, LCU, PARTITION,
 )
 from .recognizer import VectorType
 
@@ -57,6 +57,30 @@ from .recognizer import VectorType
 # Per-pattern predictors.  Each returns dict with keys
 # (gate_count_1q, gate_count_2q, circuit_depth, complexity, exact).
 # ---------------------------------------------------------------------------
+
+def _mcry_cost(k_ctrls: int) -> tuple:
+    """
+    Upper-bound transpiled cost of one multi-controlled R_y gate with
+    ``k_ctrls`` controls (Qiskit noancilla mode), returning (1q, 2q).
+
+    Based on the Möttönen-Vartiainen-Bergholm-Salomaa 2005 decomposition
+    (Quant. Inf. & Comp. 5(6)): an MC-R_y with k controls expands into
+    approximately 8(k-1) CX and 8(k-1) single-qubit gates for k >= 2.
+    The Qiskit transpiler then compresses by 20-30%; the return value
+    tracks the pre-transpile count, so actual post-transpile counts are
+    typically lower.  Exact post-transpile counts vary with the specific
+    control pattern in ways that cannot be predicted in closed form,
+    which is why PARTITION / GEOMETRIC regime (c) return exact=False.
+
+    Reference: Möttönen, Vartiainen, Bergholm & Salomaa, *Quantum Inf.
+    Comput.* 5(6), 2005.
+    """
+    if k_ctrls <= 0:
+        return (1, 0)
+    if k_ctrls == 1:
+        return (2, 2)            # CRy ≈ 2 CX + 2 u
+    return (8 * (k_ctrls - 1), 8 * (k_ctrls - 1))
+
 
 def _predict_sparse(m: int, params: dict) -> dict:
     """SPARSE: Gleinig-Hoefler O(s*m). Exact for s=1 (bit-write); upper
@@ -218,14 +242,9 @@ def _predict_geometric(m: int, params: dict) -> dict:
             exact=False,
         )
 
-    # Regime (c): dyadic decomposition.  Analytical O(m^2) bound.
-    # Anchor load (Gleinig-Hoefler on L anchors): O(L * m) 1q + 2q gates.
-    # Spread step: for block k with j_k free bits and (m - j_k) controls,
-    # each MC-R_y decomposes into O(m - j_k) CX + O(m - j_k) 1q.
-    # Aggregate spread cost: sum_k j_k * (m - j_k)  <=  m^2 / 4.
-    #
-    # Build the decomposition inline to get tight per-instance counts
-    # without running the synthesizer.
+    # Regime (c): dyadic decomposition.  Analytical O(m^2) bound using
+    # the MCRy cost model (see _mcry_cost).  Anchor load via Gleinig-
+    # Hoefler uses one MCRy per anchor reduction with up to (m-1) controls.
     blocks = []
     cur = start
     while cur < N:
@@ -240,21 +259,21 @@ def _predict_geometric(m: int, params: dict) -> dict:
         cur += 1 << j
     L = len(blocks)
 
-    # Anchor step (Gleinig-Hoefler): L anchors, up to m gates per reduction.
-    anchor_1q = L * m
-    anchor_2q = L * m                   # conservative
+    # Anchor step: each of L reductions -> approx 1 MCRy(m-1) per anchor.
+    anchor_mc_1q, anchor_mc_2q = _mcry_cost(m - 1)
+    anchor_1q = L * anchor_mc_1q
+    anchor_2q = L * anchor_mc_2q
 
-    # Spread step: sum_k j_k * (m - j_k + 1) per-gate cost.
+    # Spread step: per block, j_k free bits each controlled by (m - j_k)
+    # upper qubits.  Each MCRy pays _mcry_cost(m - j_k).
     spread_1q = 0
     spread_2q = 0
     for (_a_k, j_k) in blocks:
-        ctrl_w = m - j_k
-        # Each MC-R_y with ctrl_w controls: roughly ctrl_w 1q + ctrl_w 2q
-        # (Qiskit's noancilla decomposition).  ctrl_w == 1 is native CR_y.
-        cost_1q = max(1, ctrl_w)
-        cost_2q = max(1, ctrl_w)
-        spread_1q += j_k * cost_1q
-        spread_2q += j_k * cost_2q
+        if j_k == 0:
+            continue
+        c1, c2 = _mcry_cost(m - j_k)
+        spread_1q += j_k * c1
+        spread_2q += j_k * c2
 
     return dict(
         gate_count_1q=anchor_1q + spread_1q,
@@ -412,6 +431,139 @@ def _predict_lcu(vec_obj: LCU, N: int) -> dict:
     )
 
 
+def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
+    """PARTITION: disjoint-support composition.
+
+    Predicts the exact cost model implemented by _encode_partition:
+      anchor load via Gleinig-Hoefler on L anchors  (O(L * m) gates)
+      plus MC-R_y spread across free bits of each non-singleton block
+      (sum_k j_k * (m - j_k) multi-controlled rotations).
+
+    The decomposition is reproduced here in closed form to keep the
+    predictor O(K*m) without invoking the circuit synthesizer.
+    No ancilla; success probability is always 1 (not modelled in the
+    gate-count output, but asserted by the encoder).
+
+    Raises ValueError on overlapping supports, matching encode().
+    """
+    comp_objs = vec_obj.params["components"]
+    m = int(round(math.log2(N)))
+    if (1 << m) != N:
+        raise ValueError(f"PARTITION: N={N} must be a power of 2.")
+
+    # Mirror _partition_atoms without importing it (avoids pulling in the
+    # synthesizer module for predict-only workflows).
+    atoms = []
+    for comp in comp_objs:
+        vt = comp.vector_type
+        p = comp.params
+        if vt == VectorType.SPARSE:
+            for load in p["loads"]:
+                atoms.append((int(load["k"]), 0))
+        elif vt == VectorType.STEP:
+            k_s = int(p["k_s"])
+            if k_s > 0:
+                atoms.extend(_partition_dyadic_blocks(0, k_s))
+        elif vt == VectorType.SQUARE:
+            k1, k2 = int(p["k1"]), int(p["k2"])
+            if k2 > k1:
+                atoms.extend(_partition_dyadic_blocks(k1, k2))
+        elif vt == VectorType.GEOMETRIC:
+            start = int(p.get("start", 0))
+            if start < N:
+                atoms.extend(_partition_dyadic_blocks(start, N))
+        else:
+            raise TypeError(
+                f"PARTITION: component type {vt.name} has full or dense "
+                f"support and cannot be part of a disjoint partition."
+            )
+
+    # Disjointness sweep (same logic as _partition_check_disjoint).
+    intervals = sorted((a_k, a_k + (1 << j_k)) for (a_k, j_k) in atoms)
+    prev_end = 0
+    for (lo, hi) in intervals:
+        if lo < prev_end:
+            raise ValueError(
+                f"PARTITION components overlap at indices "
+                f"[{lo}, {min(prev_end, hi)}).  Use LCU instead for "
+                f"overlapping or weighted combinations."
+            )
+        prev_end = hi
+
+    L = len(atoms)
+
+    # Shortcut: if every atom is a singleton (j_k == 0), the spread step
+    # is a no-op and the cost reduces to pure SPARSE preparation.
+    # Reuse _predict_sparse's tighter bound instead of the pessimistic
+    # MC-R_y cost model.
+    if all(j_k == 0 for (_a_k, j_k) in atoms):
+        sparse_params = {"loads": [{"k": a_k, "P": 1.0} for (a_k, _) in atoms]}
+        inner = _predict_sparse(m, sparse_params)
+        return dict(
+            vector_type="PARTITION",
+            N=N,
+            m=m,
+            gate_count_1q=inner["gate_count_1q"],
+            gate_count_2q=inner["gate_count_2q"],
+            gate_count=inner["gate_count_1q"] + inner["gate_count_2q"],
+            circuit_depth=inner["circuit_depth"],
+            complexity="O(L\u00b7m)",
+            exact=inner["exact"],
+        )
+
+    # Anchor load (Gleinig-Hoefler): each of L anchors needs one MCRy
+    # reduction with up to (m-1) controls.
+    anchor_mc_1q, anchor_mc_2q = _mcry_cost(m - 1)
+    anchor_1q = L * anchor_mc_1q
+    anchor_2q = L * anchor_mc_2q
+
+    # Spread step: per non-singleton block, j_k free bits each controlled
+    # by (m - j_k) upper qubits.  Each MCRy pays _mcry_cost(m - j_k).
+    spread_1q = 0
+    spread_2q = 0
+    for (_a_k, j_k) in atoms:
+        if j_k == 0:
+            continue
+        c1, c2 = _mcry_cost(m - j_k)
+        spread_1q += j_k * c1
+        spread_2q += j_k * c2
+
+    total_1q = anchor_1q + spread_1q
+    total_2q = anchor_2q + spread_2q
+    return dict(
+        vector_type="PARTITION",
+        N=N,
+        m=m,
+        gate_count_1q=total_1q,
+        gate_count_2q=total_2q,
+        gate_count=total_1q + total_2q,
+        circuit_depth=total_1q + total_2q,
+        complexity="O(L\u00b7m)",
+        exact=False,   # Transpile optimisation can reduce actual by 20-30%
+    )
+
+
+def _partition_dyadic_blocks(s: int, e: int) -> list:
+    """Greedy dyadic decomposition of [s, e) into power-of-2-aligned
+    blocks (a_k, j_k).  Pure integer arithmetic; O(log (e-s)) steps.
+
+    Reference: Bentley & Saxe, J. Algorithms 1(4), 1980.
+    """
+    blocks = []
+    cur = s
+    while cur < e:
+        room = e - cur
+        mx = room.bit_length() - 1
+        if cur == 0:
+            j = mx
+        else:
+            tz = (cur & -cur).bit_length() - 1
+            j = tz if tz < mx else mx
+        blocks.append((cur, j))
+        cur += 1 << j
+    return blocks
+
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -465,6 +617,8 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
         return _predict_tensor(VectorObj)
     if isinstance(VectorObj, LCU):
         return _predict_lcu(VectorObj, N)
+    if isinstance(VectorObj, PARTITION):
+        return _predict_partition(VectorObj, N)
     if isinstance(VectorObj, list):
         # Legacy composite: list of SQUARE constructors
         total_1q = 0; total_2q = 0; total_depth = 0
@@ -488,7 +642,7 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
         raise TypeError(
             f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "
             f"FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, POLYNOMIAL, "
-            f"LCU, TENSOR), got {type(VectorObj).__name__}."
+            f"LCU, TENSOR, PARTITION), got {type(VectorObj).__name__}."
         )
 
     if N <= 0 or (N & (N - 1)) != 0:

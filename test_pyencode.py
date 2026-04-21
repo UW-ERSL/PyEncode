@@ -1864,6 +1864,113 @@ class TestPredictor:
                 assert p["gate_count_1q"] == info.gate_count_1q, \
                     f"N={N}, start={start}: predicted {p['gate_count_1q']} != actual {info.gate_count_1q}"
 
+    def test_partition_sparse_geometric(self):
+        """PARTITION predictor: SPARSE prefix + GEOMETRIC tail matches
+        the empirical gate count within the O(L*m) upper bound.
+        """
+        from pyencode import predict_gates
+        components = [
+            SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+            GEOMETRIC(ratio=0.8, start=11),
+        ]
+        p = predict_gates(PARTITION(components), N=256)
+        assert p["vector_type"] == "PARTITION"
+        assert p["N"] == 256 and p["m"] == 8
+        assert p["complexity"].startswith("O(L")
+        assert p["exact"] is False
+
+        # Honest upper bound: prediction must not underestimate the
+        # actual transpiled count.  (Prior bug: predictor was ~3x low.)
+        _, info = encode(PARTITION(components), N=256)
+        actual = info.gate_count_1q + info.gate_count_2q
+        assert p["gate_count"] >= actual, (
+            f"Predictor must not underestimate: pred={p['gate_count']}, "
+            f"actual={actual}.")
+        # Bound the overestimate too — more than ~4x slack means the
+        # model is excessively pessimistic.
+        assert p["gate_count"] <= 4 * actual
+
+    def test_partition_multi_square(self):
+        """PARTITION predictor with three disjoint SQUARE intervals."""
+        from pyencode import predict_gates
+        components = [SQUARE(k1=0, k2=4, c=1.0),
+                      SQUARE(k1=8, k2=12, c=2.0),
+                      SQUARE(k1=14, k2=16, c=3.0)]
+        p = predict_gates(PARTITION(components), N=16)
+        _, info = encode(PARTITION(components), N=16)
+        actual = info.gate_count_1q + info.gate_count_2q
+        assert p["gate_count"] >= actual
+
+    def test_partition_singletons_only_delegates_to_sparse(self):
+        """PARTITION whose every atom is a singleton must use the tighter
+        SPARSE predictor rather than the pessimistic MC-R_y model."""
+        from pyencode import predict_gates
+        part_pred = predict_gates(
+            PARTITION([SPARSE([(3, 0.5), (7, 0.7), (11, 0.3)])]), N=16)
+        sparse_pred = predict_gates(
+            SPARSE([(3, 0.5), (7, 0.7), (11, 0.3)]), N=16)
+        # Gate counts must agree exactly — singletons-only path forwards.
+        assert part_pred["gate_count"] == sparse_pred["gate_count"]
+        assert part_pred["gate_count_1q"] == sparse_pred["gate_count_1q"]
+        assert part_pred["gate_count_2q"] == sparse_pred["gate_count_2q"]
+
+    def test_partition_scaling_is_polynomial_in_m(self):
+        """Predicted gate count scales as O(L*m) — sub-cubic in m."""
+        from pyencode import predict_gates
+        preds = []
+        for m in [5, 7, 9, 11]:
+            N = 1 << m
+            p = predict_gates(
+                PARTITION([SPARSE([(1, 0.5), (3, 0.3)]),
+                           GEOMETRIC(ratio=0.9, start=5)]),
+                N=N)
+            preds.append((m, p["gate_count"]))
+        # Monotone in m and bounded by a quadratic.
+        counts = [c for (_, c) in preds]
+        assert counts == sorted(counts)
+        # Upper fit: constant * m^2 should bound the largest entry.
+        m_max, c_max = preds[-1]
+        assert c_max < 200 * (m_max ** 2), (
+            f"Predicted count {c_max} at m={m_max} exceeds quadratic budget.")
+
+    def test_partition_overlap_raises_in_predictor(self):
+        """Predictor must reject overlapping components just like encode()."""
+        from pyencode import predict_gates
+        with pytest.raises(ValueError, match="overlap"):
+            predict_gates(PARTITION([STEP(k_s=8), SQUARE(k1=4, k2=12)]),
+                          N=16)
+
+    def test_partition_rejects_dense_component_in_predictor(self):
+        """Dense-support component types cannot be in PARTITION at
+        construction time; predictor never sees them, but if someone
+        forges one past the constructor the predictor must still catch it."""
+        from pyencode import predict_gates
+        # Force a dense-type component through the predictor's
+        # dispatch to confirm the guard is there.  We build a PARTITION
+        # legally, then swap its internal component list.
+        part = PARTITION([SPARSE([(0, 1.0)])])
+        part.params["components"].append(FOURIER(modes=[(1, 1.0, 0)]))
+        with pytest.raises(TypeError, match="PARTITION"):
+            predict_gates(part, N=16)
+
+    def test_partition_prediction_vs_encode_agreement(self):
+        """Across a range of non-trivial cases, prediction is an honest
+        upper bound and stays within a constant factor of actual."""
+        from pyencode import predict_gates
+        cases = [
+            [SPARSE([(0, 0.5)]), GEOMETRIC(ratio=0.9, start=1)],          # worst start
+            [SPARSE([(2, 0.3), (5, 0.5)]), GEOMETRIC(ratio=0.8, start=7)],
+            [STEP(k_s=4, c=1.0), GEOMETRIC(ratio=0.7, start=4)],
+            [SQUARE(k1=1, k2=3), SQUARE(k1=5, k2=11)],
+        ]
+        for components in cases:
+            p = predict_gates(PARTITION(components), N=32)
+            _, info = encode(PARTITION(components), N=32)
+            actual = info.gate_count_1q + info.gate_count_2q
+            assert p["gate_count"] >= actual, (
+                f"Underestimate for {components}: pred={p['gate_count']}, "
+                f"actual={actual}")
+
     def test_rejects_invalid_type(self):
         from pyencode import predict_gates
         with pytest.raises(TypeError):
