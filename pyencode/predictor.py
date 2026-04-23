@@ -15,7 +15,7 @@ whereas ``predict_gates()`` is always sub-millisecond.
 
 Accuracy
 --------
-For patterns with deterministic structure (POPCOUNT, WALSH,
+For patterns with deterministic structure (HAMMING, WALSH,
 GEOMETRIC, STEP, STAIRCASE, POLYNOMIAL d=1) the predictions are
 EXACT.  For POLYNOMIAL d>=2 and FOURIER T=1 they are exact
 closed-form fits to the empirical transpiled counts.  For SPARSE and
@@ -48,7 +48,7 @@ from typing import Any
 
 from .types import (
     _VectorObj, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    POPCOUNT, STAIRCASE, POLYNOMIAL, TENSOR, SUM, PARTITION,
+    HAMMING, STAIRCASE, POLYNOMIAL, TENSOR, SUM, PARTITION,
 )
 from .recognizer import VectorType
 
@@ -284,8 +284,8 @@ def _predict_geometric(m: int, params: dict) -> dict:
     )
 
 
-def _predict_popcount(m: int, params: dict) -> dict:
-    """POPCOUNT: m identical single-qubit rotations, depth 1. Exact."""
+def _predict_hamming(m: int, params: dict) -> dict:
+    """HAMMING: m identical single-qubit rotations, depth 1. Exact."""
     return dict(
         gate_count_1q=m,
         gate_count_2q=0,
@@ -579,7 +579,7 @@ _PREDICTORS = {
     VectorType.FOURIER:    _predict_fourier,
     VectorType.WALSH:      _predict_walsh,
     VectorType.GEOMETRIC:  _predict_geometric,
-    VectorType.POPCOUNT:   _predict_popcount,
+    VectorType.HAMMING:   _predict_hamming,
     VectorType.STAIRCASE:  _predict_staircase,
     VectorType.POLYNOMIAL: _predict_polynomial,
 }
@@ -645,7 +645,7 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
     if not isinstance(VectorObj, _VectorObj):
         raise TypeError(
             f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "
-            f"FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, POLYNOMIAL, "
+            f"FOURIER, WALSH, GEOMETRIC, HAMMING, STAIRCASE, POLYNOMIAL, "
             f"SUM, TENSOR, PARTITION), got {type(VectorObj).__name__}."
         )
 

@@ -50,7 +50,7 @@ class VectorType(Enum):
                                # the Linear Combination of Unitaries technique:
                                # ancilla + controlled component circuits)
     GEOMETRIC       = auto()   # exponential decay c^i — product state, O(m) Ry gates
-    POPCOUNT        = auto()   # f_i ∝ r^popcount(i) — identical Ry per qubit, depth 1
+    HAMMING        = auto()   # f_i ∝ r^{wt(i)} (Hamming weight) — identical Ry per qubit, depth 1
     STAIRCASE       = auto()   # f_{2^k-1} = r^k — cascaded CR_y on unary indices, O(m)
     TENSOR          = auto()   # disjoint-subregister composition (formalises circ1.tensor(circ2))
     POLYNOMIAL      = auto()   # degree-d polynomial — Walsh-sparse loading + H-layer, O(m^{d+1})

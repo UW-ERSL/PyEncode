@@ -75,7 +75,7 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.SPARSE:            _synth_sparse,
         VectorType.FOURIER:           _synth_fourier,
         VectorType.GEOMETRIC:         _synth_geometric,
-        VectorType.POPCOUNT:          _synth_popcount,
+        VectorType.HAMMING:          _synth_hamming,
         VectorType.STAIRCASE:         _synth_staircase,
         VectorType.POLYNOMIAL:        _synth_polynomial,
     }
@@ -1306,16 +1306,18 @@ def _mcry_on_pattern(qc: QuantumCircuit,
             qc.x(q)
 
 # ---------------------------------------------------------------------------
-# POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical R_y gates)
+# HAMMING  f_i ∝ r^{wt(i)}  (product state, m identical R_y gates)
 # ---------------------------------------------------------------------------
 
-def _synth_popcount(m: int, params: dict) -> QuantumCircuit:
+def _synth_hamming(m: int, params: dict) -> QuantumCircuit:
     """
-    POPCOUNT: amplitudes depend only on Hamming weight of the index.
+    HAMMING: amplitudes depend only on Hamming weight of the index.
 
     The target state is
-        f_i = c * r^popcount(i)  for i = 0, ..., N-1,
-    which factorises over the bits of i as
+        f_i = c * r^{wt(i)}  for i = 0, ..., N-1,
+    where wt(i) is the Hamming weight (number of 1-bits, or `popcount`)
+    of the binary representation of i.  This factorises over the bits
+    of i as
         f_i = c * prod_j r^(b_j)  where  b_j = (i >> j) & 1.
 
     Hence the normalised state is a product state:
@@ -1340,7 +1342,7 @@ def _synth_popcount(m: int, params: dict) -> QuantumCircuit:
     r = params["r"]
     theta = 2.0 * math.atan(r)
 
-    qc = QuantumCircuit(m, name="popcount")
+    qc = QuantumCircuit(m, name="hamming")
     for j in range(m):
         qc.ry(theta, j)
 

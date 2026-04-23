@@ -17,7 +17,7 @@ from matplotlib import rcParams
 
 from pyencode import (
     encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, SUM,
+    HAMMING, STAIRCASE, TENSOR, POLYNOMIAL, SUM,
 )
 from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 
@@ -187,18 +187,18 @@ def fig_geometric():
     save_circuit(circuit, "geometric_circuit.png", scale=0.6)
 
 
-def fig_popcount():
-    """POPCOUNT: product state, amplitudes depend only on Hamming weight."""
-    print("\n--- POPCOUNT: r=0.5, N=16 ---")
+def fig_hamming():
+    """HAMMING: product state, amplitudes depend only on Hamming weight."""
+    print("\n--- HAMMING: r=0.5, N=16 ---")
     N = 16
     r = 0.5
-    circuit, info = encode(POPCOUNT(r=r), N=N)
+    circuit, info = encode(HAMMING(r=r), N=N)
     print_info("encode", info)
-    pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
-    f = r ** pops
-    plot_vector(f, N, r"POPCOUNT: $f_i = 0.5^{\,\mathrm{popcount}(i)}$, $N=16$",
-                "popcount_vector.png")
-    save_circuit(circuit, "popcount_circuit.png", scale=0.6)
+    wts = np.array([bin(i).count("1") for i in range(N)], dtype=float)
+    f = r ** wts
+    plot_vector(f, N, r"HAMMING: $f_i = 0.5^{\,\mathrm{wt}(i)}$, $N=16$",
+                "hamming_vector.png")
+    save_circuit(circuit, "hamming_circuit.png", scale=0.6)
 
 
 def fig_staircase():
@@ -394,7 +394,7 @@ def fig_gate_count_vs_m():
         "SQUARE":          [],
         "WALSH":           [],
         "GEOMETRIC":       [],
-        "POPCOUNT":        [],
+        "HAMMING":        [],
         "STAIRCASE":       [],
         "FOURIER":         [],
         "POLYNOMIAL ($d=1$)": [],
@@ -440,9 +440,9 @@ def fig_gate_count_vs_m():
         c, _ = encode(GEOMETRIC(ratio=0.95), N=N)
         patterns["GEOMETRIC"].append(pyencode_transpile_total(c))
 
-        # POPCOUNT: product state with Hamming-weight structure (0 CX, depth 1)
-        c, _ = encode(POPCOUNT(r=0.7), N=N)
-        patterns["POPCOUNT"].append(pyencode_transpile_total(c))
+        # HAMMING: product state with Hamming-weight structure (0 CX, depth 1)
+        c, _ = encode(HAMMING(r=0.7), N=N)
+        patterns["HAMMING"].append(pyencode_transpile_total(c))
 
         # STAIRCASE: sparse geometric on unary indices
         c, _ = encode(STAIRCASE(r=0.5), N=N)
@@ -471,7 +471,7 @@ def fig_gate_count_vs_m():
               f"SQUARE={patterns['SQUARE'][-1]}, "
               f"WALSH={patterns['WALSH'][-1]}, "
               f"GEOMETRIC={patterns['GEOMETRIC'][-1]}, "
-              f"POPCOUNT={patterns['POPCOUNT'][-1]}, "
+              f"HAMMING={patterns['HAMMING'][-1]}, "
               f"STAIRCASE={patterns['STAIRCASE'][-1]}, "
               f"FOURIER={patterns['FOURIER'][-1]}, "
               f"POLY_d1={patterns['POLYNOMIAL ($d=1$)'][-1]}, "
@@ -487,7 +487,7 @@ def fig_gate_count_vs_m():
         "SQUARE":              dict(color="#d01c8b", marker="^",  ls="-",  lw=1.6),
         "WALSH":               dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
         "GEOMETRIC":           dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
-        "POPCOUNT":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
+        "HAMMING":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
         "STAIRCASE":           dict(color="#e6ab02", marker="<",  ls="-",  lw=1.6),
         "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
         "POLYNOMIAL ($d=1$)":  dict(color="#08519c", marker=">",  ls="-.", lw=1.6),
@@ -536,7 +536,7 @@ def fig_gate_count_vs_m_reduced():
         "STEP":            [],
         "WALSH":           [],
         "GEOMETRIC":       [],
-        "POPCOUNT":        [],
+        "HAMMING":        [],
         "STAIRCASE":       [],
         "FOURIER":         [],
         "POLYNOMIAL ($d=1$)": [],
@@ -575,9 +575,9 @@ def fig_gate_count_vs_m_reduced():
         c, _ = encode(GEOMETRIC(ratio=0.95), N=N)
         patterns["GEOMETRIC"].append(pyencode_transpile_total(c))
 
-        # POPCOUNT: product state with Hamming-weight structure (0 CX, depth 1)
-        c, _ = encode(POPCOUNT(r=0.7), N=N)
-        patterns["POPCOUNT"].append(pyencode_transpile_total(c))
+        # HAMMING: product state with Hamming-weight structure (0 CX, depth 1)
+        c, _ = encode(HAMMING(r=0.7), N=N)
+        patterns["HAMMING"].append(pyencode_transpile_total(c))
 
         # STAIRCASE: sparse geometric on unary indices
         c, _ = encode(STAIRCASE(r=0.5), N=N)
@@ -601,7 +601,7 @@ def fig_gate_count_vs_m_reduced():
               f"STEP={patterns['STEP'][-1]}, "
               f"WALSH={patterns['WALSH'][-1]}, "
               f"GEOMETRIC={patterns['GEOMETRIC'][-1]}, "
-              f"POPCOUNT={patterns['POPCOUNT'][-1]}, "
+              f"HAMMING={patterns['HAMMING'][-1]}, "
               f"STAIRCASE={patterns['STAIRCASE'][-1]}, "
               f"FOURIER={patterns['FOURIER'][-1]}, "
               f"POLY_d1={patterns['POLYNOMIAL ($d=1$)'][-1]}, "
@@ -615,7 +615,7 @@ def fig_gate_count_vs_m_reduced():
         "STEP":                dict(color="#4dac26", marker="s",  ls="-",  lw=1.6),
         "WALSH":               dict(color="#f4a582", marker="D",  ls="-",  lw=1.6),
         "GEOMETRIC":           dict(color="#7570b3", marker="P",  ls="-",  lw=1.6),
-        "POPCOUNT":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
+        "HAMMING":            dict(color="#1b9e77", marker="h",  ls="-",  lw=1.6),
         "STAIRCASE":           dict(color="#e6ab02", marker="<",  ls="-",  lw=1.6),
         "FOURIER":             dict(color="#b2182b", marker="v",  ls="--", lw=1.6),
         "POLYNOMIAL ($d=1$)":  dict(color="#08519c", marker=">",  ls="-.", lw=1.6),
@@ -660,7 +660,7 @@ def gate_count_table():
     staircase_vec = np.zeros(N)
     for kk in range(m_bits + 1):
         staircase_vec[(1 << kk) - 1] = 0.5 ** kk
-    popcount_vec = np.array([0.7 ** bin(i).count("1") for i in range(N)])
+    hamming_vec = np.array([0.7 ** bin(i).count("1") for i in range(N)])
 
     cases = [
         ("SPARSE s=1 (k=20)",    SPARSE([(20, 1.0)]),
@@ -677,8 +677,8 @@ def gate_count_table():
          np.array([3.0 if i==10 else 4.0 if i==50 else 0.0 for i in range(N)])),
         ("GEOMETRIC (r=0.95)",   GEOMETRIC(ratio=0.95),
          0.95 ** np.arange(N)),
-        ("POPCOUNT (r=0.7)",     POPCOUNT(r=0.7),
-         popcount_vec),
+        ("HAMMING (r=0.7)",     HAMMING(r=0.7),
+         hamming_vec),
         ("STAIRCASE (r=0.5)",    STAIRCASE(r=0.5),
          staircase_vec),
         ("POLYNOMIAL d=1 (ramp)",     POLYNOMIAL(coeffs=[0.0, 1.0]),
@@ -713,7 +713,7 @@ if __name__ == "__main__":
     fig_fourier_sine()
     fig_fourier_multi()
     fig_geometric()
-    fig_popcount()
+    fig_hamming()
     fig_staircase()
     fig_polynomial_ramp()
     fig_polynomial_poiseuille()

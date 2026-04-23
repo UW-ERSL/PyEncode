@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, POPCOUNT, STAIRCASE, TENSOR, POLYNOMIAL, SUM, LCU, PARTITION
+from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, HAMMING, STAIRCASE, TENSOR, POLYNOMIAL, SUM, LCU, PARTITION
 
 
 # ---------------------------------------------------------------------------
@@ -1190,67 +1190,67 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
-class TestPopcount:
-    """Tests for POPCOUNT — product state with identical Ry per qubit.
+class TestHamming:
+    """Tests for HAMMING — product state with identical Ry per qubit.
     Amplitudes depend only on Hamming weight: f_i proportional to r^popcount(i).
     """
 
     def test_basic(self):
-        circuit, info = encode(POPCOUNT(r=0.5), N=8)
-        assert info.vector_type == "POPCOUNT"
+        circuit, info = encode(HAMMING(r=0.5), N=8)
+        assert info.vector_type == "HAMMING"
         assert info.complexity == "O(m)"
         pops = np.array([bin(i).count("1") for i in range(8)], dtype=float)
         f = 0.5 ** pops
         assert_encodes(circuit, f)
 
     def test_binomial_large_r(self):
-        circuit, info = encode(POPCOUNT(r=2.0), N=16)
+        circuit, info = encode(HAMMING(r=2.0), N=16)
         pops = np.array([bin(i).count("1") for i in range(16)], dtype=float)
         f = 2.0 ** pops
         assert_encodes(circuit, f)
 
     def test_r_equals_one_is_uniform(self):
         """r=1 gives the uniform superposition (all amplitudes equal)."""
-        circuit, _ = encode(POPCOUNT(r=1.0), N=16)
+        circuit, _ = encode(HAMMING(r=1.0), N=16)
         sv = np.abs(statevector(circuit))
         np.testing.assert_allclose(sv, 1.0 / np.sqrt(16), atol=1e-10)
 
     def test_gate_count_equals_m(self):
         for m in [3, 4, 6, 8, 10]:
             N = 2 ** m
-            _, info = encode(POPCOUNT(r=0.7), N=N)
+            _, info = encode(HAMMING(r=0.7), N=N)
             assert info.gate_count == m, \
                 f"m={m}: expected {m} gates, got {info.gate_count}"
 
     def test_zero_two_qubit_gates_and_depth_one(self):
-        """POPCOUNT is a product state: zero CX, depth 1."""
-        _, info = encode(POPCOUNT(r=0.6), N=64)
+        """HAMMING is a product state: zero CX, depth 1."""
+        _, info = encode(HAMMING(r=0.6), N=64)
         assert info.gate_count_2q == 0
         assert info.circuit_depth == 1
 
     def test_validate(self):
-        circuit, info = encode(POPCOUNT(r=0.4), N=16, validate=True)
+        circuit, info = encode(HAMMING(r=0.4), N=16, validate=True)
         assert info.validated is True
         assert info.vector is not None
 
     def test_custom_c_normalization(self):
         """c only affects global normalisation, not relative amplitudes."""
-        c1, _ = encode(POPCOUNT(r=0.5, c=1.0), N=8)
-        c2, _ = encode(POPCOUNT(r=0.5, c=7.0), N=8)
+        c1, _ = encode(HAMMING(r=0.5, c=1.0), N=8)
+        c2, _ = encode(HAMMING(r=0.5, c=7.0), N=8)
         sv1 = np.abs(statevector(c1))
         sv2 = np.abs(statevector(c2))
         np.testing.assert_allclose(sv1, sv2, atol=1e-10)
 
     def test_r_zero_raises(self):
         with pytest.raises(ValueError, match="positive"):
-            POPCOUNT(r=0.0)
+            HAMMING(r=0.0)
 
     def test_r_negative_raises(self):
         with pytest.raises(ValueError, match="positive"):
-            POPCOUNT(r=-0.3)
+            HAMMING(r=-0.3)
 
     def test_emitted_code_runs(self):
-        circuit, info = encode(POPCOUNT(r=0.8), N=16)
+        circuit, info = encode(HAMMING(r=0.8), N=16)
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
@@ -1259,10 +1259,10 @@ class TestPopcount:
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
-        """POPCOUNT can be used as a SUM component."""
+        """HAMMING can be used as a SUM component."""
         circuit, info = encode(
             SUM([(1.0, STEP(k_s=8, c=1.0)),
-                 (2.0, POPCOUNT(r=0.5))]),
+                 (2.0, HAMMING(r=0.5))]),
             N=16)
         assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
@@ -1270,7 +1270,7 @@ class TestPopcount:
     def test_hamming_weight_structure(self):
         """Verify amplitudes group by Hamming weight, not index."""
         r = 0.6
-        _, info = encode(POPCOUNT(r=r), N=16, validate=True)
+        _, info = encode(HAMMING(r=r), N=16, validate=True)
         f = info.vector / np.linalg.norm(info.vector)
         # Indices 3 (011), 5 (101), 6 (110) all have popcount=2
         # so amplitudes should be identical
@@ -1432,7 +1432,7 @@ class TestTensor:
     def test_three_way_tensor(self):
         circuit, info = encode(
             TENSOR([(GEOMETRIC(ratio=0.7), 4),
-                    (POPCOUNT(r=0.5), 8),
+                    (HAMMING(r=0.5), 8),
                     (SQUARE(k1=1, k2=5, c=1.0), 8)]),
             N=4 * 8 * 8, validate=True)
         assert info.validated is True
@@ -1452,9 +1452,9 @@ class TestTensor:
     def test_gate_count_equals_sum_of_components(self):
         """Disjoint composition: no extra gates beyond component counts."""
         _, info_a = encode(GEOMETRIC(ratio=0.7), N=16)
-        _, info_b = encode(POPCOUNT(r=0.5), N=16)
+        _, info_b = encode(HAMMING(r=0.5), N=16)
         _, info_t = encode(
-            TENSOR([(GEOMETRIC(ratio=0.7), 16), (POPCOUNT(r=0.5), 16)]),
+            TENSOR([(GEOMETRIC(ratio=0.7), 16), (HAMMING(r=0.5), 16)]),
             N=256)
         assert info_t.gate_count == info_a.gate_count + info_b.gate_count
 
@@ -1700,11 +1700,11 @@ class TestPredictor:
             _, info = encode(obj, N=N)
         return info.gate_count_1q, info.gate_count_2q, info.circuit_depth
 
-    def test_popcount_exact(self):
-        from pyencode import predict_gates, POPCOUNT
+    def test_hamming_exact(self):
+        from pyencode import predict_gates, HAMMING
         for m in [4, 6, 8, 10, 12, 14]:
-            u_t, c_t, d_t = self._ground(POPCOUNT(r=0.7), 2**m)
-            p = predict_gates(POPCOUNT(r=0.7), 2**m)
+            u_t, c_t, d_t = self._ground(HAMMING(r=0.7), 2**m)
+            p = predict_gates(HAMMING(r=0.7), 2**m)
             assert p["exact"] is True
             assert p["gate_count_1q"] == u_t, f"m={m}: {p['gate_count_1q']} != {u_t}"
             assert p["gate_count_2q"] == c_t
@@ -1834,9 +1834,9 @@ class TestPredictor:
         assert p["gate_count"] > 0
 
     def test_rejects_invalid_n(self):
-        from pyencode import predict_gates, POPCOUNT
+        from pyencode import predict_gates, HAMMING
         with pytest.raises(ValueError):
-            predict_gates(POPCOUNT(r=0.7), N=5)  # not a power of 2
+            predict_gates(HAMMING(r=0.7), N=5)  # not a power of 2
 
     def test_geometric_start_prediction(self):
         """Predict GEOMETRIC with start offset: log2(w) + popcount(start/w) gates."""
@@ -2166,9 +2166,9 @@ class TestPartition:
         with pytest.raises(TypeError, match="PARTITION"):
             PARTITION([WALSH(k=0), SQUARE(k1=4, k2=8)])
 
-    def test_rejects_popcount_component(self):
+    def test_rejects_hamming_component(self):
         with pytest.raises(TypeError, match="PARTITION"):
-            PARTITION([POPCOUNT(r=0.5), STEP(k_s=4)])
+            PARTITION([HAMMING(r=0.5), STEP(k_s=4)])
 
     def test_empty_components_raises(self):
         with pytest.raises(ValueError, match="at least one"):
@@ -2298,13 +2298,13 @@ class TestConstructorRepr:
         assert r == "SPARSE([(2, 0.3)])"
 
     def test_other_constructors_round_trip(self):
-        """STEP, SQUARE, GEOMETRIC, WALSH, POPCOUNT, STAIRCASE use
+        """STEP, SQUARE, GEOMETRIC, WALSH, HAMMING, STAIRCASE use
         constructor-compatible param names, so the base repr works."""
         for obj in [STEP(k_s=4),
                     SQUARE(k1=2, k2=6),
                     GEOMETRIC(ratio=0.7, start=3),
                     WALSH(k=1),
-                    POPCOUNT(r=0.5),
+                    HAMMING(r=0.5),
                     STAIRCASE(r=0.8)]:
             y = eval(repr(obj))
             assert type(y) is type(obj)

@@ -315,7 +315,7 @@ def _build_expected_vector(
             f[start:] = c * (ratio ** (idx - start))
         return f
 
-    if lt == VectorType.POPCOUNT:
+    if lt == VectorType.HAMMING:
         r = p["r"]
         c = p.get("c", 1.0)
         pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
@@ -374,7 +374,7 @@ def _build_component_vector(comp: _VectorObj, N: int):
             idx = np.arange(start, N)
             f[start:] = c * (ratio ** (idx - start))
         return f
-    if comp.vector_type == VectorType.POPCOUNT:
+    if comp.vector_type == VectorType.HAMMING:
         r = p["r"]
         c = p.get("c", 1.0)
         pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)

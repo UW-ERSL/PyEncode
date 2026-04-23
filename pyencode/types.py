@@ -216,16 +216,18 @@ class GEOMETRIC(_VectorObj):
         self.params = {"ratio": ratio, "start": start, "c": float(c)}
 
 
-class POPCOUNT(_VectorObj):
-    """POPCOUNT(r, c) — amplitudes depend only on Hamming weight.  O(m) gates, depth 1.
+class HAMMING(_VectorObj):
+    """HAMMING(r, c) — amplitudes depend only on Hamming weight.  O(m) gates, depth 1.
 
-    Prepares a product state proportional to f_i = c * r^popcount(i), where
-    popcount(i) is the number of 1-bits in the binary representation of i.
+    Prepares a product state proportional to f_i = c * r^{wt(i)}, where
+    wt(i) is the Hamming weight of i --- the number of 1-bits in the
+    binary representation of i (also known as the population count,
+    `popcount`).
 
     Circuit: m identical R_y(theta) gates applied in parallel, with
       theta = 2 * arctan(r),
     yielding the single-qubit state (|0> + r|1>) / sqrt(1+r^2) on each wire.
-    The tensor product gives amplitude r^popcount(i) at basis state |i>.
+    The tensor product gives amplitude r^{wt(i)} at basis state |i>.
 
     Properties:
       - Gate count: m single-qubit R_y gates
@@ -234,7 +236,7 @@ class POPCOUNT(_VectorObj):
 
     Physical interpretation.  If p = r^2 / (1 + r^2) is the per-qubit
     excitation probability, then |f_i|^2 follows a Bernoulli product
-    distribution and the marginal distribution over popcount(i) is
+    distribution and the marginal distribution over wt(i) is
     Binomial(m, p).  This structure arises in:
       - Ising models with uniform transverse field
       - Depolarising error channels (uniform per-qubit flip rate)
@@ -251,18 +253,23 @@ class POPCOUNT(_VectorObj):
     Examples
     --------
     >>> # Binomial-structured state with per-qubit weight ratio 0.5
-    >>> circuit, info = encode(POPCOUNT(r=0.5), N=64)
+    >>> circuit, info = encode(HAMMING(r=0.5), N=64)
     >>> # info.complexity    -> "O(m)"
     >>> # info.gate_count    -> 6  (= m)
     >>> # info.gate_count_2q -> 0
     >>> # info.circuit_depth -> 1
+
+    References
+    ----------
+    Nielsen & Chuang, *Quantum Computation and Quantum Information*,
+    Cambridge University Press, 2010 (§10.5, Hamming weight).
     """
     def __init__(self, r, c=1.0):
-        self.vector_type = VectorType.POPCOUNT
+        self.vector_type = VectorType.HAMMING
         r = float(r)
         if r <= 0:
             raise ValueError(
-                f"POPCOUNT r must be positive, got {r}. "
+                f"HAMMING r must be positive, got {r}. "
                 f"r=0 is a point mass at index 0; use SPARSE([(0, 1.0)]) instead."
             )
         self.params = {"r": r, "c": float(c)}
@@ -612,7 +619,7 @@ class PARTITION(_VectorObj):
     Cost: O(L * m) total gates, where L is the total number of atoms
     summed across components.  No ancilla, success_probability == 1.
 
-    Disallowed components: FOURIER, WALSH, POPCOUNT, STAIRCASE, POLYNOMIAL
+    Disallowed components: FOURIER, WALSH, HAMMING, STAIRCASE, POLYNOMIAL
     have full or dense support and cannot participate in a disjoint
     partition.  Use SUM instead if such a component is required.
 
@@ -768,7 +775,7 @@ _COMPLEXITY = {
     VectorType.SPARSE:  "O(s\u00b7m)",
     VectorType.FOURIER: "O(m\u00b2)",
     VectorType.GEOMETRIC: "O(m)",
-    VectorType.POPCOUNT: "O(m)",
+    VectorType.HAMMING: "O(m)",
     VectorType.STAIRCASE: "O(m)",
     VectorType.POLYNOMIAL: "O(m^(d+1))",
     VectorType.PARTITION: "O(L\u00b7m)",
@@ -811,7 +818,7 @@ _PARAM_SCHEMAS = {
         "optional": {"c", "start"},
         "description": "ratio=<base of geometric sequence>, start=<starting index (default 0)>",
     },
-    VectorType.POPCOUNT: {
+    VectorType.HAMMING: {
         "required": {"r"},
         "optional": {"c"},
         "description": "r=<per-qubit amplitude ratio>",

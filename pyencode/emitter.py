@@ -64,7 +64,7 @@ def emit_code(pattern: LoadPattern) -> str:
         VectorType.SPARSE:  _emit_sparse,
         VectorType.FOURIER: _emit_fourier,
         VectorType.GEOMETRIC: _emit_geometric,
-        VectorType.POPCOUNT: _emit_popcount,
+        VectorType.HAMMING: _emit_hamming,
         VectorType.STAIRCASE: _emit_staircase,
         VectorType.POLYNOMIAL: _emit_polynomial,
         VectorType.UNKNOWN: _emit_qiskit_fallback,
@@ -891,25 +891,25 @@ def _emit_geometric(m: int, params: dict) -> str:
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
-# POPCOUNT  f_i ∝ r^popcount(i)  (product state, m identical Ry)
+# HAMMING  f_i ∝ r^{wt(i)}  (product state, m identical Ry)
 # ---------------------------------------------------------------------------
 
-def _emit_popcount(m: int, params: dict) -> str:
-    """Emit circuit code for POPCOUNT (product-state, identical Ry per qubit)."""
+def _emit_hamming(m: int, params: dict) -> str:
+    """Emit circuit code for HAMMING (product-state, identical Ry per qubit)."""
     r = params["r"]
     c = params.get("c", 1.0)
 
     lines = [
-        _header(m, f"POPCOUNT  r={r}, c={c}"),
+        _header(m, f"HAMMING  r={r}, c={c}"),
         f"import math",
         f"",
         f"m = {m}",
         f"r = {r!r}",
         f"theta = 2.0 * math.atan(r)",
-        f"qc = QuantumCircuit(m, name='popcount')",
+        f"qc = QuantumCircuit(m, name='hamming')",
         f"",
         f"# Product state: every qubit gets the SAME R_y(theta) rotation.",
-        f"# Amplitude at |i> is proportional to r^popcount(i).",
+        f"# Amplitude at |i> is proportional to r^{{wt(i)}} where wt is Hamming weight.",
         f"for j in range(m):",
         f"    qc.ry(theta, j)",
     ]
