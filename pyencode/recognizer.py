@@ -52,6 +52,8 @@ class VectorType(Enum):
     GEOMETRIC       = auto()   # exponential decay c^i — product state, O(m) Ry gates
     HAMMING        = auto()   # f_i ∝ r^{wt(i)} (Hamming weight) — identical Ry per qubit, depth 1
     STAIRCASE       = auto()   # f_{2^k-1} = r^k — cascaded CR_y on unary indices, O(m)
+    DICKE           = auto()   # |D^m_k⟩ — uniform superposition over all weight-k indices,
+                               # Bärtschi-Eidenbenz split-cycle-shift, O(k·(m-k))
     TENSOR          = auto()   # disjoint-subregister composition (formalises circ1.tensor(circ2))
     POLYNOMIAL      = auto()   # degree-d polynomial — Walsh-sparse loading + H-layer, O(m^{d+1})
     PARTITION       = auto()   # disjoint-support composition of bounded-support

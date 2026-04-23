@@ -336,6 +336,91 @@ class STAIRCASE(_VectorObj):
         self.params = {"r": r, "c": float(c)}
 
 
+class DICKE(_VectorObj):
+    """DICKE(k, c=1.0) — uniform superposition over all weight-k basis states.
+
+    Prepares the Dicke state
+
+        |D^m_k> = C(m,k)^(-1/2) * sum_{|S|=k} |e_S>,
+
+    i.e. the equal superposition of every computational-basis state of
+    Hamming weight k on m qubits.  The amplitude vector is
+
+        f_i = c * 1[wt(i) == k],
+
+    zero off the weight-k sphere and constant on it.  Unlike HAMMING
+    (which is a product state with geometric decay across weight classes),
+    DICKE is genuinely entangled and supported on a single weight class.
+
+    Construction (Bärtschi-Eidenbenz, FCT 2019).  Initialise with X gates
+    on the top k' qubits (where k' = min(k, m-k)) to get |0^(m-k') 1^k'>,
+    then apply a cascade of split-cyclic-shift unitaries
+
+        U_{m,k'} = (product_{l=m..k'+1} SCS^l_{k'}) . (product_{l=k'..2} SCS^l_{l-1}).
+
+    Each SCS^l_j block is built from one 2-qubit gate (i) and (j-1) 3-qubit
+    gates (ii), consisting of a CNOT, a (controlled-)R_y rotation with
+    angle 2 arccos(sqrt(j'/l)), and a CNOT.  When k > m/2 we use the
+    Dicke symmetry
+
+        |D^m_k> = X^{otimes m} |D^m_{m-k}>
+
+    and append a final X-layer on all m qubits.  This halves the cascade
+    cost whenever k > m/2 and is absorbed by the transpiler with no extra
+    two-qubit gates.  Ancilla-free, deterministic, unit success
+    probability.
+
+      Gate count     : O(k' * (m - k'))  CX after transpilation
+      Depth          : O(m)
+      Complexity     : O(k * (m - k)), i.e. O(m) for k in {1, m-1}
+                       up to O(m^2) at k = m/2.
+
+    Special cases k = 0 and k = m reduce to |0...0> and |1...1>,
+    handled with zero or m X gates respectively.
+
+    Physical motivation.  Dicke states arise as:
+      - The Hartree-Fock reference state on m spin-orbitals with k
+        electrons (up to orbital ordering) in quantum chemistry VQE.
+      - The uniform feasible initialiser for Grover-mixer QAOA on
+        k-hot constrained problems (max-k-cover, k-densest-subgraph,
+        portfolio selection).
+      - Occupation-number states of k indistinguishable bosons in m
+        modes.
+      - Volume-constrained initialisers in discrete topology
+        optimisation (``k of m elements active'').
+
+    Parameters
+    ----------
+    k : int
+        Hamming weight of the target states.  Must satisfy 0 <= k <= m
+        where m = log2(N).
+    c : float, optional
+        Leading amplitude (default 1.0).  Only affects normalisation.
+
+    Examples
+    --------
+    >>> # |D^4_2>: uniform over the six weight-2 basis states {0011, 0101,
+    >>> #                                   0110, 1001, 1010, 1100}
+    >>> circuit, info = encode(DICKE(k=2), N=16)
+    >>> # info.complexity  -> "O(k*(m-k))"
+
+    References
+    ----------
+    Bärtschi, A. & Eidenbenz, S., "Deterministic Preparation of Dicke
+    States", *Fundamentals of Computation Theory* (FCT 2019),
+    LNCS 11651, 126–139.  doi:10.1007/978-3-030-25027-0_9.
+
+    Bärtschi, A. & Eidenbenz, S., "Short-Depth Circuits for Dicke State
+    Preparation", *IEEE QCE 2022*.  doi:10.1109/QCE53715.2022.00027.
+    """
+    def __init__(self, k, c=1.0):
+        self.vector_type = VectorType.DICKE
+        k = int(k)
+        if k < 0:
+            raise ValueError(f"DICKE k must be non-negative, got {k}.")
+        self.params = {"k": k, "c": float(c)}
+
+
 class POLYNOMIAL(_VectorObj):
     """POLYNOMIAL(coeffs, normalize_domain=True) — degree-d polynomial amplitudes.
 
@@ -777,6 +862,7 @@ _COMPLEXITY = {
     VectorType.GEOMETRIC: "O(m)",
     VectorType.HAMMING: "O(m)",
     VectorType.STAIRCASE: "O(m)",
+    VectorType.DICKE:     "O(k*(m-k))",
     VectorType.POLYNOMIAL: "O(m^(d+1))",
     VectorType.PARTITION: "O(L\u00b7m)",
     VectorType.UNKNOWN: "O(2^m)",
@@ -827,6 +913,11 @@ _PARAM_SCHEMAS = {
         "required": {"r"},
         "optional": {"c"},
         "description": "r=<geometric ratio between consecutive unary amplitudes>",
+    },
+    VectorType.DICKE: {
+        "required": {"k"},
+        "optional": {"c"},
+        "description": "k=<Hamming weight of target states, 0 <= k <= m>",
     },
     VectorType.POLYNOMIAL: {
         "required": {"coeffs"},

@@ -66,6 +66,7 @@ def emit_code(pattern: LoadPattern) -> str:
         VectorType.GEOMETRIC: _emit_geometric,
         VectorType.HAMMING: _emit_hamming,
         VectorType.STAIRCASE: _emit_staircase,
+        VectorType.DICKE: _emit_dicke,
         VectorType.POLYNOMIAL: _emit_polynomial,
         VectorType.UNKNOWN: _emit_qiskit_fallback,
     }
@@ -945,6 +946,24 @@ def _emit_staircase(m: int, params: dict) -> str:
         f"for k in range(1, m):",
         f"    theta_k = 2.0 * math.atan2(T[k + 1], r ** k)",
         f"    qc.cry(theta_k, k - 1, k)",
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# DICKE  |D^m_k> — Bärtschi-Eidenbenz split-cyclic-shift construction
+# ---------------------------------------------------------------------------
+
+def _emit_dicke(m: int, params: dict) -> str:
+    """Emit a placeholder; the main dispatcher will substitute the gate
+    sequence extracted from the synthesized circuit.  The Bärtschi-
+    Eidenbenz cascade is short but non-trivial, so emitting from the
+    actual circuit is cleaner than hand-writing nested loops."""
+    k = params["k"]
+    c = params.get("c", 1.0)
+    lines = [
+        _header(m, f"DICKE  k={k}, c={c}  (|D^m_k> via Bärtschi-Eidenbenz)"),
+        f"# synthesized internally",
     ]
     return "\n".join(lines)
 

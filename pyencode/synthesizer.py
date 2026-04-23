@@ -77,6 +77,7 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
         VectorType.GEOMETRIC:         _synth_geometric,
         VectorType.HAMMING:          _synth_hamming,
         VectorType.STAIRCASE:         _synth_staircase,
+        VectorType.DICKE:             _synth_dicke,
         VectorType.POLYNOMIAL:        _synth_polynomial,
     }
 
@@ -1408,6 +1409,138 @@ def _synth_staircase(m: int, params: dict) -> QuantumCircuit:
         # cos(theta_k/2) = r^k / T_k,  sin = T_{k+1}/T_k
         theta_k = 2.0 * math.atan2(T[k + 1], r ** k)
         qc.cry(theta_k, k - 1, k)
+
+    return qc
+
+
+# ---------------------------------------------------------------------------
+# DICKE  |D^m_k> — uniform superposition over weight-k basis states
+#                 (Bärtschi-Eidenbenz split-cyclic-shift construction)
+# ---------------------------------------------------------------------------
+
+def _dicke_scs_block(qc: QuantumCircuit, qubits, n: int, kk: int) -> None:
+    """Apply the SCS_{n, kk} block on (kk + 1) qubits.
+
+    ``qubits`` is a length-(kk+1) list of absolute qubit indices; local
+    indices 0..kk map to qubits[0..kk].  The block is built from
+      (i)      on local (kk-1, kk),  angle 2 arccos(sqrt(1/n))
+      (ii)_l   on local (kk-l, kk-l+1, kk),  l = 2..kk,
+               angle 2 arccos(sqrt(l/n))
+
+    Each (i)-gate is CX-CRy-CX; each (ii)_l is CX-CCRy-CX.
+
+    References
+    ----------
+    Bärtschi & Eidenbenz, FCT 2019, Definition 3 / Lemma 6.
+    """
+    from qiskit.circuit.library import RYGate
+
+    assert len(qubits) == kk + 1
+
+    # Gate (i) on (kk-1, kk)
+    a = qubits[kk - 1]
+    b = qubits[kk]
+    theta = 2.0 * math.acos(math.sqrt(1.0 / n))
+    qc.cx(a, b)
+    qc.cry(theta, b, a)
+    qc.cx(a, b)
+
+    # Gates (ii)_l for l = 2..kk on (kk-l, kk-l+1, kk)
+    for l in range(2, kk + 1):
+        a = qubits[kk - l]
+        b = qubits[kk - l + 1]
+        c = qubits[kk]
+        theta = 2.0 * math.acos(math.sqrt(l / n))
+        qc.cx(a, c)
+        # annotated=False matches the previous (non-annotated) default and
+        # avoids Qiskit 2.3's DeprecationWarning about the change in default.
+        ccry = RYGate(theta).control(num_ctrl_qubits=2, ctrl_state="11",
+                                     annotated=False)
+        qc.append(ccry, [c, b, a])
+        qc.cx(a, c)
+
+
+def _synth_dicke(m: int, params: dict) -> QuantumCircuit:
+    """
+    DICKE: uniform superposition over all m-qubit basis states with Hamming
+    weight exactly k.
+
+    Target state
+    ------------
+        |D^m_k> = C(m, k)^(-1/2) * sum_{|S|=k} |e_S>,
+    i.e. f_i = c * 1[wt(i) == k], zero elsewhere.
+
+    Construction (Bärtschi-Eidenbenz, FCT 2019)
+    -------------------------------------------
+    1. Prepare |0^(m-k') 1^k'> with k' X gates on the top k' qubits,
+       where k' = min(k, m-k).
+    2. Apply U_{m,k'}, the product of SCS^l blocks for l = m down to 2:
+         - for l > k':  SCS^l_{k'}       (first block)
+         - for l <= k': SCS^l_{l-1}      (second block)
+       Each SCS block decomposes into 1 two-qubit (i)-gate plus (k'-1)
+       three-qubit (ii)-gates with analytic angles 2 arccos(sqrt(l/n)).
+    3. If k > m/2, apply X^{otimes m} to exploit the Dicke symmetry
+         |D^m_k> = X^{otimes m} |D^m_{m-k}>.
+       This halves the cascade cost whenever k > m/2 while remaining
+       exact.
+
+    Properties
+    ----------
+      Gate count     : O(k' * (m - k'))  CX, k' = min(k, m-k)
+      Depth          : O(m)
+      Ancilla        : none
+      Success prob.  : 1 (deterministic)
+
+    Special cases
+    -------------
+      k = 0  ->  |0...0>    (identity circuit)
+      k = m  ->  |1...1>    (m X gates)
+
+    Parameters
+    ----------
+    m : int
+        Number of qubits (N = 2^m).
+    params : dict
+        Must contain 'k' (int, 0 <= k <= m).  Optional 'c' (default 1.0)
+        only affects normalisation.
+
+    References
+    ----------
+    A. Bärtschi & S. Eidenbenz, "Deterministic Preparation of Dicke
+    States", FCT 2019, LNCS 11651, pp. 126-139.
+    """
+    k = params["k"]
+
+    qc = QuantumCircuit(m, name="dicke")
+
+    if k == 0:
+        return qc
+    if k == m:
+        for i in range(m):
+            qc.x(i)
+        return qc
+
+    # Symmetry: |D^m_k> = X^{otimes m} |D^m_{m-k}>. Prepare the lighter
+    # state first when k > m/2 to halve the cascade cost.
+    use_complement = (k > m - k)
+    k_eff = m - k if use_complement else k
+
+    # Initial: X on the top k_eff qubits -> |0^(m-k_eff) 1^k_eff>
+    for i in range(m - k_eff, m):
+        qc.x(i)
+
+    # Apply U_{m, k_eff} as a single combined loop:
+    # for l = m, m-1, ..., 2 apply SCS^l_{min(k_eff, l-1)} on qubits
+    # [l - min(k_eff, l-1) - 1, l).
+    for l in range(m, 1, -1):
+        kk = min(k_eff, l - 1)
+        qubits = list(range(l - kk - 1, l))
+        _dicke_scs_block(qc, qubits, n=l, kk=kk)
+
+    # Bit-flip every qubit to map |D^m_{m-k}> -> |D^m_k>.
+    if use_complement:
+        for i in range(m):
+            qc.x(i)
 
     return qc
 

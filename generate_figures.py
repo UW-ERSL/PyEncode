@@ -17,7 +17,7 @@ from matplotlib import rcParams
 
 from pyencode import (
     encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    HAMMING, STAIRCASE, TENSOR, POLYNOMIAL, SUM,
+    HAMMING, STAIRCASE, DICKE, TENSOR, POLYNOMIAL, SUM,
 )
 from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 
@@ -175,6 +175,22 @@ def fig_fourier_multi():
     save_circuit(circuit, "multi_sine_circuit.png", scale=0.8)
 
 
+def fig_walsh():
+    """WALSH: two-level piecewise-constant signed superposition."""
+    print("\n--- WALSH: k=1, c_pos=1, c_neg=-1, N=8 ---")
+    N = 8
+    k = 1
+    circuit, info = encode(WALSH(k=k, c_pos=1.0, c_neg=-1.0), N=N)
+    print_info("encode", info)
+    # Standard Walsh w_k(i) = (-1)^{bit_k(i)}; here k=1, so period P = 2^(k+1) = 4.
+    idx = np.arange(N)
+    f = np.where(((idx >> k) & 1) == 0, 1.0, -1.0)
+    plot_vector(f, N,
+                r"WALSH: $k=1$ (standard), period $P=4$, $N=8$",
+                "walsh_vector.png")
+    save_circuit(circuit, "walsh_circuit.png", scale=0.7)
+
+
 def fig_geometric():
     """GEOMETRIC: exponential decay as product state."""
     print("\n--- GEOMETRIC: ratio=0.5, N=8 ---")
@@ -216,6 +232,21 @@ def fig_staircase():
                 r"STAIRCASE: $f_{2^k-1} = 0.5^{\,k}$, $N=16$",
                 "staircase_vector.png")
     save_circuit(circuit, "staircase_circuit.png", scale=0.8)
+
+
+def fig_dicke():
+    """DICKE: uniform superposition over all weight-k basis states."""
+    print("\n--- DICKE: k=2, N=16 ---")
+    N = 16
+    k = 2
+    circuit, info = encode(DICKE(k=k), N=N)
+    print_info("encode", info)
+    f = np.array([1.0 if bin(i).count("1") == k else 0.0 for i in range(N)])
+    f = f / np.linalg.norm(f)
+    plot_vector(f, N,
+                r"DICKE: $|D^4_2\rangle$, $N=16$",
+                "dicke_vector.png")
+    save_circuit(circuit, "dicke_circuit.png", scale=0.5)
 
 
 def fig_polynomial_ramp():
@@ -712,9 +743,11 @@ if __name__ == "__main__":
     fig_square()
     fig_fourier_sine()
     fig_fourier_multi()
+    fig_walsh()
     fig_geometric()
     fig_hamming()
     fig_staircase()
+    fig_dicke()
     fig_polynomial_ramp()
     fig_polynomial_poiseuille()
     fig_tensor()
