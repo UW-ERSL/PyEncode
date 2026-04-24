@@ -123,10 +123,10 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         if k < 0 or k >= m_bits:
             raise ValueError(f"WALSH qubit index k={k} out of range [0, {m_bits}).")
         result["k"] = k
-        result.setdefault("c_pos", 1.0)
-        c_pos = float(result["c_pos"])
-        result["c_pos"] = c_pos
-        result["c_neg"] = float(result.get("c_neg", -c_pos))
+        result.setdefault("c0", 1.0)
+        c0 = float(result["c0"])
+        result["c0"] = c0
+        result["c1"] = float(result.get("c1", -c0))
 
     elif vector_type == VectorType.FOURIER:
         result = _validate_fourier_params(result, N)
@@ -299,9 +299,9 @@ def _build_expected_vector(
 
     if lt == VectorType.WALSH:
         k = p["k"]
-        c_pos = p.get("c_pos", 1.0)
-        c_neg = p.get("c_neg", -c_pos)
-        f = np.array([c_pos if not ((i >> k) & 1) else c_neg for i in range(N)], dtype=float)
+        c0 = p.get("c0", 1.0)
+        c1 = p.get("c1", -c0)
+        f = np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=float)
         return f
 
     if lt == VectorType.SPARSE:
@@ -383,9 +383,9 @@ def _build_component_vector(comp: _VectorObj, N: int):
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
     if comp.vector_type == VectorType.WALSH:
         k = p["k"]
-        c_pos = p.get("c_pos", 1.0)
-        c_neg = p.get("c_neg", -c_pos)
-        return np.array([c_pos if not ((i >> k) & 1) else c_neg for i in range(N)], dtype=float)
+        c0 = p.get("c0", 1.0)
+        c1 = p.get("c1", -c0)
+        return np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=float)
     if comp.vector_type == VectorType.SPARSE:
         f = np.zeros(N)
         for load in p["loads"]: f[load["k"]] = load["P"]

@@ -1033,30 +1033,30 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
     Generalized WALSH: R_y(theta)_k + H^{otimes m}.
 
     Prepares a two-level piecewise-constant state with period P = 2^(k+1):
-      amplitude proportional to c_pos where bit k of i is 0
-      amplitude proportional to c_neg where bit k of i is 1
+      amplitude proportional to c0 where bit k of i is 0
+      amplitude proportional to c1 where bit k of i is 1
 
     The rotation angle is:
-      theta = 2 * arctan((c_pos - c_neg) / (c_pos + c_neg))
+      theta = 2 * arctan((c0 - c1) / (c0 + c1))
 
-    When c_neg = -c_pos: theta = pi => R_y(pi) = X (standard Walsh).
+    When c1 = -c0: theta = pi => R_y(pi) = X (standard Walsh).
 
     Circuit: R_y(theta) on qubit k, H on all m qubits.
     Gate count: m + 1.  Complexity: O(m).
     """
-    k     = params["k"]
-    c_pos = params.get("c_pos", 1.0)
-    c_neg = params.get("c_neg", -c_pos)
+    k  = params["k"]
+    c0 = params.get("c0", 1.0)
+    c1 = params.get("c1", -c0)
 
     if k < 0 or k >= m:
         raise ValueError(f"WALSH qubit index k={k} out of range [0, {m}).")
 
-    denom = c_pos + c_neg
+    denom = c0 + c1
     if abs(denom) < 1e-14:
-        # c_pos = -c_neg: standard Walsh, use X for exactness
+        # c1 = -c0: standard Walsh, use X for exactness
         theta = math.pi
     else:
-        theta = 2 * math.atan2(c_pos - c_neg, c_pos + c_neg)
+        theta = 2 * math.atan2(c0 - c1, c0 + c1)
 
     qc = QuantumCircuit(m, name="walsh")
     if abs(theta - math.pi) < 1e-12:

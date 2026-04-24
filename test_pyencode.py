@@ -394,19 +394,19 @@ class TestWalsh:
         assert_encodes(circuit, expected)
 
     def test_generalized_two_levels(self):
-        """Generalized Walsh: c_pos=1, c_neg=4 (e.g. Fermi-Hubbard t/U ratio)."""
-        circuit, info = encode(WALSH(k=2, c_pos=1.0, c_neg=4.0), N=8)
+        """Generalized Walsh: c0=1, c1=4 (e.g. Fermi-Hubbard t/U ratio)."""
+        circuit, info = encode(WALSH(k=2, c0=1.0, c1=4.0), N=8)
         expected = np.array([1,1,1,1,4,4,4,4], dtype=float)
         assert_encodes(circuit, expected)
 
     def test_generalized_validate(self):
-        _, info = encode(WALSH(k=1, c_pos=1.0, c_neg=3.0), N=8, validate=True)
+        _, info = encode(WALSH(k=1, c0=1.0, c1=3.0), N=8, validate=True)
         assert info.validated
 
     def test_standard_is_special_case(self):
-        """WALSH(k) and WALSH(k, c_pos=1, c_neg=-1) must produce same circuit."""
+        """WALSH(k) and WALSH(k, c0=1, c1=-1) must produce same circuit."""
         c1, i1 = encode(WALSH(k=1), N=8)
-        c2, i2 = encode(WALSH(k=1, c_pos=1.0, c_neg=-1.0), N=8)
+        c2, i2 = encode(WALSH(k=1, c0=1.0, c1=-1.0), N=8)
         assert i1.gate_count == i2.gate_count
 
     def test_gate_count_is_m_plus_one(self):
@@ -417,7 +417,7 @@ class TestWalsh:
 
     def test_generalized_gate_count_is_m_plus_one(self):
         """Generalized Walsh still costs only m+1 gates."""
-        _, info = encode(WALSH(k=1, c_pos=1.0, c_neg=4.0), N=8)
+        _, info = encode(WALSH(k=1, c0=1.0, c1=4.0), N=8)
         assert info.gate_count == 4  # m+1 = 3+1
 
     def test_complexity(self):
@@ -433,15 +433,15 @@ class TestWalsh:
             encode(WALSH(k=3), N=8)  # k must be < m=3
 
     def test_constructor_stores_params(self):
-        w = WALSH(k=2, c_pos=1.0, c_neg=4.0)
+        w = WALSH(k=2, c0=1.0, c1=4.0)
         assert w.vector_type == VectorType.WALSH
         assert w.params["k"] == 2
-        assert w.params["c_pos"] == 1.0
-        assert w.params["c_neg"] == 4.0
+        assert w.params["c0"] == 1.0
+        assert w.params["c1"] == 4.0
 
-    def test_default_c_neg_is_minus_c_pos(self):
-        w = WALSH(k=1, c_pos=2.0)
-        assert w.params["c_neg"] == -2.0
+    def test_default_c1_is_minus_c0(self):
+        w = WALSH(k=1, c0=2.0)
+        assert w.params["c1"] == -2.0
 
 
 
@@ -1112,7 +1112,7 @@ class TestScaling:
         gate_vals = []
         for m in self.M_VALS:
             N = 2 ** m
-            _, info = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
+            _, info = encode(WALSH(k=m // 2, c0=1.0, c1=4.0), N=N)
             gate_vals.append(info.gate_count)
         _assert_poly_scaling(self.M_VALS, gate_vals, "WALSH")
 
@@ -1852,8 +1852,8 @@ class TestPredictor:
     def test_walsh_exact(self):
         from pyencode import predict_gates, WALSH
         for m in [4, 6, 8, 10, 12]:
-            u_t, c_t, d_t = self._ground(WALSH(k=m//2, c_pos=1.0, c_neg=4.0), 2**m)
-            p = predict_gates(WALSH(k=m//2, c_pos=1.0, c_neg=4.0), 2**m)
+            u_t, c_t, d_t = self._ground(WALSH(k=m//2, c0=1.0, c1=4.0), 2**m)
+            p = predict_gates(WALSH(k=m//2, c0=1.0, c1=4.0), 2**m)
             assert p["exact"] is True
             assert p["gate_count_1q"] == u_t
             assert p["gate_count_2q"] == c_t

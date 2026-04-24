@@ -55,36 +55,36 @@ class SQUARE(_VectorObj):
 
 
 class WALSH(_VectorObj):
-    """WALSH(k, c_pos, c_neg) — generalized Walsh function. O(m) gates.
+    """WALSH(k, c0, c1) — generalized Walsh function. O(m) gates.
 
     Prepares a two-level piecewise-constant state with period P = 2^(k+1):
-      amplitude proportional to c_pos where bit k of i is 0,
-      amplitude proportional to c_neg where bit k of i is 1.
+      amplitude proportional to c0 where bit k of i is 0,
+      amplitude proportional to c1 where bit k of i is 1.
 
     Circuit: R_y(theta) on qubit k, then H on all m qubits. Total: m+1 gates.
-    When c_neg = -c_pos (default), R_y(pi) = X and this reduces to the
+    When c1 = -c0 (default), R_y(pi) = X and this reduces to the
     standard Walsh function (signed uniform superposition).
 
     Parameters
     ----------
     k : int
         Qubit index (0 = LSB). Period P = 2^(k+1). Must satisfy 0 <= k < m.
-    c_pos : float, optional
+    c0 : float, optional
         Amplitude on the b_k=0 half. Default 1.0.
-    c_neg : float, optional
-        Amplitude on the b_k=1 half. Default -c_pos (standard Walsh).
+    c1 : float, optional
+        Amplitude on the b_k=1 half. Default -c0 (standard Walsh).
 
     Examples
     --------
-    >>> circuit, info = encode(WALSH(k=1), N=8)             # standard: +1/-1
-    >>> circuit, info = encode(WALSH(k=1, c_pos=2.0), N=8)  # standard: +2/-2
-    >>> circuit, info = encode(WALSH(k=2, c_pos=1.0, c_neg=4.0), N=8)  # Ry variant
+    >>> circuit, info = encode(WALSH(k=1), N=8)                      # standard: +1/-1
+    >>> circuit, info = encode(WALSH(k=1, c0=2.0), N=8)              # standard: +2/-2
+    >>> circuit, info = encode(WALSH(k=2, c0=1.0, c1=4.0), N=8)      # generalized: two positive levels
     """
-    def __init__(self, k, c_pos=1.0, c_neg=None):
+    def __init__(self, k, c0=1.0, c1=None):
         self.vector_type = VectorType.WALSH
-        c_pos = float(c_pos)
-        c_neg = float(c_neg) if c_neg is not None else -c_pos
-        self.params = {"k": int(k), "c_pos": c_pos, "c_neg": c_neg}
+        c0 = float(c0)
+        c1 = float(c1) if c1 is not None else -c0
+        self.params = {"k": int(k), "c0": c0, "c1": c1}
 
 class SPARSE(_VectorObj):
     """SPARSE([(x1, a1), (x2, a2), ...]) — s point masses at arbitrary indices.
@@ -886,8 +886,8 @@ _PARAM_SCHEMAS = {
     },
     VectorType.WALSH: {
         "required": {"k"},
-        "optional": {"c_pos", "c_neg"},
-        "description": "k=<qubit index>, c_pos=<pos amplitude>, c_neg=<neg amplitude>",
+        "optional": {"c0", "c1"},
+        "description": "k=<qubit index>, c0=<amplitude on b_k=0 half>, c1=<amplitude on b_k=1 half>",
     },
     VectorType.SPARSE: {
         "required": {"loads"},

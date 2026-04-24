@@ -176,17 +176,19 @@ def fig_fourier_multi():
 
 
 def fig_walsh():
-    """WALSH: two-level piecewise-constant signed superposition."""
-    print("\n--- WALSH: k=1, c_pos=1, c_neg=-1, N=8 ---")
+    """WALSH: two-level piecewise-constant state (generalized, two positive levels)."""
+    print("\n--- WALSH: k=2, c0=1, c1=4, N=8 ---")
     N = 8
-    k = 1
-    circuit, info = encode(WALSH(k=k, c_pos=1.0, c_neg=-1.0), N=N)
+    k = 2
+    c0, c1 = 1.0, 4.0
+    circuit, info = encode(WALSH(k=k, c0=c0, c1=c1), N=N)
     print_info("encode", info)
-    # Standard Walsh w_k(i) = (-1)^{bit_k(i)}; here k=1, so period P = 2^(k+1) = 4.
+    # Generalized Walsh: f_i = c0 if bit_k(i)==0 else c1; here k=2, so period P = 2^(k+1) = 8.
+    # f = [1,1,1,1,4,4,4,4] — single block of each level at N=8.
     idx = np.arange(N)
-    f = np.where(((idx >> k) & 1) == 0, 1.0, -1.0)
+    f = np.where(((idx >> k) & 1) == 0, c0, c1)
     plot_vector(f, N,
-                r"WALSH: $k=1$ (standard), period $P=4$, $N=8$",
+                rf"WALSH: $k=2$ (generalized), $c_0={c0:g}$, $c_1={c1:g}$, $N=8$",
                 "walsh_vector.png")
     save_circuit(circuit, "walsh_circuit.png", scale=0.7)
 
@@ -201,6 +203,24 @@ def fig_geometric():
     plot_vector(f, N, r"GEOMETRIC: $f_i = 0.5^{\,i}$, $N=8$",
                 "geometric_vector.png")
     save_circuit(circuit, "geometric_circuit.png", scale=0.6)
+
+
+def fig_geometric_arbitrary():
+    """GEOMETRIC with arbitrary start: dyadic decomposition path (O(m^2))."""
+    print("\n--- GEOMETRIC: ratio=0.8, start=5, N=16 ---")
+    N = 16
+    ratio = 0.8
+    start = 5
+    circuit, info = encode(GEOMETRIC(ratio=ratio, start=start), N=N)
+    print_info("encode", info)
+    # Support: [5, 16) decomposes into [5,6) U [6,8) U [8,16) — three aligned blocks.
+    f = np.zeros(N)
+    for i in range(start, N):
+        f[i] = ratio ** (i - start)
+    plot_vector(f, N,
+                rf"GEOMETRIC: $r={ratio:g}$, $\mathrm{{start}}={start}$, $N={N}$",
+                "geometric_arbitrary_vector.png")
+    save_circuit(circuit, "geometric_arbitrary_circuit.png", scale=0.5)
 
 
 def fig_hamming():
@@ -349,7 +369,7 @@ def fig_hubbard():
     L = 8; t = 1.0; U = 4.0
     N = 2 * L  # = 16
     circuit, info = encode(
-        WALSH(k=int(math.log2(L)), c_pos=t, c_neg=U),
+        WALSH(k=int(math.log2(L)), c0=t, c1=U),
         N=N)
     print_info("encode", info)
     # coefficient vector: t on [0, L), U on [L, 2L)
@@ -464,7 +484,7 @@ def fig_gate_count_vs_m():
         patterns["SQUARE"].append(pyencode_transpile_total(c))
 
         # WALSH: mid-register bit, generalized
-        c, _ = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
+        c, _ = encode(WALSH(k=m // 2, c0=1.0, c1=4.0), N=N)
         patterns["WALSH"].append(pyencode_transpile_total(c))
 
         # GEOMETRIC: exponential decay (product state, 0 CX)
@@ -599,7 +619,7 @@ def fig_gate_count_vs_m_reduced():
         patterns["STEP"].append(pyencode_transpile_total(c))
 
         # WALSH: mid-register bit, generalized
-        c, _ = encode(WALSH(k=m // 2, c_pos=1.0, c_neg=4.0), N=N)
+        c, _ = encode(WALSH(k=m // 2, c0=1.0, c1=4.0), N=N)
         patterns["WALSH"].append(pyencode_transpile_total(c))
 
         # GEOMETRIC: exponential decay (product state, 0 CX)
@@ -745,6 +765,7 @@ if __name__ == "__main__":
     fig_fourier_multi()
     fig_walsh()
     fig_geometric()
+    fig_geometric_arbitrary()
     fig_hamming()
     fig_staircase()
     fig_dicke()

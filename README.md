@@ -31,7 +31,7 @@ circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
 circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
 
 # Two-level piecewise-constant state
-circuit, info = encode(WALSH(k=1, c_pos=1.0, c_neg=4.0), N=8)
+circuit, info = encode(WALSH(k=1, c0=1.0, c1=4.0), N=8)
 
 # Exponential decay — product state, zero two-qubit gates
 circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
@@ -79,7 +79,7 @@ statevector-validated amplitude vector.
 | Sparse     | `SPARSE([(x,a), ...])`        | O(s·m)             | Gleinig & Hoefler (2021)     |
 | Step       | `STEP(k_s, c)`                | O(m)               | Shukla & Vedula (2024)       |
 | Square     | `SQUARE(k1, k2, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
-| Walsh      | `WALSH(k, c_pos, c_neg)`      | O(m)               | Welch et al. (2014)          |
+| Walsh      | `WALSH(k, c0, c1)`      | O(m)               | Welch et al. (2014)          |
 | Geometric  | `GEOMETRIC(ratio, c)`         | O(m), 0 CX, depth 1| Xie & Ben-Ami (2025)        |
 | Hamming    | `HAMMING(r, c)`              | O(m), 0 CX, depth 1| Product state (this work)    |
 | Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
