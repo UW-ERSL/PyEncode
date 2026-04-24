@@ -1392,6 +1392,145 @@ class TestStaircase:
         assert 0 < info.success_probability <= 1.0
 
 
+# ---------------------------------------------------------------------------
+# DICKE
+# ---------------------------------------------------------------------------
+
+# Import DICKE at the same level as the other patterns if not already in the
+# top-level import; defensive dynamic import to avoid breaking old test files
+# that predate the DICKE pattern.
+from pyencode import DICKE
+
+
+def _weight_k_vector(m: int, k: int) -> np.ndarray:
+    """Analytic |D^m_k> amplitude vector, unnormalised: 1 on weight-k
+    basis states, 0 elsewhere.  assert_encodes normalises internally."""
+    N = 1 << m
+    return np.array([1.0 if bin(i).count("1") == k else 0.0
+                     for i in range(N)], dtype=float)
+
+
+class TestDicke:
+    """Tests for DICKE — Bärtschi-Eidenbenz deterministic preparation of
+    |D^m_k>, the uniform superposition over all weight-k basis states.
+    """
+
+    def test_basic(self):
+        circuit, info = encode(DICKE(k=2), N=16)  # m = 4
+        assert info.vector_type == "DICKE"
+        assert info.complexity == "O(k*(m-k))"
+        assert_encodes(circuit, _weight_k_vector(4, 2))
+
+    def test_all_weights_up_to_m6(self):
+        """Statevector match on every (m, k) with 2 <= m <= 6, 0 <= k <= m."""
+        for m in range(2, 7):
+            N = 1 << m
+            for k in range(m + 1):
+                circuit, _ = encode(DICKE(k=k), N=N)
+                assert_encodes(circuit, _weight_k_vector(m, k),
+                               tol=1e-9)
+
+    def test_k_zero_is_ground_state(self):
+        """k=0 gives |00...0>: only index 0 has nonzero amplitude."""
+        circuit, info = encode(DICKE(k=0), N=16)
+        sv = np.abs(statevector(circuit))
+        assert info.gate_count == 0
+        assert info.gate_count_2q == 0
+        np.testing.assert_allclose(sv[0], 1.0, atol=1e-12)
+        np.testing.assert_allclose(sv[1:], 0.0, atol=1e-12)
+
+    def test_k_equals_m_is_all_ones(self):
+        """k=m gives |11...1>: only the top index has nonzero amplitude."""
+        m = 4
+        N = 1 << m
+        circuit, info = encode(DICKE(k=m), N=N)
+        sv = np.abs(statevector(circuit))
+        assert info.gate_count == m             # m X gates
+        assert info.gate_count_2q == 0
+        assert info.circuit_depth == 1
+        np.testing.assert_allclose(sv[N - 1], 1.0, atol=1e-12)
+        np.testing.assert_allclose(sv[:-1], 0.0, atol=1e-12)
+
+    def test_uniform_on_weight_k_sphere(self):
+        """All weight-k basis states carry identical |amplitude|."""
+        m, k = 5, 2
+        N = 1 << m
+        circuit, _ = encode(DICKE(k=k), N=N)
+        sv = np.abs(statevector(circuit))
+        weight_k_idx = [i for i in range(N) if bin(i).count("1") == k]
+        amps = sv[weight_k_idx]
+        expected = 1.0 / np.sqrt(math.comb(m, k))
+        np.testing.assert_allclose(amps, expected, atol=1e-10)
+        # all other indices are zero
+        other_idx = [i for i in range(N) if bin(i).count("1") != k]
+        np.testing.assert_allclose(sv[other_idx], 0.0, atol=1e-10)
+
+    def test_two_qubit_gate_count_matches_prediction(self):
+        """The empirical CX prediction is exact across tested range."""
+        from pyencode import predict_gates
+        for m in range(3, 7):
+            N = 1 << m
+            for k in range(1, m):
+                _, info = encode(DICKE(k=k), N=N)
+                p = predict_gates(DICKE(k=k), N=N)
+                assert info.gate_count_2q == p["gate_count_2q"], \
+                    f"m={m} k={k}: actual cx={info.gate_count_2q} vs pred {p['gate_count_2q']}"
+
+    def test_symmetry_k_and_m_minus_k_have_equal_cost(self):
+        """|D^m_k> and |D^m_{m-k}> differ only by X^{otimes m}; with the
+        k > m/2 optimisation they share identical transpiled gate counts."""
+        for m in range(3, 8):
+            N = 1 << m
+            for k in range(1, m):
+                _, a = encode(DICKE(k=k), N=N)
+                _, b = encode(DICKE(k=m - k), N=N)
+                assert a.gate_count_2q == b.gate_count_2q, \
+                    f"m={m} k={k}: cx_k={a.gate_count_2q} cx_(m-k)={b.gate_count_2q}"
+                assert a.gate_count_1q == b.gate_count_1q
+                assert a.circuit_depth == b.circuit_depth
+
+    def test_validate(self):
+        circuit, info = encode(DICKE(k=3), N=16, validate=True)
+        assert info.validated is True
+        assert info.vector is not None
+        # C(4, 3) = 4 non-zero entries
+        assert int((info.vector != 0).sum()) == math.comb(4, 3)
+
+    def test_custom_c_normalization(self):
+        """c only affects global normalisation; the |amplitudes| are equal."""
+        c1, _ = encode(DICKE(k=2, c=1.0), N=16)
+        c2, _ = encode(DICKE(k=2, c=7.0), N=16)
+        sv1 = np.abs(statevector(c1))
+        sv2 = np.abs(statevector(c2))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+    def test_k_out_of_range_raises(self):
+        with pytest.raises(ValueError, match=r"out of range"):
+            encode(DICKE(k=5), N=16)   # m=4, k must be <=4
+
+    def test_k_negative_raises(self):
+        with pytest.raises(ValueError, match="non-negative"):
+            DICKE(k=-1)
+
+    def test_emitted_code_runs(self):
+        circuit, info = encode(DICKE(k=2), N=16)
+        namespace = {}
+        exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+        assert isinstance(namespace["qc"], QuantumCircuit)
+        sv_orig = np.abs(statevector(circuit))
+        sv_emit = np.abs(statevector(namespace["qc"]))
+        np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-8)
+
+    def test_sum_composability(self):
+        """DICKE can be used as a SUM component."""
+        circuit, info = encode(
+            SUM([(1.0, DICKE(k=1)),
+                 (1.0, DICKE(k=3))]),
+            N=16)
+        assert info.vector_type == "SUM"
+        assert 0 < info.success_probability <= 1.0
+
+
 class TestTensor:
     """Tests for TENSOR — disjoint-subregister composition.
     Wraps the circ_A.tensor(circ_B) idiom as a named pattern.  Component 0

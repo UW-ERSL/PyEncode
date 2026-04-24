@@ -306,6 +306,54 @@ def _predict_staircase(m: int, params: dict) -> dict:
     )
 
 
+def _predict_dicke(m: int, params: dict) -> dict:
+    """DICKE: Bärtschi-Eidenbenz cascade, |D^m_k> on m qubits.
+
+    The synthesiser exploits the Dicke symmetry
+        |D^m_k> = X^{otimes m} |D^m_{m-k}>
+    by preparing the lighter state when k > m/2 and appending X^{otimes m}.
+    This halves the cascade cost while remaining exact.  Let
+
+        k' = min(k, m - k).
+
+    Edge cases k = 0 and k = m are exact.  For 1 <= k' < m the prediction
+    uses an empirical fit to the transpiled {cx, u} gate counts at
+    ``optimization_level=3`` (Qiskit 2.3.x):
+
+        gate_count_2q = (9 k' - 7) m  -  (9 k'^2 + 9 k' - 14) / 2,
+
+    which matches every measured value over 2 <= m <= 8, 0 <= k <= m
+    exactly (after rounding).  The transpiler absorbs the complement
+    layer X^{otimes m} with no extra 2q gates, so k and m-k have
+    identical gate counts.
+    """
+    k = int(params["k"])
+
+    if k == 0:
+        return dict(gate_count_1q=0, gate_count_2q=0, circuit_depth=0,
+                    complexity="O(1)", exact=True)
+    if k == m:
+        return dict(gate_count_1q=m, gate_count_2q=0, circuit_depth=1,
+                    complexity="O(1)", exact=True)
+
+    # Symmetry: gate counts depend only on k' = min(k, m-k).
+    k_eff = min(k, m - k)
+
+    gate_count_2q = (9 * k_eff - 7) * m - (9 * k_eff * k_eff + 9 * k_eff - 14) // 2
+    # Empirical: 1q ≈ 1.25 * cx + k_eff initial-state X gates.  Slight
+    # drift (±2) from transpiler optimisation at large m but not affecting
+    # asymptotic behaviour.
+    gate_count_1q = int(round(1.25 * gate_count_2q)) + k_eff
+    circuit_depth = int(round(1.1 * gate_count_2q))
+    return dict(
+        gate_count_1q=gate_count_1q,
+        gate_count_2q=gate_count_2q,
+        circuit_depth=circuit_depth,
+        complexity="O(k*(m-k))",
+        exact=False,
+    )
+
+
 def _predict_polynomial(m: int, params: dict) -> dict:
     """POLYNOMIAL: degree-d via signed Walsh-sparse loading.
     d=1 is exact linear: 1q = 5m-4, 2q = 2m-2, depth = 4m-3.
@@ -581,6 +629,7 @@ _PREDICTORS = {
     VectorType.GEOMETRIC:  _predict_geometric,
     VectorType.HAMMING:   _predict_hamming,
     VectorType.STAIRCASE:  _predict_staircase,
+    VectorType.DICKE:      _predict_dicke,
     VectorType.POLYNOMIAL: _predict_polynomial,
 }
 

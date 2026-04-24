@@ -144,9 +144,21 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
             raise ValueError(
                 f"GEOMETRIC start must satisfy 0 <= start < N; got start={start}, N={N}."
             )
-# Tier-2: No alignment constraint - any start value 0 <= start < N is supported
+        # Tier-2: No alignment constraint - any start value 0 <= start < N is supported
         result["ratio"] = ratio
         result["start"] = start
+        result["c"] = float(result["c"])
+
+    elif vector_type == VectorType.DICKE:
+        result.setdefault("c", 1.0)
+        k = int(result["k"])
+        m_bits = int(round(math.log2(N)))
+        if k < 0 or k > m_bits:
+            raise ValueError(
+                f"DICKE k={k} out of range [0, {m_bits}] for N={N} "
+                f"(m={m_bits} qubits)."
+            )
+        result["k"] = k
         result["c"] = float(result["c"])
 
     return result
@@ -331,6 +343,24 @@ def _build_expected_vector(
             f[(1 << k) - 1] = c * (r ** k)
         return f
 
+    if lt == VectorType.DICKE:
+        k = p["k"]
+        c = p.get("c", 1.0)
+        f = np.zeros(N)
+        for i in range(N):
+            if bin(i).count("1") == k:
+                f[i] = c
+        return f
+
+    if lt == VectorType.DICKE:
+        k = p["k"]
+        c = p.get("c", 1.0)
+        f = np.zeros(N)
+        for i in range(N):
+            if bin(i).count("1") == k:
+                f[i] = c
+        return f
+
     if lt == VectorType.POLYNOMIAL:
         coeffs = p["coeffs"]
         normalize_domain = p.get("normalize_domain", True)
@@ -386,6 +416,22 @@ def _build_component_vector(comp: _VectorObj, N: int):
         f = np.zeros(N)
         for k in range(m_bits + 1):
             f[(1 << k) - 1] = c * (r ** k)
+        return f
+    if comp.vector_type == VectorType.DICKE:
+        k = p["k"]
+        c = p.get("c", 1.0)
+        f = np.zeros(N)
+        for i in range(N):
+            if bin(i).count("1") == k:
+                f[i] = c
+        return f
+    if comp.vector_type == VectorType.DICKE:
+        k = p["k"]
+        c = p.get("c", 1.0)
+        f = np.zeros(N)
+        for i in range(N):
+            if bin(i).count("1") == k:
+                f[i] = c
         return f
     if comp.vector_type == VectorType.POLYNOMIAL:
         coeffs = p["coeffs"]
