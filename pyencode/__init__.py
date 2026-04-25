@@ -44,7 +44,7 @@ References
 """
 
 from .types import (
-    _VectorObj,
+    _Pattern,
     SPARSE,
     FOURIER,
     WALSH,
@@ -61,7 +61,7 @@ from .types import (
     PARTITION,
     EncodingInfo,
 )
-from .recognizer import VectorType
+from .recognizer import PatternKind
 from .encode import encode
 from .predictor import predict_gates
 
@@ -69,7 +69,7 @@ __all__ = [
     "encode",
     "predict_gates",
     "EncodingInfo",
-    "VectorType",
+    "PatternKind",
     # Constructors
     "SPARSE",
     "FOURIER",
@@ -86,4 +86,4 @@ __all__ = [
     "STEP",
     "SQUARE",
 ]
-__version__ = "1.6.0"
+__version__ = "2.0.0"

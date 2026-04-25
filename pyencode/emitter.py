@@ -25,7 +25,7 @@ import math
 import numpy as np
 from typing import Optional
 
-from .recognizer import LoadPattern, VectorType
+from .recognizer import LoadPattern, PatternKind
 
 
 # ---------------------------------------------------------------------------
@@ -58,20 +58,20 @@ def emit_code(pattern: LoadPattern) -> str:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        VectorType.STEP:    _emit_step_load,
-        VectorType.SQUARE:  _emit_square_load,
-        VectorType.WALSH:   _emit_walsh,
-        VectorType.SPARSE:  _emit_sparse,
-        VectorType.FOURIER: _emit_fourier,
-        VectorType.GEOMETRIC: _emit_geometric,
-        VectorType.HAMMING: _emit_hamming,
-        VectorType.STAIRCASE: _emit_staircase,
-        VectorType.DICKE: _emit_dicke,
-        VectorType.POLYNOMIAL: _emit_polynomial,
-        VectorType.UNKNOWN: _emit_qiskit_fallback,
+        PatternKind.STEP:    _emit_step_load,
+        PatternKind.SQUARE:  _emit_square_load,
+        PatternKind.WALSH:   _emit_walsh,
+        PatternKind.SPARSE:  _emit_sparse,
+        PatternKind.FOURIER: _emit_fourier,
+        PatternKind.GEOMETRIC: _emit_geometric,
+        PatternKind.HAMMING: _emit_hamming,
+        PatternKind.STAIRCASE: _emit_staircase,
+        PatternKind.DICKE: _emit_dicke,
+        PatternKind.POLYNOMIAL: _emit_polynomial,
+        PatternKind.UNKNOWN: _emit_qiskit_fallback,
     }
 
-    fn = dispatch.get(pattern.load_type, _emit_mottonen)
+    fn = dispatch.get(pattern.kind, _emit_mottonen)
     code = fn(m, pattern.params)
 
     # If the emitter produced an incomplete snippet (contains the
@@ -93,7 +93,7 @@ def _emit_from_circuit(m: int, pattern: LoadPattern, circuit) -> str:
     # that have direct QuantumCircuit methods.
     decomposed = circuit.decompose(reps=3)
 
-    label = pattern.load_type.name
+    label = pattern.kind.name
     lines = [
         _header(m, f"{label} — extracted from synthesized circuit"),
         f"import math",

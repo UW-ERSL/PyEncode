@@ -38,7 +38,7 @@ from typing import Optional
 # Data structures
 # ---------------------------------------------------------------------------
 
-class VectorType(Enum):
+class PatternKind(Enum):
     STEP            = auto()
     SQUARE          = auto()   # f[k1:k2] = c  (interior segment)
     UNKNOWN         = auto()   # fallback to Qiskit StatePreparation
@@ -61,20 +61,20 @@ class VectorType(Enum):
                                # L = total atoms across components
 
 
-# Backward-compat alias for the LCU -> SUM rename.  VectorType.LCU refers to
-# the same enum member as VectorType.SUM; code that compares with either
-# identifier continues to work.  New code should use VectorType.SUM.
-VectorType.LCU = VectorType.SUM
+# Backward-compat alias for the LCU -> SUM rename.  PatternKind.LCU refers to
+# the same enum member as PatternKind.SUM; code that compares with either
+# identifier continues to work.  New code should use PatternKind.SUM.
+PatternKind.LCU = PatternKind.SUM
 
 
 
 @dataclass
 class LoadPattern:
     """Recognised load pattern with extracted numerical parameters."""
-    load_type: VectorType
+    kind: PatternKind
     N: int                        # number of nodes (must be power of 2)
     params: dict = field(default_factory=dict)
-    # params keys depend on load_type — documented per pattern below
+    # params keys depend on kind — documented per pattern below
 
 
 # ---------------------------------------------------------------------------
@@ -94,14 +94,14 @@ def recognize(code: str) -> LoadPattern:
     Returns
     -------
     LoadPattern
-        If recognized, load_type is one of the structured types and
+        If recognized, kind is one of the structured types and
         params carries the extracted parameters.  If not recognized,
-        load_type is UNKNOWN and params is empty.
+        kind is UNKNOWN and params is empty.
     """
     try:
         tree = ast.parse(code)
     except SyntaxError:
-        return LoadPattern(VectorType.UNKNOWN, N=0)
+        return LoadPattern(PatternKind.UNKNOWN, N=0)
 
     ctx = _ExecutionContext(code)
 
@@ -111,7 +111,7 @@ def recognize(code: str) -> LoadPattern:
     N = ctx.N
     if N is None or N == 0 or (N & (N - 1)) != 0:
         # N unknown or not a power of two — cannot encode
-        return LoadPattern(VectorType.UNKNOWN, N=N or 0)
+        return LoadPattern(PatternKind.UNKNOWN, N=N or 0)
 
     # Try patterns in order of specificity
     for recognizer_fn in [
@@ -129,7 +129,7 @@ def recognize(code: str) -> LoadPattern:
         if result is not None:
             return result
 
-    return LoadPattern(VectorType.UNKNOWN, N=N)
+    return LoadPattern(PatternKind.UNKNOWN, N=N)
 
 
 # Backward-compatible alias (British spelling kept for v0.4 compatibility)
@@ -411,7 +411,7 @@ def _try_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k >= N:
         return None
 
-    return LoadPattern(VectorType.DISCRETE, N=N, params={"k": k, "P": P})
+    return LoadPattern(PatternKind.DISCRETE, N=N, params={"k": k, "P": P})
 
 
 def _try_uniform_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -444,12 +444,12 @@ def _try_uniform_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
         elif right and right.get("kind") == "ones":
             c = left.get("value") if left else 1.0
         if c is not None and ctx.N:
-            return LoadPattern(VectorType.UNIFORM, N=ctx.N,
+            return LoadPattern(PatternKind.UNIFORM, N=ctx.N,
                                params={"c": float(c)})
 
     # bare ones(N)
     if last.get("kind") == "ones" and ctx.N:
-        return LoadPattern(VectorType.UNIFORM, N=ctx.N, params={"c": 1.0})
+        return LoadPattern(PatternKind.UNIFORM, N=ctx.N, params={"c": 1.0})
 
     return None
 
@@ -483,7 +483,7 @@ def _try_step_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k_s > N:
         return None
 
-    return LoadPattern(VectorType.STEP, N=N, params={"k_s": int(k_s), "c": c})
+    return LoadPattern(PatternKind.STEP, N=N, params={"k_s": int(k_s), "c": c})
 
 
 def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -521,7 +521,7 @@ def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k2 > N or k1 >= k2:
         return None
 
-    return LoadPattern(VectorType.SQUARE, N=N,
+    return LoadPattern(PatternKind.SQUARE, N=N,
                        params={"k1": int(k1), "k2": int(k2), "c": c})
 
 
@@ -570,7 +570,7 @@ def _try_sinusoidal_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None:
         return None
 
-    return LoadPattern(VectorType.SINE, N=N,
+    return LoadPattern(PatternKind.SINE, N=N,
                        params={"n": n, "A": A, "phi": phi})
 
 
@@ -724,7 +724,7 @@ def _try_cosine_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None:
         return None
 
-    return LoadPattern(VectorType.COSINE, N=N,
+    return LoadPattern(PatternKind.COSINE, N=N,
                        params={"n": n, "A": A, "phi": phi})
 
 def _try_multi_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -756,7 +756,7 @@ def _try_multi_point_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     loads = [{"k": int(a["index"]["value"]), "P": float(a["value"]["value"])}
              for a in subscript_assigns]
 
-    return LoadPattern(VectorType.MULTI_DISCRETE, N=N, params={"loads": loads})
+    return LoadPattern(PatternKind.MULTI_DISCRETE, N=N, params={"loads": loads})
 
 
 def _try_multi_sin_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
@@ -783,7 +783,7 @@ def _try_multi_sin_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None:
         return None
 
-    return LoadPattern(VectorType.MULTI_SINE, N=N, params={"modes": modes})
+    return LoadPattern(PatternKind.MULTI_SINE, N=N, params={"modes": modes})
 
 
 def _collect_sin_sum(desc, ctx: _ExecutionContext) -> Optional[list]:
@@ -863,5 +863,5 @@ def _try_uniform_spike_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if N is None or k >= N:
         return None
 
-    return LoadPattern(VectorType.UNIFORM_SPIKE, N=N,
+    return LoadPattern(PatternKind.UNIFORM_SPIKE, N=N,
                        params={"c": c, "k": k, "delta": delta})

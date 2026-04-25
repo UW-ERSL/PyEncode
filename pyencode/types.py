@@ -8,41 +8,41 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 
-from .recognizer import VectorType
+from .recognizer import PatternKind
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 
 # ---------------------------------------------------------------------------
 # Base class
 # ---------------------------------------------------------------------------
 
-class _VectorObj:
+class _Pattern:
     """Base class for typed vector constructors."""
-    vector_type: VectorType
+    kind: PatternKind
     params: dict
 
     def __repr__(self):
         p = ", ".join(f"{k}={v!r}" for k, v in self.params.items())
-        return f"{self.vector_type.name}({p})"
+        return f"{self.kind.name}({p})"
 
 
 # ---------------------------------------------------------------------------
 # Constructors
 # ---------------------------------------------------------------------------
 
-class STEP(_VectorObj):
+class STEP(_Pattern):
     """STEP(k_s, c) — prefix uniform superposition [0, k_s). O(m) gates.
 
     Implements the Shukla-Vedula (2024) interval circuit.
     STEP(k_s=N) produces the full uniform superposition H^m|0>.
     """
     def __init__(self, k_s, c=1.0):
-        self.vector_type = VectorType.STEP
+        self.kind = PatternKind.STEP
         self.params = {"k_s": int(k_s), "c": float(c)}
 
 
-class SQUARE(_VectorObj):
+class SQUARE(_Pattern):
     """SQUARE(k1, k2, c) — interval uniform superposition [k1, k2). O(m^2) gates.
 
     Extends STEP to arbitrary intervals via a Draper QFT-based constant adder.
@@ -50,11 +50,11 @@ class SQUARE(_VectorObj):
     SQUARE(k1=0, k2=k_s) is identical to STEP(k_s).
     """
     def __init__(self, k1, k2, c=1.0):
-        self.vector_type = VectorType.SQUARE
+        self.kind = PatternKind.SQUARE
         self.params = {"k1": int(k1), "k2": int(k2), "c": float(c)}
 
 
-class WALSH(_VectorObj):
+class WALSH(_Pattern):
     """WALSH(k, c0, c1) — generalized Walsh function. O(m) gates.
 
     Prepares a two-level piecewise-constant state with period P = 2^(k+1):
@@ -81,12 +81,12 @@ class WALSH(_VectorObj):
     >>> circuit, info = encode(WALSH(k=2, c0=1.0, c1=4.0), N=8)      # generalized: two positive levels
     """
     def __init__(self, k, c0=1.0, c1=None):
-        self.vector_type = VectorType.WALSH
+        self.kind = PatternKind.WALSH
         c0 = float(c0)
         c1 = float(c1) if c1 is not None else -c0
         self.params = {"k": int(k), "c0": c0, "c1": c1}
 
-class SPARSE(_VectorObj):
+class SPARSE(_Pattern):
     """SPARSE([(x1, a1), (x2, a2), ...]) — s point masses at arbitrary indices.
 
     Implements the Gleinig-Hoefler algorithm. Gate complexity O(s * m).
@@ -98,7 +98,7 @@ class SPARSE(_VectorObj):
     >>> circuit, info = encode(SPARSE([(1, 3.0), (6, 4.0)]), N=8)
     """
     def __init__(self, entries):
-        self.vector_type = VectorType.SPARSE
+        self.kind = PatternKind.SPARSE
         loads = []
         for item in entries:
             try:
@@ -114,7 +114,7 @@ class SPARSE(_VectorObj):
         self.params = {"loads": loads}
 
     def __repr__(self):
-        # Override the default _VectorObj.__repr__: the constructor takes
+        # Override the default _Pattern.__repr__: the constructor takes
         # `entries=[(k, v), ...]` but the internal params dict uses key
         # 'loads' (list of {"k":..., "P":...} dicts).  Without this
         # override, ``eval(repr(obj))`` fails with an unknown-kwarg error,
@@ -123,7 +123,7 @@ class SPARSE(_VectorObj):
         return f"SPARSE({entries!r})"
 
 
-class FOURIER(_VectorObj):
+class FOURIER(_Pattern):
     """FOURIER(modes=[(n, A, phi), ...]) — T sinusoidal modes via inverse QFT.
 
     Gate complexity O(m^2) for any T.
@@ -135,7 +135,7 @@ class FOURIER(_VectorObj):
     >>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0), (3, 0.5, 0)]), N=16)
     """
     def __init__(self, modes):
-        self.vector_type = VectorType.FOURIER
+        self.kind = PatternKind.FOURIER
         mode_list = []
         for item in modes:
             try:
@@ -157,7 +157,7 @@ class FOURIER(_VectorObj):
         self.params = {"modes": mode_list}
 
 
-class GEOMETRIC(_VectorObj):
+class GEOMETRIC(_Pattern):
     """GEOMETRIC(r, start=0, c=1.0) — geometric sequence, optionally offset.
 
     Prepares a state proportional to:
@@ -203,7 +203,7 @@ class GEOMETRIC(_VectorObj):
     >>> circuit, info = encode(GEOMETRIC(r=0.8, start=4), N=256)  # tier 2
     """
     def __init__(self, r, start=0, c=1.0):
-        self.vector_type = VectorType.GEOMETRIC
+        self.kind = PatternKind.GEOMETRIC
         r = float(r)
         if r <= 0:
             raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
@@ -217,7 +217,7 @@ class GEOMETRIC(_VectorObj):
         self.params = {"r": r, "start": start, "c": float(c)}
 
 
-class HAMMING(_VectorObj):
+class HAMMING(_Pattern):
     """HAMMING(r, c) — amplitudes depend only on Hamming weight.  O(m) gates, depth 1.
 
     Prepares a product state proportional to f_i = c * r^{wt(i)}, where
@@ -266,7 +266,7 @@ class HAMMING(_VectorObj):
     Cambridge University Press, 2010 (§10.5, Hamming weight).
     """
     def __init__(self, r, c=1.0):
-        self.vector_type = VectorType.HAMMING
+        self.kind = PatternKind.HAMMING
         r = float(r)
         if r <= 0:
             raise ValueError(
@@ -276,7 +276,7 @@ class HAMMING(_VectorObj):
         self.params = {"r": r, "c": float(c)}
 
 
-class STAIRCASE(_VectorObj):
+class STAIRCASE(_Pattern):
     """STAIRCASE(r, c) — sparse geometric staircase on unary indices.  O(m) gates.
 
     Prepares a state with exactly m+1 nonzero amplitudes, supported on the
@@ -322,7 +322,7 @@ class STAIRCASE(_VectorObj):
     Computing 62, 1999.
     """
     def __init__(self, r, c=1.0):
-        self.vector_type = VectorType.STAIRCASE
+        self.kind = PatternKind.STAIRCASE
         r = float(r)
         if r <= 0:
             raise ValueError(
@@ -337,7 +337,7 @@ class STAIRCASE(_VectorObj):
         self.params = {"r": r, "c": float(c)}
 
 
-class DICKE(_VectorObj):
+class DICKE(_Pattern):
     """DICKE(k, c=1.0) — uniform superposition over all weight-k basis states.
 
     Prepares the Dicke state
@@ -415,14 +415,14 @@ class DICKE(_VectorObj):
     Preparation", *IEEE QCE 2022*.  doi:10.1109/QCE53715.2022.00027.
     """
     def __init__(self, k, c=1.0):
-        self.vector_type = VectorType.DICKE
+        self.kind = PatternKind.DICKE
         k = int(k)
         if k < 0:
             raise ValueError(f"DICKE k must be non-negative, got {k}.")
         self.params = {"k": k, "c": float(c)}
 
 
-class POLYNOMIAL(_VectorObj):
+class POLYNOMIAL(_Pattern):
     """POLYNOMIAL(coeffs, normalize_domain=True) — degree-d polynomial amplitudes.
 
     Prepares the state proportional to
@@ -476,7 +476,7 @@ class POLYNOMIAL(_VectorObj):
     Gonzalez-Conde, Watts, Rodriguez-Grasa, Sanz, Quantum 8, 1297 (2024).
     """
     def __init__(self, coeffs, normalize_domain=True):
-        self.vector_type = VectorType.POLYNOMIAL
+        self.kind = PatternKind.POLYNOMIAL
         coeffs = [float(c) for c in coeffs]
         if len(coeffs) == 0:
             raise ValueError("POLYNOMIAL requires at least one coefficient.")
@@ -492,8 +492,8 @@ class POLYNOMIAL(_VectorObj):
         }
 
 
-class TENSOR(_VectorObj):
-    """TENSOR([(VectorObj_1, N_1), (VectorObj_2, N_2), ...]) — disjoint-subregister composition.
+class TENSOR(_Pattern):
+    """TENSOR([(pattern_1, N_1), (pattern_2, N_2), ...]) — disjoint-subregister composition.
 
     Prepares a tensor-product state where each component acts on its own
     subregister.  The total amplitude vector is the outer product of the
@@ -519,7 +519,7 @@ class TENSOR(_VectorObj):
 
     Parameters
     ----------
-    components : list of (VectorObj, N_i) tuples
+    components : list of (pattern, N_i) tuples
         Each tuple declares a subregister: the constructor and its vector
         length.  Each N_i must be a power of 2.  The total encode() N
         must equal the product of all N_i.
@@ -541,7 +541,7 @@ class TENSOR(_VectorObj):
     ...     N=16 * 16 * 16)
     """
     def __init__(self, components):
-        self.vector_type = VectorType.TENSOR
+        self.kind = PatternKind.TENSOR
         if not components:
             raise ValueError("TENSOR requires at least one component.")
         comp_list = []
@@ -551,11 +551,11 @@ class TENSOR(_VectorObj):
                 obj, n_i = item
             except (TypeError, ValueError):
                 raise TypeError(
-                    f"TENSOR expects (VectorObj, N_i) tuples, got {item!r}."
+                    f"TENSOR expects (pattern, N_i) tuples, got {item!r}."
                 )
-            if not isinstance(obj, _VectorObj):
+            if not isinstance(obj, _Pattern):
                 raise TypeError(
-                    f"TENSOR component must be a VectorObj, got {type(obj).__name__}."
+                    f"TENSOR component must be a pattern, got {type(obj).__name__}."
                 )
             n_i = int(n_i)
             if n_i < 2 or (n_i & (n_i - 1)) != 0:
@@ -567,8 +567,8 @@ class TENSOR(_VectorObj):
         self.params = {"components": comp_list, "sizes": sizes}
 
 
-class SUM(_VectorObj):
-    """SUM([(w1, VectorObj1), (w2, VectorObj2), ...]) — weighted superposition.
+class SUM(_Pattern):
+    """SUM([(w1, pattern1), (w2, pattern2), ...]) — weighted superposition.
 
     Prepares a weighted superposition of structured component states:
       |psi> ∝ sum_j w_j |f^(j)>
@@ -590,7 +590,7 @@ class SUM(_VectorObj):
 
     Parameters
     ----------
-    components : list of (weight, VectorObj) tuples
+    components : list of (weight, pattern) tuples
         Unnormalized weights and typed constructors.
         All weights must be positive.
 
@@ -615,7 +615,7 @@ class SUM(_VectorObj):
     Berry, Childs, Cleve, Kothari & Somma, *Phys. Rev. Lett.* 114(9), 2015.
     """
     def __init__(self, components):
-        self.vector_type = VectorType.SUM
+        self.kind = PatternKind.SUM
         if not components:
             raise ValueError("SUM requires at least one component.")
         weights = []
@@ -625,11 +625,11 @@ class SUM(_VectorObj):
                 w, obj = item
             except (TypeError, ValueError):
                 raise TypeError(
-                    f"SUM expects (weight, VectorObj) tuples, got {item!r}."
+                    f"SUM expects (weight, pattern) tuples, got {item!r}."
                 )
-            if not isinstance(obj, _VectorObj):
+            if not isinstance(obj, _Pattern):
                 raise TypeError(
-                    f"SUM component must be a VectorObj, got {type(obj).__name__}."
+                    f"SUM component must be a pattern, got {type(obj).__name__}."
                 )
             w = float(w)
             if w <= 0:
@@ -664,7 +664,7 @@ def LCU(components):
     return SUM(components)
 
 
-class PARTITION(_VectorObj):
+class PARTITION(_Pattern):
     """PARTITION([comp1, comp2, ...]) — disjoint-support composition.
 
     Prepares a state whose support is the *union* of component supports,
@@ -711,7 +711,7 @@ class PARTITION(_VectorObj):
 
     Parameters
     ----------
-    components : list of _VectorObj
+    components : list of _Pattern
         Bounded-support constructors (SPARSE, STEP, SQUARE, GEOMETRIC).
         Supports must be pairwise disjoint under the chosen N; the
         framework verifies this and raises ValueError on overlap.
@@ -740,22 +740,22 @@ class PARTITION(_VectorObj):
     Bentley & Saxe, J. Algorithms, 1980  (dyadic interval decomposition).
     """
     def __init__(self, components):
-        self.vector_type = VectorType.PARTITION
+        self.kind = PatternKind.PARTITION
         if not components:
             raise ValueError("PARTITION requires at least one component.")
         comp_list = []
         for item in components:
-            if not isinstance(item, _VectorObj):
+            if not isinstance(item, _Pattern):
                 raise TypeError(
-                    f"PARTITION component must be a VectorObj "
+                    f"PARTITION component must be a pattern "
                     f"(SPARSE, STEP, SQUARE, or GEOMETRIC), got "
                     f"{type(item).__name__}."
                 )
-            if item.vector_type not in (VectorType.SPARSE, VectorType.STEP,
-                                        VectorType.SQUARE,
-                                        VectorType.GEOMETRIC):
+            if item.kind not in (PatternKind.SPARSE, PatternKind.STEP,
+                                        PatternKind.SQUARE,
+                                        PatternKind.GEOMETRIC):
                 raise TypeError(
-                    f"PARTITION component type {item.vector_type.name} has "
+                    f"PARTITION component type {item.kind.name} has "
                     f"full or dense support and cannot be part of a disjoint "
                     f"partition.  Allowed types: SPARSE, STEP, SQUARE, "
                     f"GEOMETRIC.  Use SUM instead for overlapping or "
@@ -776,7 +776,7 @@ class EncodingInfo:
 
     Attributes
     ----------
-    vector_type : str
+    kind : str
         Name of the recognized vector pattern.
     N : int
         Number of vector components (must be a power of 2).
@@ -809,7 +809,7 @@ class EncodingInfo:
         May differ from the raw circuit depth visible via print(circuit).
         None if transpilation was not performed.
     """
-    vector_type: str
+    kind: str
     N: int
     m: int
     gate_count: int
@@ -826,7 +826,7 @@ class EncodingInfo:
     def __str__(self) -> str:
         lines = [
             f"PyEncode  v{__version__}",
-            f"  Vector type : {self.vector_type}",
+            f"  Pattern     : {self.kind}",
             f"  N           : {self.N}  (m = {self.m} qubits)",
             f"  Gate count  : {self.gate_count}",
             f"  Complexity  : {self.complexity}",
@@ -855,18 +855,18 @@ class EncodingInfo:
 # ---------------------------------------------------------------------------
 
 _COMPLEXITY = {
-    VectorType.STEP:    "O(m)",
-    VectorType.SQUARE:  "O(m²)",   # general; O(m) for k1=0 or aligned blocks
-    VectorType.WALSH:   "O(m)",
-    VectorType.SPARSE:  "O(s\u00b7m)",
-    VectorType.FOURIER: "O(m\u00b2)",
-    VectorType.GEOMETRIC: "O(m)",
-    VectorType.HAMMING: "O(m)",
-    VectorType.STAIRCASE: "O(m)",
-    VectorType.DICKE:     "O(k*(m-k))",
-    VectorType.POLYNOMIAL: "O(m^(d+1))",
-    VectorType.PARTITION: "O(L\u00b7m)",
-    VectorType.UNKNOWN: "O(2^m)",
+    PatternKind.STEP:    "O(m)",
+    PatternKind.SQUARE:  "O(m²)",   # general; O(m) for k1=0 or aligned blocks
+    PatternKind.WALSH:   "O(m)",
+    PatternKind.SPARSE:  "O(s\u00b7m)",
+    PatternKind.FOURIER: "O(m\u00b2)",
+    PatternKind.GEOMETRIC: "O(m)",
+    PatternKind.HAMMING: "O(m)",
+    PatternKind.STAIRCASE: "O(m)",
+    PatternKind.DICKE:     "O(k*(m-k))",
+    PatternKind.POLYNOMIAL: "O(m^(d+1))",
+    PatternKind.PARTITION: "O(L\u00b7m)",
+    PatternKind.UNKNOWN: "O(2^m)",
 }
 
 
@@ -875,52 +875,52 @@ _COMPLEXITY = {
 # ---------------------------------------------------------------------------
 
 _PARAM_SCHEMAS = {
-    VectorType.STEP: {
+    PatternKind.STEP: {
         "required": {"k_s"},
         "optional": {"c"},
         "description": "k_s=<prefix end index>",
     },
-    VectorType.SQUARE: {
+    PatternKind.SQUARE: {
         "required": {"k1", "k2"},
         "optional": {"c"},
         "description": "k1=<start>, k2=<end>",
     },
-    VectorType.WALSH: {
+    PatternKind.WALSH: {
         "required": {"k"},
         "optional": {"c0", "c1"},
         "description": "k=<qubit index>, c0=<amplitude on b_k=0 half>, c1=<amplitude on b_k=1 half>",
     },
-    VectorType.SPARSE: {
+    PatternKind.SPARSE: {
         "required": {"loads"},
         "optional": set(),
         "description": 'loads=[{"k": idx, "P": amp}, ...]',
     },
-    VectorType.FOURIER: {
+    PatternKind.FOURIER: {
         "required": {"modes"},
         "optional": set(),
         "description": 'modes=[{"n": freq, "A": amp, "phi": phase}, ...]',
     },
-    VectorType.GEOMETRIC: {
+    PatternKind.GEOMETRIC: {
         "required": {"r"},
         "optional": {"c", "start"},
         "description": "r=<base (common ratio) of geometric sequence>, start=<starting index (default 0)>",
     },
-    VectorType.HAMMING: {
+    PatternKind.HAMMING: {
         "required": {"r"},
         "optional": {"c"},
         "description": "r=<per-qubit amplitude ratio>",
     },
-    VectorType.STAIRCASE: {
+    PatternKind.STAIRCASE: {
         "required": {"r"},
         "optional": {"c"},
         "description": "r=<geometric ratio between consecutive unary amplitudes>",
     },
-    VectorType.DICKE: {
+    PatternKind.DICKE: {
         "required": {"k"},
         "optional": {"c"},
         "description": "k=<Hamming weight of target states, 0 <= k <= m>",
     },
-    VectorType.POLYNOMIAL: {
+    PatternKind.POLYNOMIAL: {
         "required": {"coeffs"},
         "optional": {"normalize_domain"},
         "description": "coeffs=[c_0, c_1, ..., c_d]",

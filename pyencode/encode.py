@@ -7,20 +7,20 @@ Single entry point for structured quantum state preparation.
 from typing import Union
 from qiskit import QuantumCircuit
 
-from .recognizer import LoadPattern, VectorType
-from .types import _VectorObj, EncodingInfo
+from .recognizer import LoadPattern, PatternKind
+from .types import _Pattern, EncodingInfo
 from ._helpers import (
     _validate_params,
     _synthesize_and_build_info,
     _encode_composite,
     _encode_sum,
-    _normalize_vector_type,
+    _normalize_kind,
 )
 
 
-def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
+def encode(pattern, N: int, validate: bool = False, tol: float = 1e-6):
     """
-    encode(VectorObj, N, validate=False, tol=1e-6)
+    encode(pattern, N, validate=False, tol=1e-6)
 
     Prepare a structured quantum state from a typed parameter declaration.
     Maps directly to a closed-form Qiskit circuit with no vector
@@ -28,7 +28,7 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
 
     Parameters
     ----------
-    VectorObj : _VectorObj instance or list of _VectorObj instances
+    pattern : _Pattern instance or list of _Pattern instances
         A typed constructor:
           SPARSE([(x1,a1), (x2,a2), ...])
           STEP(k_s, c)
@@ -58,31 +58,31 @@ def encode(VectorObj, N: int, validate: bool = False, tol: float = 1e-6):
     >>> circuit, info = encode([SQUARE(k1=0, k2=16, c=1.0),
     ...                         SQUARE(k1=16, k2=24, c=4.0)], N=32)
     """
-    if isinstance(VectorObj, list):
-        return _encode_composite(VectorObj, N, validate=validate, tol=tol)
+    if isinstance(pattern, list):
+        return _encode_composite(pattern, N, validate=validate, tol=tol)
 
     from .types import SUM as _SUM
-    if isinstance(VectorObj, _SUM):
-        return _encode_sum(VectorObj, N, validate=validate, tol=tol)
+    if isinstance(pattern, _SUM):
+        return _encode_sum(pattern, N, validate=validate, tol=tol)
 
     from .types import TENSOR as _TENSOR
-    if isinstance(VectorObj, _TENSOR):
+    if isinstance(pattern, _TENSOR):
         from ._helpers import _encode_tensor
-        return _encode_tensor(VectorObj, N, validate=validate, tol=tol)
+        return _encode_tensor(pattern, N, validate=validate, tol=tol)
 
     from .types import PARTITION as _PARTITION
-    if isinstance(VectorObj, _PARTITION):
+    if isinstance(pattern, _PARTITION):
         from ._helpers import _encode_partition
-        return _encode_partition(VectorObj, N, validate=validate, tol=tol)
+        return _encode_partition(pattern, N, validate=validate, tol=tol)
 
-    if not isinstance(VectorObj, _VectorObj):
+    if not isinstance(pattern, _Pattern):
         raise TypeError(
-            f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "
-            f"FOURIER), got {type(VectorObj).__name__}."
+            f"pattern must be a typed constructor (SPARSE, STEP, SQUARE, "
+            f"FOURIER), got {type(pattern).__name__}."
         )
 
-    vtype = VectorObj.vector_type
-    validated_params = _validate_params(vtype, N, VectorObj.params)
+    vtype = pattern.kind
+    validated_params = _validate_params(vtype, N, pattern.params)
     pattern = LoadPattern(vtype, N=N, params=validated_params)
     return _synthesize_and_build_info(
         pattern,

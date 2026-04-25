@@ -3,7 +3,7 @@ test_pyencode.py
 ================
 Unit tests for PyEncode v1.0.
 
-API: encode(VectorObj, N)  with  SPARSE, STEP, SQUARE, FOURIER
+API: encode(pattern, N)  with  SPARSE, STEP, SQUARE, FOURIER
 
 Run with:  python -m pytest test_pyencode.py -v
 """
@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from qiskit import QuantumCircuit
 
-from pyencode import encode, EncodingInfo, VectorType, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, HAMMING, STAIRCASE, TENSOR, POLYNOMIAL, SUM, LCU, PARTITION
+from pyencode import encode, EncodingInfo, PatternKind, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, HAMMING, STAIRCASE, TENSOR, POLYNOMIAL, SUM, LCU, PARTITION
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ class TestSparse:
 
     def test_single_basic(self):
         circuit, info = encode(SPARSE([(3, 5.0)]), N=8)
-        assert info.vector_type == "SPARSE"
+        assert info.kind == "SPARSE"
         assert info.N == 8 and info.m == 3
         expected = np.zeros(8); expected[3] = 5.0
         assert_encodes(circuit, expected)
@@ -141,7 +141,7 @@ class TestStep:
 
     def test_basic(self):
         circuit, info = encode(STEP(k_s=4, c=2.0), N=8)
-        assert info.vector_type == "STEP"
+        assert info.kind == "STEP"
         expected = np.zeros(8); expected[:4] = 2.0
         assert_encodes(circuit, expected)
 
@@ -187,7 +187,7 @@ class TestSquare:
 
     def test_basic(self):
         circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
-        assert info.vector_type == "SQUARE"
+        assert info.kind == "SQUARE"
         expected = np.zeros(8); expected[2:6] = 1.0
         assert_encodes(circuit, expected)
 
@@ -242,7 +242,7 @@ class TestSquare:
         ], N=8)
         # Composite uses LCU with ancilla qubits; verify it runs and
         # returns the right metadata rather than checking statevector directly.
-        assert info.vector_type == "COMPOSITE"
+        assert info.kind == "COMPOSITE"
         assert circuit.num_qubits >= 3  # m=3 data qubits + ancilla
 
 
@@ -254,7 +254,7 @@ class TestFourier:
 
     def test_single_sine(self):
         circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=64)
-        assert info.vector_type == "FOURIER"
+        assert info.kind == "FOURIER"
         k = np.arange(64)
         assert_encodes(circuit, np.sin(2 * np.pi * k / 64))
 
@@ -335,7 +335,7 @@ class TestConstructors:
     def test_sparse_repr(self):
         s = SPARSE([(3, 5.0)])
         assert "SPARSE" in repr(s)
-        assert s.vector_type == VectorType.SPARSE
+        assert s.kind == PatternKind.SPARSE
 
     def test_sparse_stores_loads(self):
         s = SPARSE([(1, 2.0), (5, 3.0)])
@@ -345,7 +345,7 @@ class TestConstructors:
     def test_fourier_repr(self):
         f = FOURIER(modes=[(1, 1.0, 0)])
         assert "FOURIER" in repr(f)
-        assert f.vector_type == VectorType.FOURIER
+        assert f.kind == PatternKind.FOURIER
 
     def test_fourier_stores_modes(self):
         f = FOURIER(modes=[(1, 2.0, 0.0), (3, 1.0, 0.5)])
@@ -377,7 +377,7 @@ class TestWalsh:
     def test_k0_standard(self):
         """Standard Walsh k=0: alternates +/-1 every sample."""
         circuit, info = encode(WALSH(k=0), N=8)
-        assert info.vector_type == "WALSH"
+        assert info.kind == "WALSH"
         expected = np.array([1,-1,1,-1,1,-1,1,-1], dtype=float)
         assert_encodes(circuit, expected)
 
@@ -434,7 +434,7 @@ class TestWalsh:
 
     def test_constructor_stores_params(self):
         w = WALSH(k=2, c0=1.0, c1=4.0)
-        assert w.vector_type == VectorType.WALSH
+        assert w.kind == PatternKind.WALSH
         assert w.params["k"] == 2
         assert w.params["c0"] == 1.0
         assert w.params["c1"] == 4.0
@@ -456,7 +456,7 @@ class TestSum:
         circuit, info = encode(
             SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         # p = sum_j beta_j^4 = 2*(1/sqrt(2))^4 = 0.5 for 2 equal-weight disjoint
         assert abs(info.success_probability - 0.5) < 1e-6
         expected = np.ones(8, dtype=float)
@@ -527,7 +527,7 @@ class TestSum:
 
     def test_bad_component_raises(self):
         with pytest.raises(TypeError):
-            SUM([(1.0, "not a VectorObj")])
+            SUM([(1.0, "not a pattern")])
 
     def test_success_probability_in_info(self):
         _, info = encode(
@@ -629,7 +629,7 @@ class TestGeometric:
 
     def test_decay_basic(self):
         circuit, info = encode(GEOMETRIC(r=0.5), N=8)
-        assert info.vector_type == "GEOMETRIC"
+        assert info.kind == "GEOMETRIC"
         assert info.complexity == "O(m)"
         f = 0.5 ** np.arange(8)
         assert_encodes(circuit, f)
@@ -695,7 +695,7 @@ class TestGeometric:
             SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, GEOMETRIC(r=0.5))]),
             N=16)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     # === start parameter tests ===
@@ -1023,7 +1023,7 @@ class TestGeometricDyadic:
             SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, GEOMETRIC(r=0.5, start=5))]),
             N=16)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_emitted_code_runs_and_matches(self):
@@ -1197,7 +1197,7 @@ class TestHamming:
 
     def test_basic(self):
         circuit, info = encode(HAMMING(r=0.5), N=8)
-        assert info.vector_type == "HAMMING"
+        assert info.kind == "HAMMING"
         assert info.complexity == "O(m)"
         pops = np.array([bin(i).count("1") for i in range(8)], dtype=float)
         f = 0.5 ** pops
@@ -1264,7 +1264,7 @@ class TestHamming:
             SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, HAMMING(r=0.5))]),
             N=16)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_hamming_weight_structure(self):
@@ -1291,7 +1291,7 @@ class TestStaircase:
 
     def test_basic(self):
         circuit, info = encode(STAIRCASE(r=0.5), N=8)
-        assert info.vector_type == "STAIRCASE"
+        assert info.kind == "STAIRCASE"
         assert info.complexity == "O(m)"
         f = np.zeros(8)
         for k in range(4):
@@ -1388,7 +1388,7 @@ class TestStaircase:
             SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
                  (2.0, STAIRCASE(r=0.5))]),
             N=16)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
 
@@ -1417,7 +1417,7 @@ class TestDicke:
 
     def test_basic(self):
         circuit, info = encode(DICKE(k=2), N=16)  # m = 4
-        assert info.vector_type == "DICKE"
+        assert info.kind == "DICKE"
         assert info.complexity == "O(k*(m-k))"
         assert_encodes(circuit, _weight_k_vector(4, 2))
 
@@ -1527,7 +1527,7 @@ class TestDicke:
             SUM([(1.0, DICKE(k=1)),
                  (1.0, DICKE(k=3))]),
             N=16)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
 
@@ -1542,7 +1542,7 @@ class TestTensor:
             TENSOR([(GEOMETRIC(r=0.5), 8),
                     (GEOMETRIC(r=0.8), 8)]),
             N=64)
-        assert info.vector_type == "TENSOR"
+        assert info.kind == "TENSOR"
         assert info.N == 64
         assert info.m == 6
 
@@ -1613,7 +1613,7 @@ class TestTensor:
 
     def test_bad_component_type_raises(self):
         with pytest.raises(TypeError):
-            TENSOR([("not a VectorObj", 8)])
+            TENSOR([("not a pattern", 8)])
 
     def test_mismatched_total_N_raises(self):
         with pytest.raises(ValueError, match="product of subregister sizes"):
@@ -1655,7 +1655,7 @@ class TestPolynomial:
     def test_ramp_basic(self):
         """POLYNOMIAL(coeffs=[0, 1]) == ramp f(i) = i/(N-1)."""
         circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=16)
-        assert info.vector_type == "POLYNOMIAL"
+        assert info.kind == "POLYNOMIAL"
         sv = np.array(statevector(circuit)).real
         f = self._normalised_eval([0.0, 1.0], 16)
         expected = f / np.linalg.norm(f)
@@ -1756,7 +1756,7 @@ class TestPolynomial:
             SUM([(1.0, STEP(k_s=8, c=1.0)),
                  (2.0, POLYNOMIAL(coeffs=[0.0, 1.0]))]),
             N=16)
-        assert info.vector_type == "SUM"
+        assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_tensor_composability(self):
@@ -2018,7 +2018,7 @@ class TestPredictor:
             GEOMETRIC(r=0.8, start=11),
         ]
         p = predict_gates(PARTITION(components), N=256)
-        assert p["vector_type"] == "PARTITION"
+        assert p["kind"] == "PARTITION"
         assert p["N"] == 256 and p["m"] == 8
         assert p["complexity"].startswith("O(L")
         assert p["exact"] is False
@@ -2151,7 +2151,7 @@ class TestPartition:
         f = np.zeros(N, dtype=float)
         for comp in components:
             p = comp.params
-            vt = comp.vector_type
+            vt = comp.kind
             if vt.name == "SPARSE":
                 for load in p["loads"]:
                     f[int(load["k"])] += float(load["P"])
@@ -2177,7 +2177,7 @@ class TestPartition:
             GEOMETRIC(r=0.8, start=11),
         ]
         qc, info = encode(PARTITION(components), N=256)
-        assert info.vector_type == "PARTITION"
+        assert info.kind == "PARTITION"
         assert info.success_probability == 1.0
         assert info.complexity.startswith("O(L")
         # No ancilla qubits: the register width is exactly m.
@@ -2313,8 +2313,8 @@ class TestPartition:
         with pytest.raises(ValueError, match="at least one"):
             PARTITION([])
 
-    def test_non_vectorobj_raises(self):
-        with pytest.raises(TypeError, match="VectorObj"):
+    def test_non_pattern_raises(self):
+        with pytest.raises(TypeError, match="pattern"):
             PARTITION([(1.0, STEP(k_s=4))])   # LCU-style tuple, not allowed
 
     # ------------------------------------------------------------------
@@ -2412,7 +2412,7 @@ class TestPartition:
 
 class TestConstructorRepr:
     """
-    Regression tests for the ``_VectorObj.__repr__`` contract:
+    Regression tests for the ``_Pattern.__repr__`` contract:
     ``eval(repr(obj))`` must reconstruct an equivalent object.
 
     Motivation: the internal params dict keys do not always match the
@@ -2492,7 +2492,7 @@ class TestLcuDeprecated:
       - ``LCU`` still imports from ``pyencode`` (back-compat)
       - calling ``LCU(...)`` issues a ``DeprecationWarning``
       - the returned object is a ``SUM`` and encodes identically
-      - ``VectorType.LCU`` is the same enum member as ``VectorType.SUM``
+      - ``PatternKind.LCU`` is the same enum member as ``PatternKind.SUM``
       - ``isinstance(LCU(...), SUM)`` holds
     """
 
@@ -2527,7 +2527,7 @@ class TestLcuDeprecated:
             via_sum = SUM(components)
         assert isinstance(via_lcu, SUM)
         assert via_lcu.params == via_sum.params
-        assert via_lcu.vector_type == via_sum.vector_type
+        assert via_lcu.kind == via_sum.kind
 
     def test_lcu_encodes_same_circuit_as_sum(self):
         """encode() via the deprecated LCU name produces the same circuit."""
@@ -2538,12 +2538,12 @@ class TestLcuDeprecated:
             warnings.simplefilter("ignore", DeprecationWarning)
             qc_lcu, info_lcu = encode(LCU(components), N=8)
         qc_sum, info_sum = encode(SUM(components), N=8)
-        assert info_lcu.vector_type == info_sum.vector_type == "SUM"
+        assert info_lcu.kind == info_sum.kind == "SUM"
         assert info_lcu.gate_count == info_sum.gate_count
         assert info_lcu.success_probability == info_sum.success_probability
 
-    def test_vector_type_lcu_is_sum(self):
-        """VectorType.LCU aliases VectorType.SUM (same enum member)."""
-        assert VectorType.LCU is VectorType.SUM
+    def test_kind_lcu_is_sum(self):
+        """PatternKind.LCU aliases PatternKind.SUM (same enum member)."""
+        assert PatternKind.LCU is PatternKind.SUM
         # And the name returned by .name is the primary one ("SUM").
-        assert VectorType.LCU.name == "SUM"
+        assert PatternKind.LCU.name == "SUM"

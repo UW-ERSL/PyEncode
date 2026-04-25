@@ -4,58 +4,58 @@ pyencode.extractor
 Numerical parameter extraction from a concrete load vector.
 
 Given a vector *f* (numpy array of length *N*) and optionally a
-declared :class:`VectorType`, extract the pattern parameters by
+declared :class:`PatternKind`, extract the pattern parameters by
 numerical analysis (projection, peak detection, etc.) and return
 them as a ``dict`` compatible with :class:`LoadPattern`.
 
 Two entry points:
 
-- ``extract(f, vector_type, atol)`` — extract parameters assuming a
+- ``extract(f, kind, atol)`` — extract parameters assuming a
   known load type.  Raises if the vector doesn't match.
 
 - ``auto_detect(f, atol)`` — try all load types and return the
-  best-fitting ``(VectorType, params)`` pair, preferring simpler
+  best-fitting ``(PatternKind, params)`` pair, preferring simpler
   patterns (lower gate complexity) when multiple match.
 """
 
 import math
 import numpy as np
 
-from .recognizer import VectorType
+from .recognizer import PatternKind
 
 
 # ── public entry point ────────────────────────────────────────────
 
-def extract(f: np.ndarray, vector_type: VectorType, tol: float = 1e-6) -> dict:
+def extract(f: np.ndarray, kind: PatternKind, tol: float = 1e-6) -> dict:
     """
-    Extract parameters from vector *f* for the given *vector_type*.
+    Extract parameters from vector *f* for the given *kind*.
 
     Parameters
     ----------
     f : np.ndarray
         The concrete load vector, shape ``(N,)``, where *N* is a
         power of 2.
-    vector_type : VectorType
-        The declared vector type.
+    kind : PatternKind
+        The declared pattern kind.
     tol : float
         Absolute tolerance for zero / equality checks.
 
     Returns
     -------
     dict
-        Parameters matching the schema for the given *vector_type*.
+        Parameters matching the schema for the given *kind*.
 
     Raises
     ------
     ValueError
-        If the vector does not match the declared vector type, with a
+        If the vector does not match the declared pattern kind, with a
         diagnostic message explaining *why*.
     """
-    fn = _EXTRACTORS.get(vector_type)
+    fn = _EXTRACTORS.get(kind)
     if fn is None:
         valid = [vt.name for vt in _EXTRACTORS]
         raise ValueError(
-            f"vector_type={vector_type.name} is not supported for "
+            f"kind={kind.name} is not supported for "
             f"extraction.  Supported types: {valid}"
         )
     return fn(f, tol)
@@ -409,15 +409,15 @@ def _extract_uniform_spike_load(f: np.ndarray, atol: float) -> dict:
 # ── dispatch table ────────────────────────────────────────────────
 
 _EXTRACTORS = {
-    VectorType.DISCRETE:         _extract_point_load,
-    VectorType.UNIFORM:       _extract_uniform_load,
-    VectorType.STEP:          _extract_step_load,
-    VectorType.SQUARE:        _extract_square_load,
-    VectorType.SINE:    _extract_sinusoidal_load,
-    VectorType.COSINE:        _extract_cosine_load,
-    VectorType.MULTI_DISCRETE:   _extract_multi_point_load,
-    VectorType.MULTI_SINE:     _extract_multi_sin_load,
-    VectorType.UNIFORM_SPIKE: _extract_uniform_spike_load,
+    PatternKind.DISCRETE:         _extract_point_load,
+    PatternKind.UNIFORM:       _extract_uniform_load,
+    PatternKind.STEP:          _extract_step_load,
+    PatternKind.SQUARE:        _extract_square_load,
+    PatternKind.SINE:    _extract_sinusoidal_load,
+    PatternKind.COSINE:        _extract_cosine_load,
+    PatternKind.MULTI_DISCRETE:   _extract_multi_point_load,
+    PatternKind.MULTI_SINE:     _extract_multi_sin_load,
+    PatternKind.UNIFORM_SPIKE: _extract_uniform_spike_load,
 }
 
 
@@ -427,60 +427,60 @@ _EXTRACTORS = {
 # When multiple types fit the vector perfectly, we pick the one
 # that comes first in this list.
 _DETECT_ORDER = [
-    VectorType.DISCRETE,         # O(m)
-    VectorType.UNIFORM,       # O(m)
-    VectorType.STEP,          # O(m)
-    VectorType.SQUARE,        # O(m)
-    VectorType.UNIFORM_SPIKE, # O(m^2) analytical
-    VectorType.SINE,    # O(m^2)
-    VectorType.COSINE,        # O(m^2)
-    VectorType.MULTI_DISCRETE,   # O(m*L)
-    VectorType.MULTI_SINE,     # O(m^2)
+    PatternKind.DISCRETE,         # O(m)
+    PatternKind.UNIFORM,       # O(m)
+    PatternKind.STEP,          # O(m)
+    PatternKind.SQUARE,        # O(m)
+    PatternKind.UNIFORM_SPIKE, # O(m^2) analytical
+    PatternKind.SINE,    # O(m^2)
+    PatternKind.COSINE,        # O(m^2)
+    PatternKind.MULTI_DISCRETE,   # O(m*L)
+    PatternKind.MULTI_SINE,     # O(m^2)
 ]
 
 
-def _reconstruct(vector_type: VectorType, N: int, params: dict) -> np.ndarray:
+def _reconstruct(kind: PatternKind, N: int, params: dict) -> np.ndarray:
     """Build the expected vector from extracted parameters."""
     k = np.arange(N)
     p = params
 
-    if vector_type == VectorType.DISCRETE:
+    if kind == PatternKind.DISCRETE:
         f = np.zeros(N); f[p["k"]] = p["P"]; return f
 
-    if vector_type == VectorType.UNIFORM:
+    if kind == PatternKind.UNIFORM:
         return np.full(N, p["c"])
 
-    if vector_type == VectorType.STEP:
+    if kind == PatternKind.STEP:
         f = np.zeros(N); f[:p["k_s"]] = p["c"]; return f
 
-    if vector_type == VectorType.SQUARE:
+    if kind == PatternKind.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p["c"]; return f
 
-    if vector_type == VectorType.SINE:
+    if kind == PatternKind.SINE:
         return p["A"] * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
-    if vector_type == VectorType.COSINE:
+    if kind == PatternKind.COSINE:
         return p["A"] * np.cos(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))
 
-    if vector_type == VectorType.MULTI_DISCRETE:
+    if kind == PatternKind.MULTI_DISCRETE:
         f = np.zeros(N)
         for ld in p["loads"]:
             f[ld["k"]] = ld["P"]
         return f
 
-    if vector_type == VectorType.MULTI_SINE:
+    if kind == PatternKind.MULTI_SINE:
         f = np.zeros(N)
         for mode in p["modes"]:
             f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N)
         return f
 
-    if vector_type == VectorType.UNIFORM_SPIKE:
+    if kind == PatternKind.UNIFORM_SPIKE:
         f = np.full(N, p["c"]); f[p["k"]] = p["delta"]; return f
 
     return np.zeros(N)
 
 
-def auto_detect(f: np.ndarray, tol: float = 1e-6) -> tuple[VectorType, dict]:
+def auto_detect(f: np.ndarray, tol: float = 1e-6) -> tuple[PatternKind, dict]:
     """
     Try all known load types and return the best match.
 
@@ -493,7 +493,7 @@ def auto_detect(f: np.ndarray, tol: float = 1e-6) -> tuple[VectorType, dict]:
 
     Returns
     -------
-    (VectorType, dict)
+    (PatternKind, dict)
         The detected load type and its extracted parameters.
 
     Raises
@@ -526,15 +526,15 @@ def auto_detect(f: np.ndarray, tol: float = 1e-6) -> tuple[VectorType, dict]:
             # cos(x) ≡ sin(x + π/2), so the sinusoidal fitter
             # always matches cosines.  When both fit, prefer
             # whichever form has |phi| closer to 0.
-            if lt == VectorType.SINE:
+            if lt == PatternKind.SINE:
                 try:
                     cos_p = _extract_cosine_load(f, tol)
-                    cos_r = _reconstruct(VectorType.COSINE, N, cos_p)
+                    cos_r = _reconstruct(PatternKind.COSINE, N, cos_p)
                     cn = np.linalg.norm(cos_r)
                     if cn > 1e-14:
                         cd = np.linalg.norm(f / f_norm - cos_r / cn)
                         if cd <= tol and abs(cos_p.get("phi", 0.0)) < abs(params.get("phi", 0.0)):
-                            return VectorType.COSINE, cos_p
+                            return PatternKind.COSINE, cos_p
                 except ValueError:
                     pass
 
@@ -542,5 +542,5 @@ def auto_detect(f: np.ndarray, tol: float = 1e-6) -> tuple[VectorType, dict]:
 
     raise ValueError(
         "No known load type matches the vector.  "
-        "Use encode_vector(f, vector_type=...) with an explicit type."
+        "Use encode_vector(f, kind=...) with an explicit type."
     )

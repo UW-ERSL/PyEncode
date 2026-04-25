@@ -87,7 +87,7 @@ def save_circuit(circuit, filename, scale=0.8, fold=-1):
 
 
 def print_info(label, info):
-    print(f"  {label}: type={info.vector_type}, gates={info.gate_count}, "
+    print(f"  {label}: type={info.kind}, gates={info.gate_count}, "
           f"complexity={info.complexity}")
 
 
@@ -108,7 +108,7 @@ def qiskit_gates(f_vec, N):
 
 
 # ===================================================================
-# Figures: vector types
+# Figures: pattern families
 # ===================================================================
 
 def fig_sparse_single():
@@ -742,8 +742,8 @@ def gate_count_table():
 
     print(f"{'Pattern':<32} {'PyEncode':>10} {'Qiskit':>8}  Complexity")
     print("-" * 65)
-    for name, vobj, f_vec in cases:
-        circuit, info = encode(vobj, N=N)
+    for name, pat, f_vec in cases:
+        circuit, info = encode(pat, N=N)
         qk = qiskit_gates(f_vec, N)
         print(f"{name:<32} {info.gate_count:>10} {qk:>8}  {info.complexity}")
 
@@ -756,7 +756,7 @@ if __name__ == "__main__":
     import os
     os.makedirs(FIGDIR, exist_ok=True)
 
-    # Vector type figures
+    # Pattern figures
     fig_sparse_single()
     fig_sparse_two()
     fig_step()

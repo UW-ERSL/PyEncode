@@ -3,7 +3,7 @@ pyencode.predictor
 ==================
 Fast gate-count prediction without circuit construction.
 
-The top-level function ``predict_gates(VectorObj, N)`` returns an
+The top-level function ``predict_gates(pattern, N)`` returns an
 estimate of the transpiled ({CX, U}) gate count and depth for any
 PyEncode pattern, using closed-form formulas derived from empirical
 calibration against the full synthesis + transpilation pipeline.
@@ -29,7 +29,7 @@ component predictions plus composition overhead.
 Returned dict
 -------------
     {
-      "vector_type":    str,
+      "kind":    str,
       "N":              int,
       "m":              int,
       "gate_count_1q":  int,    # predicted transpiled U count
@@ -47,10 +47,10 @@ import math
 from typing import Any
 
 from .types import (
-    _VectorObj, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
+    _Pattern, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
     HAMMING, STAIRCASE, POLYNOMIAL, TENSOR, SUM, PARTITION,
 )
-from .recognizer import VectorType
+from .recognizer import PatternKind
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ def _predict_tensor(vec_obj: TENSOR) -> dict:
         complexities.append(comp_pred["complexity"])
     N = 1 << total_m
     return dict(
-        vector_type="TENSOR",
+        kind="TENSOR",
         N=N,
         m=total_m,
         gate_count_1q=total_1q,
@@ -471,7 +471,7 @@ def _predict_sum(vec_obj: SUM, N: int) -> dict:
     total_depth += 2 * r
 
     return dict(
-        vector_type="SUM",
+        kind="SUM",
         N=N,
         m=m + ancilla_qubits,
         gate_count_1q=total_1q,
@@ -507,20 +507,20 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
     # synthesizer module for predict-only workflows).
     atoms = []
     for comp in comp_objs:
-        vt = comp.vector_type
+        vt = comp.kind
         p = comp.params
-        if vt == VectorType.SPARSE:
+        if vt == PatternKind.SPARSE:
             for load in p["loads"]:
                 atoms.append((int(load["k"]), 0))
-        elif vt == VectorType.STEP:
+        elif vt == PatternKind.STEP:
             k_s = int(p["k_s"])
             if k_s > 0:
                 atoms.extend(_partition_dyadic_blocks(0, k_s))
-        elif vt == VectorType.SQUARE:
+        elif vt == PatternKind.SQUARE:
             k1, k2 = int(p["k1"]), int(p["k2"])
             if k2 > k1:
                 atoms.extend(_partition_dyadic_blocks(k1, k2))
-        elif vt == VectorType.GEOMETRIC:
+        elif vt == PatternKind.GEOMETRIC:
             start = int(p.get("start", 0))
             if start < N:
                 atoms.extend(_partition_dyadic_blocks(start, N))
@@ -552,7 +552,7 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
         sparse_params = {"loads": [{"k": a_k, "P": 1.0} for (a_k, _) in atoms]}
         inner = _predict_sparse(m, sparse_params)
         return dict(
-            vector_type="PARTITION",
+            kind="PARTITION",
             N=N,
             m=m,
             gate_count_1q=inner["gate_count_1q"],
@@ -583,7 +583,7 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
     total_1q = anchor_1q + spread_1q
     total_2q = anchor_2q + spread_2q
     return dict(
-        vector_type="PARTITION",
+        kind="PARTITION",
         N=N,
         m=m,
         gate_count_1q=total_1q,
@@ -621,35 +621,35 @@ def _partition_dyadic_blocks(s: int, e: int) -> list:
 # ---------------------------------------------------------------------------
 
 _PREDICTORS = {
-    VectorType.SPARSE:     _predict_sparse,
-    VectorType.STEP:       _predict_step,
-    VectorType.SQUARE:     _predict_square,
-    VectorType.FOURIER:    _predict_fourier,
-    VectorType.WALSH:      _predict_walsh,
-    VectorType.GEOMETRIC:  _predict_geometric,
-    VectorType.HAMMING:   _predict_hamming,
-    VectorType.STAIRCASE:  _predict_staircase,
-    VectorType.DICKE:      _predict_dicke,
-    VectorType.POLYNOMIAL: _predict_polynomial,
+    PatternKind.SPARSE:     _predict_sparse,
+    PatternKind.STEP:       _predict_step,
+    PatternKind.SQUARE:     _predict_square,
+    PatternKind.FOURIER:    _predict_fourier,
+    PatternKind.WALSH:      _predict_walsh,
+    PatternKind.GEOMETRIC:  _predict_geometric,
+    PatternKind.HAMMING:   _predict_hamming,
+    PatternKind.STAIRCASE:  _predict_staircase,
+    PatternKind.DICKE:      _predict_dicke,
+    PatternKind.POLYNOMIAL: _predict_polynomial,
 }
 
 
-def predict_gates(VectorObj: Any, N: int) -> dict:
+def predict_gates(pattern: Any, N: int) -> dict:
     """
     Fast gate-count prediction without circuit construction or transpilation.
 
     Parameters
     ----------
-    VectorObj : _VectorObj, SUM, TENSOR, or list of _VectorObj
+    pattern : _Pattern, SUM, TENSOR, or list of _Pattern
         Any valid argument to encode().
     N : int
         Vector length (power of 2).  Must match the total vector length
-        implied by VectorObj.
+        implied by pattern.
 
     Returns
     -------
     dict with keys:
-        vector_type, N, m, gate_count_1q, gate_count_2q, gate_count,
+        kind, N, m, gate_count_1q, gate_count_2q, gate_count,
         circuit_depth, complexity, exact.
         'exact' is True when the prediction is guaranteed exact; False
         when it is an upper bound or empirical estimate.
@@ -658,31 +658,31 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
     --------
     >>> from pyencode import predict_gates, POLYNOMIAL, GEOMETRIC
     >>> predict_gates(POLYNOMIAL(coeffs=[0.0, 1.0]), N=4096)
-    {'vector_type': 'POLYNOMIAL', 'N': 4096, 'm': 12,
+    {'kind': 'POLYNOMIAL', 'N': 4096, 'm': 12,
      'gate_count_1q': 56, 'gate_count_2q': 22, 'gate_count': 78,
      'circuit_depth': 45, 'complexity': 'O(m)', 'exact': True}
 
     >>> predict_gates(GEOMETRIC(r=0.95), N=65536)
-    {'vector_type': 'GEOMETRIC', 'N': 65536, 'm': 16, ...}
+    {'kind': 'GEOMETRIC', 'N': 65536, 'm': 16, ...}
     """
     # Composite constructors
-    if isinstance(VectorObj, TENSOR):
-        return _predict_tensor(VectorObj)
-    if isinstance(VectorObj, SUM):
-        return _predict_sum(VectorObj, N)
-    if isinstance(VectorObj, PARTITION):
-        return _predict_partition(VectorObj, N)
-    if isinstance(VectorObj, list):
+    if isinstance(pattern, TENSOR):
+        return _predict_tensor(pattern)
+    if isinstance(pattern, SUM):
+        return _predict_sum(pattern, N)
+    if isinstance(pattern, PARTITION):
+        return _predict_partition(pattern, N)
+    if isinstance(pattern, list):
         # Legacy composite: list of SQUARE constructors
         total_1q = 0; total_2q = 0; total_depth = 0
         m = int(round(math.log2(N)))
-        for comp in VectorObj:
+        for comp in pattern:
             cp = predict_gates(comp, N)
             total_1q += cp["gate_count_1q"]
             total_2q += cp["gate_count_2q"]
             total_depth += cp["circuit_depth"]
         return dict(
-            vector_type="COMPOSITE",
+            kind="COMPOSITE",
             N=N, m=m,
             gate_count_1q=total_1q, gate_count_2q=total_2q,
             gate_count=total_1q + total_2q,
@@ -691,24 +691,24 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
             exact=False,
         )
 
-    if not isinstance(VectorObj, _VectorObj):
+    if not isinstance(pattern, _Pattern):
         raise TypeError(
-            f"VectorObj must be a typed constructor (SPARSE, STEP, SQUARE, "
+            f"pattern must be a typed constructor (SPARSE, STEP, SQUARE, "
             f"FOURIER, WALSH, GEOMETRIC, HAMMING, STAIRCASE, POLYNOMIAL, "
-            f"SUM, TENSOR, PARTITION), got {type(VectorObj).__name__}."
+            f"SUM, TENSOR, PARTITION), got {type(pattern).__name__}."
         )
 
     if N <= 0 or (N & (N - 1)) != 0:
         raise ValueError(f"N must be a positive power of 2, got {N}.")
     m = int(round(math.log2(N)))
 
-    vtype = VectorObj.vector_type
+    vtype = pattern.kind
     predictor = _PREDICTORS.get(vtype)
     if predictor is None:
         raise ValueError(f"No predictor available for {vtype.name}.")
 
-    out = predictor(m, VectorObj.params)
-    out["vector_type"] = vtype.name
+    out = predictor(m, pattern.params)
+    out["kind"] = vtype.name
     out["N"] = N
     out["m"] = m
     out["gate_count"] = out["gate_count_1q"] + out["gate_count_2q"]

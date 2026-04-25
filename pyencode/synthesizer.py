@@ -33,7 +33,7 @@ from typing import Optional
 
 from qiskit import QuantumCircuit, QuantumRegister
 
-from .recognizer import LoadPattern, VectorType
+from .recognizer import LoadPattern, PatternKind
 
 
 # ---------------------------------------------------------------------------
@@ -67,21 +67,21 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
     m = int(round(math.log2(N)))
 
     dispatch = {
-        VectorType.STEP:         _synth_step_load,
-        VectorType.SQUARE:       _synth_square_load,
-        VectorType.UNKNOWN:           _synth_qiskit_fallback,
+        PatternKind.STEP:         _synth_step_load,
+        PatternKind.SQUARE:       _synth_square_load,
+        PatternKind.UNKNOWN:           _synth_qiskit_fallback,
         # New unified types (paper API) — delegate to existing synthesizers
-        VectorType.WALSH:             _synth_walsh,
-        VectorType.SPARSE:            _synth_sparse,
-        VectorType.FOURIER:           _synth_fourier,
-        VectorType.GEOMETRIC:         _synth_geometric,
-        VectorType.HAMMING:          _synth_hamming,
-        VectorType.STAIRCASE:         _synth_staircase,
-        VectorType.DICKE:             _synth_dicke,
-        VectorType.POLYNOMIAL:        _synth_polynomial,
+        PatternKind.WALSH:             _synth_walsh,
+        PatternKind.SPARSE:            _synth_sparse,
+        PatternKind.FOURIER:           _synth_fourier,
+        PatternKind.GEOMETRIC:         _synth_geometric,
+        PatternKind.HAMMING:          _synth_hamming,
+        PatternKind.STAIRCASE:         _synth_staircase,
+        PatternKind.DICKE:             _synth_dicke,
+        PatternKind.POLYNOMIAL:        _synth_polynomial,
     }
 
-    fn = dispatch.get(pattern.load_type, _synth_qiskit_fallback)
+    fn = dispatch.get(pattern.kind, _synth_qiskit_fallback)
     return fn(m, pattern.params)
 
 

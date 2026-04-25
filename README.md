@@ -85,9 +85,9 @@ statevector-validated amplitude vector.
 | Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
 | Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
 | Fourier    | `FOURIER(modes=[...])`        | O(m²)              | Gonzalez-Conde / Moosa       |
-| Sum        | `SUM([(w, VectorObj), ...])`  | Σ component costs  | Childs & Wiebe (LCU, 2012)   |
-| Partition  | `PARTITION([VectorObj, ...])` | O(L·m), ancilla-free | Bentley & Saxe (1980) + Gleinig & Hoefler (2021) |
-| Tensor     | `TENSOR([(VectorObj, N_i), ...])` | Σ component costs, depth = max | Composition rule (this work) |
+| Sum        | `SUM([(w, pattern), ...])`  | Σ component costs  | Childs & Wiebe (LCU, 2012)   |
+| Partition  | `PARTITION([pattern, ...])` | O(L·m), ancilla-free | Bentley & Saxe (1980) + Gleinig & Hoefler (2021) |
+| Tensor     | `TENSOR([(pattern, N_i), ...])` | Σ component costs, depth = max | Composition rule (this work) |
 
 Here m = log₂(N) is the number of qubits and N is the vector length.
 
@@ -108,7 +108,7 @@ Requires O(2^m) memory; disabled by default.
 
 Each `encode()` call returns an `EncodingInfo` with:
 
-- `vector_type` — pattern name (e.g. `"SPARSE"`, `"GEOMETRIC"`)
+- `kind` — pattern name (e.g. `"SPARSE"`, `"GEOMETRIC"`)
 - `N`, `m` — vector length and number of qubits
 - `params` — supplied vector parameters (e.g. `{"ratio": 0.95, "c": 1.0}`)
 - `gate_count` — total gates (pre-transpilation)
@@ -133,7 +133,7 @@ print(info.circuit_code)
 
 ## Cost Prediction Without Synthesis
 
-For design-optimization workflows, `predict_gates(VectorObj, N)` returns
+For design-optimization workflows, `predict_gates(pattern, N)` returns
 transpiled gate counts analytically, without ever building a circuit.
 It's typically 500–8000× faster than `encode()`, which makes it practical
 to evaluate thousands of candidate encodings inside an outer optimization
@@ -143,7 +143,7 @@ loop before committing to synthesis.
 from pyencode import predict_gates, POLYNOMIAL
 
 p = predict_gates(POLYNOMIAL(coeffs=[0.0, 1.0]), N=4096)
-# {'vector_type': 'POLYNOMIAL', 'N': 4096, 'm': 12,
+# {'kind': 'POLYNOMIAL', 'N': 4096, 'm': 12,
 #  'gate_count_1q': 56, 'gate_count_2q': 22, 'gate_count': 78,
 #  'circuit_depth': 45, 'complexity': 'O(m)', 'exact': True}
 ```

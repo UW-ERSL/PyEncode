@@ -11,19 +11,19 @@ from typing import Optional, Union
 
 from qiskit import QuantumCircuit
 
-from .recognizer import VectorType, LoadPattern
+from .recognizer import PatternKind, LoadPattern
 from .synthesizer import synthesize
 from .emitter import emit_code
 from .config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 from .types import (
-    _VectorObj, SPARSE, FOURIER, STEP, SQUARE, GEOMETRIC,
+    _Pattern, SPARSE, FOURIER, STEP, SQUARE, GEOMETRIC,
     EncodingInfo,
     _COMPLEXITY, _PARAM_SCHEMAS,
 )
 
 
 # -------------------------------------------------------------------
-# Code execution (for encode_python with vector_type hint)
+# Code execution (for encode_python with kind hint)
 # -------------------------------------------------------------------
 
 def _execute_code(code: str) -> np.ndarray:
@@ -42,39 +42,39 @@ def _execute_code(code: str) -> np.ndarray:
 
 
 # -------------------------------------------------------------------
-# Vector type normalisation
+# Pattern kind normalization
 # -------------------------------------------------------------------
 
 
 
-def _normalize_vector_type(vector_type: Union[VectorType, str]) -> VectorType:
-    """Convert string to VectorType enum; reject UNKNOWN."""
-    if isinstance(vector_type, str):
-        upper = vector_type.upper()
+def _normalize_kind(kind: Union[PatternKind, str]) -> PatternKind:
+    """Convert string to PatternKind enum; reject UNKNOWN."""
+    if isinstance(kind, str):
+        upper = kind.upper()
         try:
-            vector_type = VectorType[upper]
+            kind = PatternKind[upper]
         except KeyError:
-            valid = [vt.name for vt in VectorType if vt != VectorType.UNKNOWN]
+            valid = [vt.name for vt in PatternKind if vt != PatternKind.UNKNOWN]
             raise ValueError(
-                f"Unknown vector_type '{vector_type}'.  "
+                f"Unknown kind '{kind}'.  "
                 f"Valid values: {valid}"
             )
 
-    if vector_type == VectorType.UNKNOWN:
-        raise ValueError("vector_type=UNKNOWN is not valid.")
-    return vector_type
+    if kind == PatternKind.UNKNOWN:
+        raise ValueError("kind=UNKNOWN is not valid.")
+    return kind
 
 
 # -------------------------------------------------------------------
 # Parameter validation (for encode_params)
 # -------------------------------------------------------------------
 
-def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
+def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
     """Validate user-supplied parameters against the schema."""
-    schema = _PARAM_SCHEMAS.get(vector_type)
+    schema = _PARAM_SCHEMAS.get(kind)
     if schema is None:
         raise TypeError(
-            f"vector_type={vector_type.name} is not supported."
+            f"kind={kind.name} is not supported."
         )
 
     required = schema["required"]
@@ -85,20 +85,20 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
     missing = required - set(params.keys())
     if missing:
         raise TypeError(
-            f"Missing required parameters for {vector_type.name}: "
+            f"Missing required parameters for {kind.name}: "
             f"{sorted(missing)}.  Expected: {description}"
         )
 
     unexpected = set(params.keys()) - allowed
     if unexpected:
         raise TypeError(
-            f"Unexpected parameters for {vector_type.name}: "
+            f"Unexpected parameters for {kind.name}: "
             f"{sorted(unexpected)}.  Expected: {description}"
         )
 
     result = dict(params)
 
-    if vector_type == VectorType.STEP:
+    if kind == PatternKind.STEP:
         result.setdefault("c", 1.0)
         k_s = int(result["k_s"])
         if k_s < 1 or k_s > N:
@@ -106,7 +106,7 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         result["k_s"] = k_s
         result["c"] = float(result["c"])
 
-    elif vector_type == VectorType.SQUARE:
+    elif kind == PatternKind.SQUARE:
         result.setdefault("c", 1.0)
         k1, k2 = int(result["k1"]), int(result["k2"])
         if k1 < 0 or k2 > N or k1 >= k2:
@@ -114,10 +114,10 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         result["k1"], result["k2"] = k1, k2
         result["c"] = float(result["c"])
 
-    elif vector_type == VectorType.SPARSE:
+    elif kind == PatternKind.SPARSE:
         result = _validate_sparse_params(result, N)
 
-    elif vector_type == VectorType.WALSH:
+    elif kind == PatternKind.WALSH:
         k = int(result["k"])
         m_bits = int(round(math.log2(N)))
         if k < 0 or k >= m_bits:
@@ -128,10 +128,10 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         result["c0"] = c0
         result["c1"] = float(result.get("c1", -c0))
 
-    elif vector_type == VectorType.FOURIER:
+    elif kind == PatternKind.FOURIER:
         result = _validate_fourier_params(result, N)
 
-    elif vector_type == VectorType.GEOMETRIC:
+    elif kind == PatternKind.GEOMETRIC:
         result.setdefault("c", 1.0)
         result.setdefault("start", 0)
         r = float(result["r"])
@@ -149,7 +149,7 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
         result["start"] = start
         result["c"] = float(result["c"])
 
-    elif vector_type == VectorType.DICKE:
+    elif kind == PatternKind.DICKE:
         result.setdefault("c", 1.0)
         k = int(result["k"])
         m_bits = int(round(math.log2(N)))
@@ -210,10 +210,10 @@ def _synthesize_and_build_info(
     except Exception:
         pass
 
-    complexity = _COMPLEXITY.get(pattern.load_type, "unknown")
+    complexity = _COMPLEXITY.get(pattern.kind, "unknown")
 
     # SQUARE: override complexity for special cases that avoid the Draper adder
-    if pattern.load_type == VectorType.SQUARE:
+    if pattern.kind == PatternKind.SQUARE:
         k1 = pattern.params.get("k1", 0)
         k2 = pattern.params.get("k2", 0)
         w  = k2 - k1
@@ -226,7 +226,7 @@ def _synthesize_and_build_info(
     #   (a) start == 0                                    : O(m)
     #   (b) [start, N) is a single aligned dyadic block   : O(m)
     #   (c) otherwise                                     : O(m^2)
-    if pattern.load_type == VectorType.GEOMETRIC:
+    if pattern.kind == PatternKind.GEOMETRIC:
         start = pattern.params.get("start", 0)
         if start > 0:
             N = 2 ** m
@@ -236,7 +236,7 @@ def _synthesize_and_build_info(
                 complexity = "O(m^2)"
 
     info = EncodingInfo(
-        vector_type=pattern.load_type.name,
+        kind=pattern.kind.name,
         N=N,
         m=m,
         gate_count=total_gates,
@@ -289,27 +289,27 @@ def _build_expected_vector(
 ):
     """Return the expected real amplitude vector for validation."""
     N  = pattern.N
-    lt = pattern.load_type
+    lt = pattern.kind
     p  = pattern.params
-    if lt == VectorType.STEP:
+    if lt == PatternKind.STEP:
         f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
 
-    if lt == VectorType.SQUARE:
+    if lt == PatternKind.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
 
-    if lt == VectorType.WALSH:
+    if lt == PatternKind.WALSH:
         k = p["k"]
         c0 = p.get("c0", 1.0)
         c1 = p.get("c1", -c0)
         f = np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=float)
         return f
 
-    if lt == VectorType.SPARSE:
+    if lt == PatternKind.SPARSE:
         f = np.zeros(N)
         for load in p["loads"]: f[load["k"]] = load["P"]
         return f
 
-    if lt == VectorType.FOURIER:
+    if lt == PatternKind.FOURIER:
         k = np.arange(N)
         f = np.zeros(N)
         for mode in p["modes"]:
@@ -317,7 +317,7 @@ def _build_expected_vector(
                 2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
 
-    if lt == VectorType.GEOMETRIC:
+    if lt == PatternKind.GEOMETRIC:
         r = p["r"]
         c = p.get("c", 1.0)
         start = p.get("start", 0)
@@ -327,14 +327,14 @@ def _build_expected_vector(
             f[start:] = c * (r ** (idx - start))
         return f
 
-    if lt == VectorType.HAMMING:
+    if lt == PatternKind.HAMMING:
         r = p["r"]
         c = p.get("c", 1.0)
         pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
         f = c * (r ** pops)
         return f
 
-    if lt == VectorType.STAIRCASE:
+    if lt == PatternKind.STAIRCASE:
         r = p["r"]
         c = p.get("c", 1.0)
         m_bits = int(round(math.log2(N)))
@@ -343,7 +343,7 @@ def _build_expected_vector(
             f[(1 << k) - 1] = c * (r ** k)
         return f
 
-    if lt == VectorType.DICKE:
+    if lt == PatternKind.DICKE:
         k = p["k"]
         c = p.get("c", 1.0)
         f = np.zeros(N)
@@ -352,7 +352,7 @@ def _build_expected_vector(
                 f[i] = c
         return f
 
-    if lt == VectorType.DICKE:
+    if lt == PatternKind.DICKE:
         k = p["k"]
         c = p.get("c", 1.0)
         f = np.zeros(N)
@@ -361,7 +361,7 @@ def _build_expected_vector(
                 f[i] = c
         return f
 
-    if lt == VectorType.POLYNOMIAL:
+    if lt == PatternKind.POLYNOMIAL:
         coeffs = p["coeffs"]
         normalize_domain = p.get("normalize_domain", True)
         if normalize_domain and N > 1:
@@ -374,28 +374,28 @@ def _build_expected_vector(
     return None
 
 
-def _build_component_vector(comp: _VectorObj, N: int):
+def _build_component_vector(comp: _Pattern, N: int):
     """Materialise a single component vector from its constructor."""
     p = comp.params
-    if comp.vector_type == VectorType.STEP:
+    if comp.kind == PatternKind.STEP:
         f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
-    if comp.vector_type == VectorType.SQUARE:
+    if comp.kind == PatternKind.SQUARE:
         f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
-    if comp.vector_type == VectorType.WALSH:
+    if comp.kind == PatternKind.WALSH:
         k = p["k"]
         c0 = p.get("c0", 1.0)
         c1 = p.get("c1", -c0)
         return np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=float)
-    if comp.vector_type == VectorType.SPARSE:
+    if comp.kind == PatternKind.SPARSE:
         f = np.zeros(N)
         for load in p["loads"]: f[load["k"]] = load["P"]
         return f
-    if comp.vector_type == VectorType.FOURIER:
+    if comp.kind == PatternKind.FOURIER:
         k = np.arange(N); f = np.zeros(N)
         for mode in p["modes"]:
             f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
-    if comp.vector_type == VectorType.GEOMETRIC:
+    if comp.kind == PatternKind.GEOMETRIC:
         r = p["r"]
         c = p.get("c", 1.0)
         start = p.get("start", 0)
@@ -404,12 +404,12 @@ def _build_component_vector(comp: _VectorObj, N: int):
             idx = np.arange(start, N)
             f[start:] = c * (r ** (idx - start))
         return f
-    if comp.vector_type == VectorType.HAMMING:
+    if comp.kind == PatternKind.HAMMING:
         r = p["r"]
         c = p.get("c", 1.0)
         pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
         return c * (r ** pops)
-    if comp.vector_type == VectorType.STAIRCASE:
+    if comp.kind == PatternKind.STAIRCASE:
         r = p["r"]
         c = p.get("c", 1.0)
         m_bits = int(round(math.log2(N)))
@@ -417,7 +417,7 @@ def _build_component_vector(comp: _VectorObj, N: int):
         for k in range(m_bits + 1):
             f[(1 << k) - 1] = c * (r ** k)
         return f
-    if comp.vector_type == VectorType.DICKE:
+    if comp.kind == PatternKind.DICKE:
         k = p["k"]
         c = p.get("c", 1.0)
         f = np.zeros(N)
@@ -425,7 +425,7 @@ def _build_component_vector(comp: _VectorObj, N: int):
             if bin(i).count("1") == k:
                 f[i] = c
         return f
-    if comp.vector_type == VectorType.DICKE:
+    if comp.kind == PatternKind.DICKE:
         k = p["k"]
         c = p.get("c", 1.0)
         f = np.zeros(N)
@@ -433,7 +433,7 @@ def _build_component_vector(comp: _VectorObj, N: int):
             if bin(i).count("1") == k:
                 f[i] = c
         return f
-    if comp.vector_type == VectorType.POLYNOMIAL:
+    if comp.kind == PatternKind.POLYNOMIAL:
         coeffs = p["coeffs"]
         normalize_domain = p.get("normalize_domain", True)
         if normalize_domain and N > 1:
@@ -441,7 +441,7 @@ def _build_component_vector(comp: _VectorObj, N: int):
         else:
             x = np.arange(N, dtype=float)
         return np.polyval(list(reversed(coeffs)), x)
-    raise TypeError(f"Cannot materialise component of type {comp.vector_type.name}.")
+    raise TypeError(f"Cannot materialise component of type {comp.kind.name}.")
 
 
 # -------------------------------------------------------------------
@@ -473,11 +473,11 @@ def _encode_composite(
     if not components:
         raise ValueError("Empty component list.")
 
-    # Validate all are VectorObj instances
+    # Validate all are pattern instances
     for i, comp in enumerate(components):
-        if not isinstance(comp, _VectorObj):
+        if not isinstance(comp, _Pattern):
             raise TypeError(
-                f"Component {i} is not a VectorObj, got {type(comp).__name__}."
+                f"Component {i} is not a pattern, got {type(comp).__name__}."
             )
 
     # General composite: synthesize each component independently,
@@ -493,8 +493,8 @@ def _encode_composite(
     for comp in components:
         f_comp = _build_component_vector(comp, N)
         component_vectors.append(f_comp)
-        validated = _validate_params(comp.vector_type, N, comp.params)
-        component_patterns.append(LoadPattern(comp.vector_type, N=N, params=validated))
+        validated = _validate_params(comp.kind, N, comp.params)
+        component_patterns.append(LoadPattern(comp.kind, N=N, params=validated))
 
     weights = np.array([np.linalg.norm(v) for v in component_vectors])
     total_norm = np.linalg.norm(weights)
@@ -553,13 +553,13 @@ def _encode_composite(
     complexity = f"O({K} * component)"
 
     info = EncodingInfo(
-        vector_type="COMPOSITE",
+        kind="COMPOSITE",
         N=N,
         m=m,
         gate_count=total_gates,
         complexity=complexity,
         validated=False,
-        params={"components": [c.vector_type.name for c in components]},
+        params={"components": [c.kind.name for c in components]},
         circuit_code="",
     )
 
@@ -641,7 +641,7 @@ def _apply_anc_ry(qc, node_norm, node, depth, n_anc, anc_qubits, ctrl_path):
 # These are kept so that any external code importing the private helpers
 # directly does not break immediately.  They will be removed in v0.5.
 # ---------------------------------------------------------------------------
-_normalise_vector_type = _normalize_vector_type          # noqa: E305
+_normalize_kind = _normalize_kind          # noqa: E305
 _synthesise_and_build_info = _synthesize_and_build_info  # noqa: E305
 
 
@@ -689,13 +689,13 @@ def _validate_fourier_params(params: dict, N: int) -> dict:
 
 def _support_interval(comp):
     """Return (k1, k2) interval of support, or None if full/unknown support."""
-    vt = comp.vector_type
+    vt = comp.kind
     p  = comp.params
-    if vt == VectorType.STEP:
+    if vt == PatternKind.STEP:
         return (0, p["k_s"])
-    if vt == VectorType.SQUARE:
+    if vt == PatternKind.SQUARE:
         return (p["k1"], p["k2"])
-    if vt == VectorType.SPARSE:
+    if vt == PatternKind.SPARSE:
         indices = [ld["k"] for ld in p["loads"]]
         return (min(indices), max(indices) + 1)
     # WALSH, FOURIER have full support
@@ -782,17 +782,17 @@ def _encode_sum(sum_obj, N, validate, tol):
     # Single component — just encode directly
     if K == 1:
         validated_params = _validate_params(
-            comp_objs[0].vector_type, N, comp_objs[0].params)
-        pattern = LoadPattern(comp_objs[0].vector_type, N=N, params=validated_params)
+            comp_objs[0].kind, N, comp_objs[0].params)
+        pattern = LoadPattern(comp_objs[0].kind, N=N, params=validated_params)
         return _synthesize_and_build_info(pattern, validate, tol)
 
     # Validate and materialise each component
     component_vectors  = []
     component_patterns = []
     for comp in comp_objs:
-        validated = _validate_params(comp.vector_type, N, comp.params)
+        validated = _validate_params(comp.kind, N, comp.params)
         component_patterns.append(
-            LoadPattern(comp.vector_type, N=N, params=validated))
+            LoadPattern(comp.kind, N=N, params=validated))
         component_vectors.append(_build_component_vector(comp, N))
 
     # Disjoint support check
@@ -859,14 +859,14 @@ def _encode_sum(sum_obj, N, validate, tol):
     circuit_code = _emit_sum_circuit_code(qc, m, n_anc, comp_objs, weights)
 
     info = EncodingInfo(
-        vector_type="SUM",
+        kind="SUM",
         N=N,
         m=m,
         gate_count=total_gates,
         complexity=complexity,
         validated=False,
         params={
-            "components": [c.vector_type.name for c in comp_objs],
+            "components": [c.kind.name for c in comp_objs],
             "weights":    weights,
             "disjoint":   disjoint,
         },
@@ -892,7 +892,7 @@ def _emit_sum_circuit_code(qc, m, n_anc, comp_objs, weights):
     lines = [
         f"# PyEncode — emitted circuit: SUM (LCU Protocol 1) — extracted from synthesized circuit",
         f"# m = {m} data qubits + {n_anc} ancilla = {total_qubits} total",
-        f"# Components: {[c.vector_type.name for c in comp_objs]}",
+        f"# Components: {[c.kind.name for c in comp_objs]}",
         f"# Weights: {list(weights)}",
         f"# Edit freely; run as standalone Qiskit code.",
         f"",
@@ -1010,8 +1010,8 @@ def _encode_tensor(tensor_obj, N, validate, tol):
     component_patterns = []
     component_circuits = []
     for obj, n_i in zip(comp_objs, sizes):
-        validated = _validate_params(obj.vector_type, n_i, obj.params)
-        pat = LoadPattern(obj.vector_type, N=n_i, params=validated)
+        validated = _validate_params(obj.kind, n_i, obj.params)
+        pat = LoadPattern(obj.kind, N=n_i, params=validated)
         component_patterns.append(pat)
         component_circuits.append(_synthesize(pat))
 
@@ -1070,7 +1070,7 @@ def _encode_tensor(tensor_obj, N, validate, tol):
     complexity = "O(sum of components)"
 
     info = EncodingInfo(
-        vector_type="TENSOR",
+        kind="TENSOR",
         N=N,
         m=m,
         gate_count=total_gates,
@@ -1079,7 +1079,7 @@ def _encode_tensor(tensor_obj, N, validate, tol):
         params={
             "K": K,
             "sizes": sizes,
-            "components": [obj.vector_type.name for obj in comp_objs],
+            "components": [obj.kind.name for obj in comp_objs],
         },
         circuit_code=_emit_tensor_code(comp_objs, sizes),
         vector=f_vec,
@@ -1093,7 +1093,7 @@ def _encode_tensor(tensor_obj, N, validate, tol):
 
 def _emit_tensor_code(comp_objs, sizes):
     """Emit standalone reconstruction code for a TENSOR composition."""
-    type_names = sorted({obj.vector_type.name for obj in comp_objs})
+    type_names = sorted({obj.kind.name for obj in comp_objs})
     lines = [
         "# PyEncode — emitted circuit: TENSOR composition",
         "# Each component is synthesised on its own subregister;",
@@ -1138,11 +1138,11 @@ def _partition_atoms(comp, N):
     from .synthesizer import _dyadic_decomposition
     p = comp.params
     atoms = []
-    if comp.vector_type == VectorType.SPARSE:
+    if comp.kind == PatternKind.SPARSE:
         for load in p["loads"]:
             atoms.append((int(load["k"]), 0, float(load["P"]), 1.0))
         return atoms
-    if comp.vector_type == VectorType.STEP:
+    if comp.kind == PatternKind.STEP:
         c = float(p.get("c", 1.0))
         k_s = int(p["k_s"])
         if k_s <= 0:
@@ -1150,7 +1150,7 @@ def _partition_atoms(comp, N):
         for (a_k, j_k) in _dyadic_decomposition(0, k_s):
             atoms.append((a_k, j_k, c, 1.0))
         return atoms
-    if comp.vector_type == VectorType.SQUARE:
+    if comp.kind == PatternKind.SQUARE:
         c = float(p.get("c", 1.0))
         k1 = int(p["k1"])
         k2 = int(p["k2"])
@@ -1159,7 +1159,7 @@ def _partition_atoms(comp, N):
         for (a_k, j_k) in _dyadic_decomposition(k1, k2):
             atoms.append((a_k, j_k, c, 1.0))
         return atoms
-    if comp.vector_type == VectorType.GEOMETRIC:
+    if comp.kind == PatternKind.GEOMETRIC:
         r = float(p["r"])
         c_seg = float(p.get("c", 1.0))
         start = int(p.get("start", 0))
@@ -1170,7 +1170,7 @@ def _partition_atoms(comp, N):
             atoms.append((a_k, j_k, c_at_a, r))
         return atoms
     raise TypeError(
-        f"PARTITION: component type {comp.vector_type.name} is not "
+        f"PARTITION: component type {comp.kind.name} is not "
         f"decomposable into anchored blocks."
     )
 
@@ -1229,7 +1229,7 @@ def _encode_partition(part_obj, N, validate, tol):
     all_atoms = []
     per_comp_atoms = []
     for comp in comp_objs:
-        _validate_params(comp.vector_type, N, comp.params)
+        _validate_params(comp.kind, N, comp.params)
         atoms = _partition_atoms(comp, N)
         per_comp_atoms.append(atoms)
         all_atoms.extend(atoms)
@@ -1319,7 +1319,7 @@ def _encode_partition(part_obj, N, validate, tol):
 
     L = len(all_atoms)
     info = EncodingInfo(
-        vector_type="PARTITION",
+        kind="PARTITION",
         N=N,
         m=m,
         gate_count=sum(qc.count_ops().values()),
@@ -1328,7 +1328,7 @@ def _encode_partition(part_obj, N, validate, tol):
         params={
             "K": len(comp_objs),
             "L": L,
-            "components": [obj.vector_type.name for obj in comp_objs],
+            "components": [obj.kind.name for obj in comp_objs],
         },
         circuit_code=_emit_partition_code(comp_objs, N),
         vector=f_vec,
@@ -1342,7 +1342,7 @@ def _encode_partition(part_obj, N, validate, tol):
 
 def _emit_partition_code(comp_objs, N):
     """Emit standalone reconstruction code for a PARTITION composition."""
-    type_names = sorted({obj.vector_type.name for obj in comp_objs})
+    type_names = sorted({obj.kind.name for obj in comp_objs})
     lines = [
         "# PyEncode -- emitted circuit: PARTITION composition",
         "# Components have pairwise-disjoint support; the framework",
