@@ -662,7 +662,7 @@ def predict_gates(VectorObj: Any, N: int) -> dict:
      'gate_count_1q': 56, 'gate_count_2q': 22, 'gate_count': 78,
      'circuit_depth': 45, 'complexity': 'O(m)', 'exact': True}
 
-    >>> predict_gates(GEOMETRIC(ratio=0.95), N=65536)
+    >>> predict_gates(GEOMETRIC(r=0.95), N=65536)
     {'vector_type': 'GEOMETRIC', 'N': 65536, 'm': 16, ...}
     """
     # Composite constructors

@@ -1069,18 +1069,18 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
 
 
 # ---------------------------------------------------------------------------
-# GEOMETRIC  f_i = c * ratio^i  (product state, m independent Ry)
+# GEOMETRIC  f_i = c * r^i  (product state, m independent Ry)
 # ---------------------------------------------------------------------------
 
 def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     """
     GEOMETRIC: prepare |psi> proportional to
-        sum_{i=start}^{N-1}  ratio^(i - start) |i>            on m qubits,
+        sum_{i=start}^{N-1}  r^(i - start) |i>            on m qubits,
     zero elsewhere.  Three internal regimes are selected automatically:
 
       (a) start == 0
           Plain product state.  m R_y gates, 0 CX, depth 1.
-          Theta_j = 2*arctan(ratio^(2^j)) on qubit j.
+          Theta_j = 2*arctan(r^(2^j)) on qubit j.
 
       (b) [start, N) is a single dyadic block
           i.e. w = N-start is a power of two AND start % w == 0.
@@ -1095,8 +1095,8 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
 
               |psi> = sum_k (w_k / Z) |block_k>,
 
-              w_k = ratio^(a_k - start) * sqrt( (ratio^(2*2^j_k) - 1)
-                                                 / (ratio^2 - 1) ),
+              w_k = r^(a_k - start) * sqrt( (r^(2*2^j_k) - 1)
+                                                 / (r^2 - 1) ),
 
           Assembly: Gleinig-Hoefler on the L anchor points {|a_k>} to
           load the weights  (O(L*m) = O(m^2)), followed by a
@@ -1110,7 +1110,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     m : int
         Number of qubits (N = 2^m).
     params : dict
-        Required:  'ratio' (float, > 0, != 1).
+        Required:  'r' (float, > 0, != 1).
         Optional:  'start' (int, default 0, 0 <= start < N).
                    'c'     (float, default 1.0) — affects only normalisation.
 
@@ -1120,7 +1120,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     Gleinig & Hoefler, DAC 2021 (sparse anchor-loading step).
     Bentley & Saxe, J. Algorithms 1(4), 1980 (dyadic interval decomposition).
     """
-    ratio = params["ratio"]
+    r = params["r"]
     start = params.get("start", 0)
     N = 1 << m
 
@@ -1129,7 +1129,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     # --- Regime (a): plain full-register product state -------------------
     if start == 0:
         for j in range(m):
-            qc.ry(2.0 * math.atan(ratio ** (1 << j)), j)
+            qc.ry(2.0 * math.atan(r ** (1 << j)), j)
         return qc
 
     # --- Regime (b): single dyadic block covering [start, N) -------------
@@ -1137,7 +1137,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     if (w & (w - 1)) == 0 and start % w == 0:
         m_low = w.bit_length() - 1
         for j in range(m_low):
-            qc.ry(2.0 * math.atan(ratio ** (1 << j)), j)
+            qc.ry(2.0 * math.atan(r ** (1 << j)), j)
         upper_val = start // w
         for j in range(m - m_low):
             if (upper_val >> j) & 1:
@@ -1146,7 +1146,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
 
     # --- Regime (c): dyadic decomposition of [start, N) ------------------
     blocks = _dyadic_decomposition(start, N)
-    _dyadic_geometric_assemble(qc, m, ratio, start, blocks)
+    _dyadic_geometric_assemble(qc, m, r, start, blocks)
     return qc
 
 
@@ -1204,7 +1204,7 @@ def _dyadic_decomposition(s: int, N: int) -> list:
 
 def _dyadic_geometric_assemble(qc: QuantumCircuit,
                                m: int,
-                               ratio: float,
+                               r: float,
                                start: int,
                                blocks: list) -> None:
     """
@@ -1219,7 +1219,7 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
                    |psi_anchor> = sum_k (w_k/Z) |a_k>.
 
       Step 2.  For each block with j_k >= 1 and each free bit j in
-               {0, 1, ..., j_k - 1}, apply R_y(2*arctan(ratio^(2^j))) on
+               {0, 1, ..., j_k - 1}, apply R_y(2*arctan(r^(2^j))) on
                qubit j controlled on the upper (m - j_k) qubits matching
                the bit pattern  a_k >> j_k.  Because the lower j_k bits
                of a_k are zero (alignment), every qubit being rotated
@@ -1227,15 +1227,14 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
                standard product-state formula applies.
 
     The weights are
-        w_k^2 = ratio^(2*(a_k - start)) * (ratio^(2*2^j_k) - 1) / (ratio^2 - 1)
-              = sum_{i in block_k} ratio^(2*(i - start))
-    so that sum_k w_k^2 = Z^2 = sum_{i=start}^{N-1} ratio^(2*(i - start)).
+        w_k^2 = r^(2*(a_k - start)) * (r^(2*2^j_k) - 1) / (r^2 - 1)
+              = sum_{i in block_k} r^(2*(i - start))
+    so that sum_k w_k^2 = Z^2 = sum_{i=start}^{N-1} r^(2*(i - start)).
 
     Correctness sketch: after step 2, the amplitude on |a_k + i> for
-    i in [0, 2^j_k) is  (w_k/Z) * ratio^i / sqrt(w_k^2 / ratio^(2*(a_k-start)))
-    = ratio^(a_k + i - start) / Z,  which matches the target state.
+    i in [0, 2^j_k) is  (w_k/Z) * r^i / sqrt(w_k^2 / r^(2*(a_k-start)))
+    = r^(a_k + i - start) / Z,  which matches the target state.
     """
-    r = ratio
     r2 = r * r
 
     # Block weights (unnormalised anchor amplitudes, all non-negative).

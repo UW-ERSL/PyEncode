@@ -134,18 +134,18 @@ def _validate_params(vector_type: VectorType, N: int, params: dict) -> dict:
     elif vector_type == VectorType.GEOMETRIC:
         result.setdefault("c", 1.0)
         result.setdefault("start", 0)
-        ratio = float(result["ratio"])
-        if ratio <= 0:
-            raise ValueError(f"GEOMETRIC ratio must be positive, got {ratio}.")
-        if abs(ratio - 1.0) < 1e-14:
-            raise ValueError("GEOMETRIC ratio=1.0 is a uniform vector; use STEP(k_s=N).")
+        r = float(result["r"])
+        if r <= 0:
+            raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
+        if abs(r - 1.0) < 1e-14:
+            raise ValueError("GEOMETRIC r=1.0 is a uniform vector; use STEP(k_s=N).")
         start = int(result["start"])
         if start < 0 or start >= N:
             raise ValueError(
                 f"GEOMETRIC start must satisfy 0 <= start < N; got start={start}, N={N}."
             )
         # Tier-2: No alignment constraint - any start value 0 <= start < N is supported
-        result["ratio"] = ratio
+        result["r"] = r
         result["start"] = start
         result["c"] = float(result["c"])
 
@@ -318,13 +318,13 @@ def _build_expected_vector(
         return f
 
     if lt == VectorType.GEOMETRIC:
-        ratio = p["ratio"]
+        r = p["r"]
         c = p.get("c", 1.0)
         start = p.get("start", 0)
         f = np.zeros(N, dtype=float)
         if start < N:
             idx = np.arange(start, N)
-            f[start:] = c * (ratio ** (idx - start))
+            f[start:] = c * (r ** (idx - start))
         return f
 
     if lt == VectorType.HAMMING:
@@ -396,13 +396,13 @@ def _build_component_vector(comp: _VectorObj, N: int):
             f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
         return f
     if comp.vector_type == VectorType.GEOMETRIC:
-        ratio = p["ratio"]
+        r = p["r"]
         c = p.get("c", 1.0)
         start = p.get("start", 0)
         f = np.zeros(N, dtype=float)
         if start < N:
             idx = np.arange(start, N)
-            f[start:] = c * (ratio ** (idx - start))
+            f[start:] = c * (r ** (idx - start))
         return f
     if comp.vector_type == VectorType.HAMMING:
         r = p["r"]
@@ -1160,7 +1160,7 @@ def _partition_atoms(comp, N):
             atoms.append((a_k, j_k, c, 1.0))
         return atoms
     if comp.vector_type == VectorType.GEOMETRIC:
-        r = float(p["ratio"])
+        r = float(p["r"])
         c_seg = float(p.get("c", 1.0))
         start = int(p.get("start", 0))
         if start >= N:

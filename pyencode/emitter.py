@@ -803,7 +803,7 @@ def _emit_walsh(m: int, params: dict) -> str:
     return "\n".join(lines)
 
 # ---------------------------------------------------------------------------
-# Geometric  f_i = c * ratio^i  (product state, m independent Ry)
+# Geometric  f_i = c * r^i  (product state, m independent Ry)
 # ---------------------------------------------------------------------------
 
 def _emit_geometric(m: int, params: dict) -> str:
@@ -815,7 +815,7 @@ def _emit_geometric(m: int, params: dict) -> str:
                                           load + multi-controlled R_y spreads
     """
     import math as _math
-    ratio = params["ratio"]
+    r = params["r"]
     c = params.get("c", 1.0)
     start = params.get("start", 0)
     N = 2 ** m
@@ -823,16 +823,16 @@ def _emit_geometric(m: int, params: dict) -> str:
     # Regime (a)
     if start == 0:
         lines = [
-            _header(m, f"GEOMETRIC  ratio={ratio}, c={c}"),
+            _header(m, f"GEOMETRIC  r={r}, c={c}"),
             f"import math",
             f"",
             f"m = {m}",
-            f"ratio = {ratio!r}",
+            f"r = {r!r}",
             f"qc = QuantumCircuit(m, name='geometric')",
             f"",
-            f"# Product state: each qubit j gets R_y(2*arctan(ratio^(2^j)))",
+            f"# Product state: each qubit j gets R_y(2*arctan(r^(2^j)))",
             f"for j in range(m):",
-            f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
+            f"    theta_j = 2.0 * math.atan(r ** (2 ** j))",
             f"    qc.ry(theta_j, j)",
         ]
         return "\n".join(lines)
@@ -846,18 +846,18 @@ def _emit_geometric(m: int, params: dict) -> str:
         upper_x_qubits = [m_low + j for j in range(m - m_low)
                           if (upper_val >> j) & 1]
         lines = [
-            _header(m, f"GEOMETRIC  ratio={ratio}, start={start}, c={c}"),
+            _header(m, f"GEOMETRIC  r={r}, start={start}, c={c}"),
             f"import math",
             f"",
             f"m = {m}",
-            f"ratio = {ratio!r}",
+            f"r = {r!r}",
             f"start = {start}",
             f"m_low = {m_low}     # log2(N - start)",
             f"qc = QuantumCircuit(m, name='geometric')",
             f"",
             f"# Build geometric product state on lower m_low qubits",
             f"for j in range(m_low):",
-            f"    theta_j = 2.0 * math.atan(ratio ** (2 ** j))",
+            f"    theta_j = 2.0 * math.atan(r ** (2 ** j))",
             f"    qc.ry(theta_j, j)",
             f"",
             f"# Shift window to [start, N) via X gates on selected upper qubits",
@@ -878,7 +878,7 @@ def _emit_geometric(m: int, params: dict) -> str:
     from .synthesizer import _dyadic_decomposition
     blocks = _dyadic_decomposition(start, N)
     lines = [
-        _header(m, f"GEOMETRIC  ratio={ratio}, start={start}, c={c} "
+        _header(m, f"GEOMETRIC  r={r}, start={start}, c={c} "
                    f"(dyadic regime, [start,N) not power-of-2-aligned)"),
         f"",
         f"m = {m}",

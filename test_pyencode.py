@@ -628,60 +628,60 @@ def _assert_poly_scaling(m_vals, gate_vals, label):
 class TestGeometric:
 
     def test_decay_basic(self):
-        circuit, info = encode(GEOMETRIC(ratio=0.5), N=8)
+        circuit, info = encode(GEOMETRIC(r=0.5), N=8)
         assert info.vector_type == "GEOMETRIC"
         assert info.complexity == "O(m)"
         f = 0.5 ** np.arange(8)
         assert_encodes(circuit, f)
 
     def test_growth(self):
-        circuit, info = encode(GEOMETRIC(ratio=2.0), N=16)
+        circuit, info = encode(GEOMETRIC(r=2.0), N=16)
         f = 2.0 ** np.arange(16)
         assert_encodes(circuit, f)
 
     def test_near_one(self):
-        circuit, info = encode(GEOMETRIC(ratio=0.99), N=16)
+        circuit, info = encode(GEOMETRIC(r=0.99), N=16)
         f = 0.99 ** np.arange(16)
         assert_encodes(circuit, f)
 
     def test_gate_count_equals_m(self):
         for m in [3, 4, 6, 8]:
             N = 2 ** m
-            _, info = encode(GEOMETRIC(ratio=0.9), N=N)
+            _, info = encode(GEOMETRIC(r=0.9), N=N)
             assert info.gate_count == m
 
     def test_zero_two_qubit_gates(self):
-        _, info = encode(GEOMETRIC(ratio=0.9), N=64)
+        _, info = encode(GEOMETRIC(r=0.9), N=64)
         assert info.gate_count_2q == 0
         assert info.gate_count_1q == 6
 
     def test_validate(self):
-        circuit, info = encode(GEOMETRIC(ratio=0.8), N=16, validate=True)
+        circuit, info = encode(GEOMETRIC(r=0.8), N=16, validate=True)
         assert info.validated is True
         assert info.vector is not None
 
     def test_custom_c_normalization(self):
         """c only affects normalization, not relative amplitudes."""
-        c1, _ = encode(GEOMETRIC(ratio=0.7, c=1.0), N=8)
-        c2, _ = encode(GEOMETRIC(ratio=0.7, c=5.0), N=8)
+        c1, _ = encode(GEOMETRIC(r=0.7, c=1.0), N=8)
+        c2, _ = encode(GEOMETRIC(r=0.7, c=5.0), N=8)
         sv1 = np.abs(np.array(statevector(c1)))
         sv2 = np.abs(np.array(statevector(c2)))
         np.testing.assert_allclose(sv1, sv2, atol=1e-10)
 
-    def test_ratio_zero_raises(self):
+    def test_r_zero_raises(self):
         with pytest.raises(ValueError, match="positive"):
-            GEOMETRIC(ratio=0.0)
+            GEOMETRIC(r=0.0)
 
-    def test_ratio_negative_raises(self):
+    def test_r_negative_raises(self):
         with pytest.raises(ValueError, match="positive"):
-            GEOMETRIC(ratio=-0.5)
+            GEOMETRIC(r=-0.5)
 
-    def test_ratio_one_raises(self):
+    def test_r_one_raises(self):
         with pytest.raises(ValueError, match="uniform"):
-            GEOMETRIC(ratio=1.0)
+            GEOMETRIC(r=1.0)
 
     def test_emitted_code_runs(self):
-        circuit, info = encode(GEOMETRIC(ratio=0.8), N=16)
+        circuit, info = encode(GEOMETRIC(r=0.8), N=16)
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
@@ -693,7 +693,7 @@ class TestGeometric:
         """GEOMETRIC can be used as a SUM component."""
         circuit, info = encode(
             SUM([(1.0, STEP(k_s=8, c=1.0)),
-                 (2.0, GEOMETRIC(ratio=0.5))]),
+                 (2.0, GEOMETRIC(r=0.5))]),
             N=16)
         assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
@@ -702,8 +702,8 @@ class TestGeometric:
 
     def test_start_zero_backward_compatibility(self):
         """start=0 should be identical to the original GEOMETRIC."""
-        c1, i1 = encode(GEOMETRIC(ratio=0.7), N=16)
-        c2, i2 = encode(GEOMETRIC(ratio=0.7, start=0), N=16)
+        c1, i1 = encode(GEOMETRIC(r=0.7), N=16)
+        c2, i2 = encode(GEOMETRIC(r=0.7, start=0), N=16)
         sv1 = np.array(statevector(c1))
         sv2 = np.array(statevector(c2))
         np.testing.assert_allclose(sv1, sv2, atol=1e-15)
@@ -711,7 +711,7 @@ class TestGeometric:
 
     def test_start_aligned_half(self):
         """start=N/2: geometric decay starting at midpoint."""
-        circuit, info = encode(GEOMETRIC(ratio=0.5, start=32), N=64)
+        circuit, info = encode(GEOMETRIC(r=0.5, start=32), N=64)
         expected = np.zeros(64)
         expected[32:] = 0.5 ** np.arange(32)  # 0.5^0, 0.5^1, ..., 0.5^31
         assert_encodes(circuit, expected)
@@ -722,7 +722,7 @@ class TestGeometric:
 
     def test_start_aligned_three_quarters(self):
         """start=3N/4: geometric in the upper quarter."""
-        circuit, info = encode(GEOMETRIC(ratio=0.6, start=48), N=64)
+        circuit, info = encode(GEOMETRIC(r=0.6, start=48), N=64)
         expected = np.zeros(64)
         expected[48:] = 0.6 ** np.arange(16)  # decay for 16 elements
         assert_encodes(circuit, expected)
@@ -732,7 +732,7 @@ class TestGeometric:
 
     def test_start_aligned_near_end(self):
         """start=56 at N=64: geometric in just the last 8 slots."""
-        circuit, info = encode(GEOMETRIC(ratio=0.3, start=56), N=64)
+        circuit, info = encode(GEOMETRIC(r=0.3, start=56), N=64)
         expected = np.zeros(64)
         expected[56:] = 0.3 ** np.arange(8)
         assert_encodes(circuit, expected)
@@ -742,7 +742,7 @@ class TestGeometric:
 
     def test_start_dyadic_small(self):
         """Dyadic regime: start=10, N=64 (w=54, not power-of-2-aligned)."""
-        circuit, info = encode(GEOMETRIC(ratio=0.5, start=10), N=64)
+        circuit, info = encode(GEOMETRIC(r=0.5, start=10), N=64)
         assert info.complexity == "O(m^2)"
         assert info.gate_count_2q > 0          # must have entangling gates
         assert info.success_probability == 1.0  # disjoint-support blocks
@@ -753,7 +753,7 @@ class TestGeometric:
 
     def test_start_dyadic_non_multiple(self):
         """Dyadic regime: start=40, N=64 (w=24, aligned in multi-block sense)."""
-        circuit, info = encode(GEOMETRIC(ratio=0.5, start=40), N=64)
+        circuit, info = encode(GEOMETRIC(r=0.5, start=40), N=64)
         assert info.complexity == "O(m^2)"
         assert info.gate_count_2q > 0
         assert info.success_probability == 1.0
@@ -764,7 +764,7 @@ class TestGeometric:
 
     def test_start_dyadic_user_case(self):
         """Dyadic regime: the motivating case start=4, N=256."""
-        circuit, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)
+        circuit, info = encode(GEOMETRIC(r=0.8, start=4), N=256)
         assert info.complexity == "O(m^2)"
         assert info.success_probability == 1.0
 
@@ -783,13 +783,13 @@ class TestGeometric:
     def test_start_validation_bounds(self):
         """start must be in range [0, N)."""
         with pytest.raises(ValueError, match="start < N"):
-            encode(GEOMETRIC(ratio=0.5, start=64), N=64)
+            encode(GEOMETRIC(r=0.5, start=64), N=64)
         with pytest.raises(ValueError, match="non-negative"):
-            GEOMETRIC(ratio=0.5, start=-1)
+            GEOMETRIC(r=0.5, start=-1)
 
     def test_start_validate_mode(self):
         """Validation should work correctly with start parameter."""
-        circuit, info = encode(GEOMETRIC(ratio=0.8, start=8), N=16, validate=True)
+        circuit, info = encode(GEOMETRIC(r=0.8, start=8), N=16, validate=True)
         assert info.validated is True
         expected = np.zeros(16)
         expected[8:] = 0.8 ** np.arange(8)
@@ -797,7 +797,7 @@ class TestGeometric:
 
     def test_start_emitted_code_runs(self):
         """Emitted code should work for start offset."""
-        circuit, info = encode(GEOMETRIC(ratio=0.9, start=16), N=32)
+        circuit, info = encode(GEOMETRIC(r=0.9, start=16), N=32)
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
@@ -807,8 +807,8 @@ class TestGeometric:
 
     def test_start_custom_c_normalization(self):
         """c parameter still works with start offset."""
-        c1, _ = encode(GEOMETRIC(ratio=0.7, start=8, c=1.0), N=16)
-        c2, _ = encode(GEOMETRIC(ratio=0.7, start=8, c=3.0), N=16)
+        c1, _ = encode(GEOMETRIC(r=0.7, start=8, c=1.0), N=16)
+        c2, _ = encode(GEOMETRIC(r=0.7, start=8, c=3.0), N=16)
         sv1 = np.abs(np.array(statevector(c1)))
         sv2 = np.abs(np.array(statevector(c2)))
         np.testing.assert_allclose(sv1, sv2, atol=1e-10)
@@ -879,7 +879,7 @@ class TestGeometricDyadic:
         # start = N/2, N/4*k, etc. -- all single-block dyadic
         for (r, s, N) in [(0.5, 32, 64), (0.7, 48, 64), (0.3, 56, 64),
                           (0.9, 128, 256)]:
-            _, info = encode(GEOMETRIC(ratio=r, start=s), N=N)
+            _, info = encode(GEOMETRIC(r=r, start=s), N=N)
             assert info.complexity == "O(m)", (
                 f"(s={s}, N={N}): got {info.complexity}")
             assert info.gate_count_2q == 0
@@ -888,7 +888,7 @@ class TestGeometricDyadic:
         """Non-aligned start (regime c) reports O(m^2), non-zero CX."""
         for (r, s, N) in [(0.5, 5, 16), (0.8, 4, 256), (0.9, 100, 1024),
                           (0.7, 1, 128), (0.3, 123, 256)]:
-            _, info = encode(GEOMETRIC(ratio=r, start=s), N=N)
+            _, info = encode(GEOMETRIC(r=r, start=s), N=N)
             assert info.complexity == "O(m^2)", (
                 f"(s={s}, N={N}): got {info.complexity}")
             assert info.gate_count_2q > 0
@@ -908,7 +908,7 @@ class TestGeometricDyadic:
         for N in [8, 16, 32]:
             for r in [0.3, 0.5, 0.8, 1.5]:
                 for s in range(1, N):
-                    qc, _ = encode(GEOMETRIC(ratio=r, start=s), N=N)
+                    qc, _ = encode(GEOMETRIC(r=r, start=s), N=N)
                     sv = np.abs(np.array(statevector(qc)))
                     ref = np.abs(self._reference(r, s, N))
                     np.testing.assert_allclose(
@@ -922,7 +922,7 @@ class TestGeometricDyadic:
             for s in [1, 3, 7, 100, N // 3, N - 3]:
                 if s >= N:
                     continue
-                qc, _ = encode(GEOMETRIC(ratio=0.9, start=s), N=N)
+                qc, _ = encode(GEOMETRIC(r=0.9, start=s), N=N)
                 sv = np.abs(np.array(statevector(qc)))
                 ref = np.abs(self._reference(0.9, s, N))
                 np.testing.assert_allclose(
@@ -933,7 +933,7 @@ class TestGeometricDyadic:
     def test_zeros_before_start(self):
         """Amplitudes on |i> for i < start must be exactly zero."""
         for (r, s, N) in [(0.5, 5, 16), (0.8, 4, 256), (0.9, 100, 1024)]:
-            qc, _ = encode(GEOMETRIC(ratio=r, start=s), N=N)
+            qc, _ = encode(GEOMETRIC(r=r, start=s), N=N)
             sv = np.array(statevector(qc))
             assert np.max(np.abs(sv[:s])) < 1e-10, (
                 f"Non-zero amplitude before start (s={s}, N={N}): "
@@ -943,16 +943,16 @@ class TestGeometricDyadic:
     def test_c_only_affects_normalization(self):
         """The c parameter is a pure scalar prefactor (normalised out)."""
         for (r, s, N) in [(0.7, 5, 32), (0.8, 4, 256)]:
-            qc1, _ = encode(GEOMETRIC(ratio=r, start=s, c=1.0), N=N)
-            qc2, _ = encode(GEOMETRIC(ratio=r, start=s, c=7.3), N=N)
+            qc1, _ = encode(GEOMETRIC(r=r, start=s, c=1.0), N=N)
+            qc2, _ = encode(GEOMETRIC(r=r, start=s, c=7.3), N=N)
             sv1 = np.abs(np.array(statevector(qc1)))
             sv2 = np.abs(np.array(statevector(qc2)))
             np.testing.assert_allclose(sv1, sv2, atol=1e-10)
 
-    def test_ratio_above_and_below_one(self):
+    def test_r_above_and_below_one(self):
         """Growth (r>1) and decay (r<1) both work in the dyadic regime."""
         for r in [0.2, 0.5, 0.95, 1.05, 1.5, 2.0]:
-            qc, _ = encode(GEOMETRIC(ratio=r, start=5), N=32)
+            qc, _ = encode(GEOMETRIC(r=r, start=5), N=32)
             sv = np.abs(np.array(statevector(qc)))
             ref = np.abs(self._reference(r, 5, 32))
             np.testing.assert_allclose(sv, ref, atol=1e-8,
@@ -967,7 +967,7 @@ class TestGeometricDyadic:
         counts = []
         for m in [4, 6, 8, 10]:
             N = 1 << m
-            _, info = encode(GEOMETRIC(ratio=0.9, start=3), N=N)
+            _, info = encode(GEOMETRIC(r=0.9, start=3), N=N)
             counts.append(info.gate_count)
         # Cubic fit c0 + c1*m + c2*m^2 should bound the growth; gate count
         # at m=10 should be at most ~ 30 * (m=10)^2 = 3000, not 2^10 * 10.
@@ -984,7 +984,7 @@ class TestGeometricDyadic:
         whose [start,N) has more than ~ m non-zero amplitudes.
         """
         # User's reported case
-        _, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)
+        _, info = encode(GEOMETRIC(r=0.8, start=4), N=256)
         # Old: ~ 17 000 gates.  Dyadic is O(m^2) = 64 * const; under 2 000 easily.
         assert info.gate_count < 2000, (
             f"Expected < 2000 gates, got {info.gate_count} "
@@ -998,7 +998,7 @@ class TestGeometricDyadic:
         """
         for m in [5, 7, 9]:
             N = 1 << m
-            _, info = encode(GEOMETRIC(ratio=0.9, start=1), N=N)
+            _, info = encode(GEOMETRIC(r=0.9, start=1), N=N)
             # Very loose bound: 100 * m^2.  Guards against accidental O(N*m).
             assert info.gate_count < 100 * m * m, (
                 f"m={m}: {info.gate_count} gates exceeds 100*m^2 budget.")
@@ -1009,7 +1009,7 @@ class TestGeometricDyadic:
 
     def test_validate_mode(self):
         """validate=True returns the classically-constructed reference vector."""
-        qc, info = encode(GEOMETRIC(ratio=0.7, start=5),
+        qc, info = encode(GEOMETRIC(r=0.7, start=5),
                           N=16, validate=True)
         assert info.validated is True
         # info.vector is UNnormalized (matches existing regime-b convention)
@@ -1021,7 +1021,7 @@ class TestGeometricDyadic:
         """A dyadic-regime GEOMETRIC still works as a SUM component."""
         qc, info = encode(
             SUM([(1.0, STEP(k_s=8, c=1.0)),
-                 (2.0, GEOMETRIC(ratio=0.5, start=5))]),
+                 (2.0, GEOMETRIC(r=0.5, start=5))]),
             N=16)
         assert info.vector_type == "SUM"
         assert 0 < info.success_probability <= 1.0
@@ -1034,7 +1034,7 @@ class TestGeometricDyadic:
         and give the same state vector as the originally-synthesized
         circuit.  Same guarantee as regimes (a) and (b).
         """
-        qc, info = encode(GEOMETRIC(ratio=0.8, start=5), N=32)
+        qc, info = encode(GEOMETRIC(r=0.8, start=5), N=32)
         namespace = {"QuantumCircuit": QuantumCircuit}
         exec(compile(info.circuit_code, "<emit>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
@@ -1121,7 +1121,7 @@ class TestScaling:
         gate_vals = []
         for m in self.M_VALS:
             N = 2 ** m
-            _, info = encode(GEOMETRIC(ratio=0.95), N=N)
+            _, info = encode(GEOMETRIC(r=0.95), N=N)
             gate_vals.append(info.gate_count)
             assert info.gate_count == m
             assert info.gate_count_2q == 0
@@ -1176,7 +1176,7 @@ class TestScaling:
             ("STEP",        encode(STEP(k_s=3 * N // 4, c=1.0), N=N)[1].gate_count),
             ("SQUARE",      encode(SQUARE(k1=N // 4, k2=3 * N // 4, c=1.0), N=N)[1].gate_count),
             ("WALSH",       encode(WALSH(k=m // 2), N=N)[1].gate_count),
-            ("GEOMETRIC",   encode(GEOMETRIC(ratio=0.95), N=N)[1].gate_count),
+            ("GEOMETRIC",   encode(GEOMETRIC(r=0.95), N=N)[1].gate_count),
             ("FOURIER(T=1)",encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)[1].gate_count),
         ]
         for label, count in checks:
@@ -1539,8 +1539,8 @@ class TestTensor:
 
     def test_basic_two_component(self):
         circuit, info = encode(
-            TENSOR([(GEOMETRIC(ratio=0.5), 8),
-                    (GEOMETRIC(ratio=0.8), 8)]),
+            TENSOR([(GEOMETRIC(r=0.5), 8),
+                    (GEOMETRIC(r=0.8), 8)]),
             N=64)
         assert info.vector_type == "TENSOR"
         assert info.N == 64
@@ -1570,7 +1570,7 @@ class TestTensor:
 
     def test_three_way_tensor(self):
         circuit, info = encode(
-            TENSOR([(GEOMETRIC(ratio=0.7), 4),
+            TENSOR([(GEOMETRIC(r=0.7), 4),
                     (HAMMING(r=0.5), 8),
                     (SQUARE(k1=1, k2=5, c=1.0), 8)]),
             N=4 * 8 * 8, validate=True)
@@ -1580,8 +1580,8 @@ class TestTensor:
     def test_validate_matches_kron(self):
         """Validated vector should equal Kronecker product of components."""
         from pyencode._helpers import _build_component_vector
-        a = GEOMETRIC(ratio=0.6)
-        b = GEOMETRIC(ratio=0.9)
+        a = GEOMETRIC(r=0.6)
+        b = GEOMETRIC(r=0.9)
         _, info = encode(TENSOR([(a, 8), (b, 4)]), N=32, validate=True)
         va = _build_component_vector(a, 8)
         vb = _build_component_vector(b, 4)
@@ -1590,16 +1590,16 @@ class TestTensor:
 
     def test_gate_count_equals_sum_of_components(self):
         """Disjoint composition: no extra gates beyond component counts."""
-        _, info_a = encode(GEOMETRIC(ratio=0.7), N=16)
+        _, info_a = encode(GEOMETRIC(r=0.7), N=16)
         _, info_b = encode(HAMMING(r=0.5), N=16)
         _, info_t = encode(
-            TENSOR([(GEOMETRIC(ratio=0.7), 16), (HAMMING(r=0.5), 16)]),
+            TENSOR([(GEOMETRIC(r=0.7), 16), (HAMMING(r=0.5), 16)]),
             N=256)
         assert info_t.gate_count == info_a.gate_count + info_b.gate_count
 
     def test_success_probability_is_one(self):
         _, info = encode(
-            TENSOR([(GEOMETRIC(ratio=0.5), 8), (GEOMETRIC(ratio=0.8), 8)]),
+            TENSOR([(GEOMETRIC(r=0.5), 8), (GEOMETRIC(r=0.8), 8)]),
             N=64)
         assert info.success_probability == 1.0
 
@@ -1609,7 +1609,7 @@ class TestTensor:
 
     def test_non_power_of_two_size_raises(self):
         with pytest.raises(ValueError, match="power of 2"):
-            TENSOR([(GEOMETRIC(ratio=0.5), 6), (GEOMETRIC(ratio=0.5), 8)])
+            TENSOR([(GEOMETRIC(r=0.5), 6), (GEOMETRIC(r=0.5), 8)])
 
     def test_bad_component_type_raises(self):
         with pytest.raises(TypeError):
@@ -1618,14 +1618,14 @@ class TestTensor:
     def test_mismatched_total_N_raises(self):
         with pytest.raises(ValueError, match="product of subregister sizes"):
             encode(
-                TENSOR([(GEOMETRIC(ratio=0.5), 8),
-                        (GEOMETRIC(ratio=0.5), 8)]),
+                TENSOR([(GEOMETRIC(r=0.5), 8),
+                        (GEOMETRIC(r=0.5), 8)]),
                 N=32)  # should be 64
 
     def test_single_component_tensor(self):
         """A one-component TENSOR should equal the component by itself."""
-        c_plain, _ = encode(GEOMETRIC(ratio=0.7), N=16)
-        c_tensor, _ = encode(TENSOR([(GEOMETRIC(ratio=0.7), 16)]), N=16)
+        c_plain, _ = encode(GEOMETRIC(r=0.7), N=16)
+        c_tensor, _ = encode(TENSOR([(GEOMETRIC(r=0.7), 16)]), N=16)
         sv_p = np.abs(statevector(c_plain))
         sv_t = np.abs(statevector(c_tensor))
         np.testing.assert_allclose(sv_p, sv_t, atol=1e-10)
@@ -1992,7 +1992,7 @@ class TestPredictor:
         ]
         
         for N, start, expected_1q in test_cases:
-            p = predict_gates(GEOMETRIC(ratio=0.7, start=start), N)
+            p = predict_gates(GEOMETRIC(r=0.7, start=start), N)
             assert p["exact"] is False  # transpiler may optimize small rotations
             assert p["gate_count_1q"] == expected_1q, \
                 f"N={N}, start={start}: pred {p['gate_count_1q']} != expected {expected_1q}"
@@ -2003,7 +2003,7 @@ class TestPredictor:
             if N <= 32:  # avoid slow encode() for large N in tests
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    _, info = encode(GEOMETRIC(ratio=0.7, start=start), N)
+                    _, info = encode(GEOMETRIC(r=0.7, start=start), N)
                 # Prediction should be exact or close for aligned offsets
                 assert p["gate_count_1q"] == info.gate_count_1q, \
                     f"N={N}, start={start}: predicted {p['gate_count_1q']} != actual {info.gate_count_1q}"
@@ -2015,7 +2015,7 @@ class TestPredictor:
         from pyencode import predict_gates
         components = [
             SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-            GEOMETRIC(ratio=0.8, start=11),
+            GEOMETRIC(r=0.8, start=11),
         ]
         p = predict_gates(PARTITION(components), N=256)
         assert p["vector_type"] == "PARTITION"
@@ -2066,7 +2066,7 @@ class TestPredictor:
             N = 1 << m
             p = predict_gates(
                 PARTITION([SPARSE([(1, 0.5), (3, 0.3)]),
-                           GEOMETRIC(ratio=0.9, start=5)]),
+                           GEOMETRIC(r=0.9, start=5)]),
                 N=N)
             preds.append((m, p["gate_count"]))
         # Monotone in m and bounded by a quadratic.
@@ -2102,9 +2102,9 @@ class TestPredictor:
         upper bound and stays within a constant factor of actual."""
         from pyencode import predict_gates
         cases = [
-            [SPARSE([(0, 0.5)]), GEOMETRIC(ratio=0.9, start=1)],          # worst start
-            [SPARSE([(2, 0.3), (5, 0.5)]), GEOMETRIC(ratio=0.8, start=7)],
-            [STEP(k_s=4, c=1.0), GEOMETRIC(ratio=0.7, start=4)],
+            [SPARSE([(0, 0.5)]), GEOMETRIC(r=0.9, start=1)],          # worst start
+            [SPARSE([(2, 0.3), (5, 0.5)]), GEOMETRIC(r=0.8, start=7)],
+            [STEP(k_s=4, c=1.0), GEOMETRIC(r=0.7, start=4)],
             [SQUARE(k1=1, k2=3), SQUARE(k1=5, k2=11)],
         ]
         for components in cases:
@@ -2160,7 +2160,7 @@ class TestPartition:
             elif vt.name == "SQUARE":
                 f[int(p["k1"]):int(p["k2"])] += float(p.get("c", 1.0))
             elif vt.name == "GEOMETRIC":
-                r = float(p["ratio"])
+                r = float(p["r"])
                 c = float(p.get("c", 1.0))
                 s = int(p.get("start", 0))
                 f[s:] += c * (r ** np.arange(N - s))
@@ -2174,7 +2174,7 @@ class TestPartition:
         """The user's example: SPARSE prefix, GEOMETRIC tail, N=256."""
         components = [
             SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-            GEOMETRIC(ratio=0.8, start=11),
+            GEOMETRIC(r=0.8, start=11),
         ]
         qc, info = encode(PARTITION(components), N=256)
         assert info.vector_type == "PARTITION"
@@ -2193,7 +2193,7 @@ class TestPartition:
         disjoint combination, since no ancilla + no PREP/SELECT overhead."""
         components = [
             SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-            GEOMETRIC(ratio=0.8, start=11),
+            GEOMETRIC(r=0.8, start=11),
         ]
         _, info_p = encode(PARTITION(components), N=256)
         import warnings
@@ -2201,7 +2201,7 @@ class TestPartition:
             warnings.simplefilter("ignore")   # LCU may warn about overlap
             _, info_l = encode(
                 SUM([(1.0, SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)])),
-                     (1.0, GEOMETRIC(ratio=0.8, start=11))]),
+                     (1.0, GEOMETRIC(r=0.8, start=11))]),
                 N=256)
         # Use total gate_count as the comparison metric since LCU's
         # transpile-based 2q count may be None for some combinations.
@@ -2231,7 +2231,7 @@ class TestPartition:
     def test_step_plus_geometric_tail(self):
         """STEP plateau followed by GEOMETRIC decay starting at k_s."""
         components = [STEP(k_s=8, c=1.0),
-                      GEOMETRIC(ratio=0.7, start=8, c=1.0)]
+                      GEOMETRIC(r=0.7, start=8, c=1.0)]
         qc, info = encode(PARTITION(components), N=32)
         assert info.success_probability == 1.0
 
@@ -2260,7 +2260,7 @@ class TestPartition:
         """Signed sparse values are correctly preserved (Gleinig handles
         sign through the anchor state; spread preserves sign uniformly)."""
         components = [SPARSE([(2, -0.6), (7, 0.4)]),
-                      GEOMETRIC(ratio=0.5, start=8)]
+                      GEOMETRIC(r=0.5, start=8)]
         qc, info = encode(PARTITION(components), N=16)
         expected = self._build_expected(components, 16)
         expected /= np.linalg.norm(expected)
@@ -2324,9 +2324,9 @@ class TestPartition:
     def test_exhaustive_small_N(self):
         """Sweep a few disjoint combinations for small N."""
         scenarios = [
-            [SPARSE([(0, 1.0)]), GEOMETRIC(ratio=0.5, start=1)],
-            [SQUARE(k1=0, k2=2, c=2.0), GEOMETRIC(ratio=0.7, start=2)],
-            [SPARSE([(1, 0.5), (3, 0.8)]), GEOMETRIC(ratio=0.6, start=4)],
+            [SPARSE([(0, 1.0)]), GEOMETRIC(r=0.5, start=1)],
+            [SQUARE(k1=0, k2=2, c=2.0), GEOMETRIC(r=0.7, start=2)],
+            [SPARSE([(1, 0.5), (3, 0.8)]), GEOMETRIC(r=0.6, start=4)],
             [STEP(k_s=4, c=1.5), SPARSE([(5, 0.3), (7, -0.4)])],
         ]
         for components in scenarios:
@@ -2341,7 +2341,7 @@ class TestPartition:
     def test_single_component_delegates(self):
         """PARTITION with a single component must still be correct."""
         for comp in [SPARSE([(3, 0.7)]), STEP(k_s=8, c=1.0),
-                     SQUARE(k1=2, k2=6, c=1.0), GEOMETRIC(ratio=0.8, start=4)]:
+                     SQUARE(k1=2, k2=6, c=1.0), GEOMETRIC(r=0.8, start=4)]:
             qc, info = encode(PARTITION([comp]), N=16)
             assert info.success_probability == 1.0
             expected = self._build_expected([comp], 16)
@@ -2361,7 +2361,7 @@ class TestPartition:
             N = 1 << m
             components = [
                 SPARSE([(1, 0.5), (3, 0.3)]),
-                GEOMETRIC(ratio=0.9, start=7),
+                GEOMETRIC(r=0.9, start=7),
             ]
             _, info = encode(PARTITION(components), N=N)
             counts.append(info.gate_count)
@@ -2376,8 +2376,8 @@ class TestPartition:
         for components in [
             [SPARSE([(0, 0.5), (15, 0.7)])],
             [SQUARE(k1=0, k2=8, c=1.0)],
-            [SPARSE([(1, 0.3)]), GEOMETRIC(ratio=0.8, start=2)],
-            [STEP(k_s=4), SQUARE(k1=4, k2=8), GEOMETRIC(ratio=0.5, start=8)],
+            [SPARSE([(1, 0.3)]), GEOMETRIC(r=0.8, start=2)],
+            [STEP(k_s=4), SQUARE(k1=4, k2=8), GEOMETRIC(r=0.5, start=8)],
         ]:
             _, info = encode(PARTITION(components), N=16)
             assert info.success_probability == 1.0
@@ -2388,7 +2388,7 @@ class TestPartition:
 
     def test_validate_mode(self):
         """validate=True materialises the classical reference vector."""
-        components = [SPARSE([(1, 0.4)]), GEOMETRIC(ratio=0.7, start=2)]
+        components = [SPARSE([(1, 0.4)]), GEOMETRIC(r=0.7, start=2)]
         _, info = encode(PARTITION(components), N=16, validate=True)
         assert info.validated is True
         ref = self._build_expected(components, 16)
@@ -2397,7 +2397,7 @@ class TestPartition:
 
     def test_emitted_code_runs(self):
         """The emitted code must round-trip through exec() to the same circuit."""
-        components = [SPARSE([(2, 0.5)]), GEOMETRIC(ratio=0.6, start=4)]
+        components = [SPARSE([(2, 0.5)]), GEOMETRIC(r=0.6, start=4)]
         qc, info = info_first = encode(PARTITION(components), N=16)
         ns = {}
         exec(compile(info.circuit_code, "<emit>", "exec"), ns)
@@ -2441,7 +2441,7 @@ class TestConstructorRepr:
         constructor-compatible param names, so the base repr works."""
         for obj in [STEP(k_s=4),
                     SQUARE(k1=2, k2=6),
-                    GEOMETRIC(ratio=0.7, start=3),
+                    GEOMETRIC(r=0.7, start=3),
                     WALSH(k=1),
                     HAMMING(r=0.5),
                     STAIRCASE(r=0.8)]:
@@ -2470,7 +2470,7 @@ class TestConstructorRepr:
         """PARTITION's emitted code with a SPARSE component must round-trip."""
         qc, info = encode(
             PARTITION([SPARSE([(2, 0.5), (7, -0.3)]),
-                       GEOMETRIC(ratio=0.7, start=8)]),
+                       GEOMETRIC(r=0.7, start=8)]),
             N=16,
         )
         ns = {}

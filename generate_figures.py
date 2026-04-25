@@ -197,7 +197,7 @@ def fig_geometric():
     """GEOMETRIC: exponential decay as product state."""
     print("\n--- GEOMETRIC: ratio=0.5, N=8 ---")
     N = 8
-    circuit, info = encode(GEOMETRIC(ratio=0.5), N=N)
+    circuit, info = encode(GEOMETRIC(r=0.5), N=N)
     print_info("encode", info)
     f = 0.5 ** np.arange(N)
     plot_vector(f, N, r"GEOMETRIC: $f_i = 0.5^{\,i}$, $N=8$",
@@ -211,7 +211,7 @@ def fig_geometric_arbitrary():
     N = 16
     ratio = 0.8
     start = 5
-    circuit, info = encode(GEOMETRIC(ratio=ratio, start=start), N=N)
+    circuit, info = encode(GEOMETRIC(r=ratio, start=start), N=N)
     print_info("encode", info)
     # Support: [5, 16) decomposes into [5,6) U [6,8) U [8,16) — three aligned blocks.
     f = np.zeros(N)
@@ -488,7 +488,7 @@ def fig_gate_count_vs_m():
         patterns["WALSH"].append(pyencode_transpile_total(c))
 
         # GEOMETRIC: exponential decay (product state, 0 CX)
-        c, _ = encode(GEOMETRIC(ratio=0.95), N=N)
+        c, _ = encode(GEOMETRIC(r=0.95), N=N)
         patterns["GEOMETRIC"].append(pyencode_transpile_total(c))
 
         # HAMMING: product state with Hamming-weight structure (0 CX, depth 1)
@@ -623,7 +623,7 @@ def fig_gate_count_vs_m_reduced():
         patterns["WALSH"].append(pyencode_transpile_total(c))
 
         # GEOMETRIC: exponential decay (product state, 0 CX)
-        c, _ = encode(GEOMETRIC(ratio=0.95), N=N)
+        c, _ = encode(GEOMETRIC(r=0.95), N=N)
         patterns["GEOMETRIC"].append(pyencode_transpile_total(c))
 
         # HAMMING: product state with Hamming-weight structure (0 CX, depth 1)
@@ -726,7 +726,7 @@ def gate_count_table():
          np.sin(2*np.pi*3*k/N + math.pi/4)),
         ("SPARSE s=2",           SPARSE([(10, 3.0), (50, 4.0)]),
          np.array([3.0 if i==10 else 4.0 if i==50 else 0.0 for i in range(N)])),
-        ("GEOMETRIC (r=0.95)",   GEOMETRIC(ratio=0.95),
+        ("GEOMETRIC (r=0.95)",   GEOMETRIC(r=0.95),
          0.95 ** np.arange(N)),
         ("HAMMING (r=0.7)",     HAMMING(r=0.7),
          hamming_vec),

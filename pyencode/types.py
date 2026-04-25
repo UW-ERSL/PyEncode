@@ -158,15 +158,15 @@ class FOURIER(_VectorObj):
 
 
 class GEOMETRIC(_VectorObj):
-    """GEOMETRIC(ratio, start=0, c=1.0) — geometric sequence, optionally offset.
+    """GEOMETRIC(r, start=0, c=1.0) — geometric sequence, optionally offset.
 
     Prepares a state proportional to:
-      f_i = c * ratio^(i - start)   for i in [start, N),
-      f_i = 0                       for i in [0, start).
+      f_i = c * r^(i - start)   for i in [start, N),
+      f_i = 0                   for i in [0, start).
 
     With start=0 (default), the vector is multiplicatively separable over
     the bits of i:
-      f_i = c * ratio^(sum_j b_j * 2^j) = c * prod_j ratio^(b_j * 2^j)
+      f_i = c * r^(sum_j b_j * 2^j) = c * prod_j r^(b_j * 2^j)
     so the quantum state is a product state prepared by m independent
     R_y rotations — one per qubit, zero entangling gates, depth 1.
 
@@ -183,9 +183,10 @@ class GEOMETRIC(_VectorObj):
 
     Parameters
     ----------
-    ratio : float
-        Base of the geometric sequence. Must satisfy 0 < ratio and ratio != 1.
-        Typical values: 0 < ratio < 1 for decay, ratio > 1 for growth.
+    r : float
+        Base (common ratio) of the geometric sequence. Must satisfy
+        0 < r and r != 1. Typical values: 0 < r < 1 for decay,
+        r > 1 for growth.
     start : int, optional (default 0)
         Starting index of the geometric sequence. Amplitudes below this
         index are zero. Any value 0 <= start < N is supported.
@@ -196,24 +197,24 @@ class GEOMETRIC(_VectorObj):
 
     Examples
     --------
-    >>> circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
-    >>> circuit, info = encode(GEOMETRIC(ratio=0.5), N=16)
-    >>> circuit, info = encode(GEOMETRIC(ratio=0.9, start=32), N=64)  # tier 1
-    >>> circuit, info = encode(GEOMETRIC(ratio=0.8, start=4), N=256)  # tier 2
+    >>> circuit, info = encode(GEOMETRIC(r=0.95), N=64)
+    >>> circuit, info = encode(GEOMETRIC(r=0.5), N=16)
+    >>> circuit, info = encode(GEOMETRIC(r=0.9, start=32), N=64)  # tier 1
+    >>> circuit, info = encode(GEOMETRIC(r=0.8, start=4), N=256)  # tier 2
     """
-    def __init__(self, ratio, start=0, c=1.0):
+    def __init__(self, r, start=0, c=1.0):
         self.vector_type = VectorType.GEOMETRIC
-        ratio = float(ratio)
-        if ratio <= 0:
-            raise ValueError(f"GEOMETRIC ratio must be positive, got {ratio}.")
-        if abs(ratio - 1.0) < 1e-14:
+        r = float(r)
+        if r <= 0:
+            raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
+        if abs(r - 1.0) < 1e-14:
             raise ValueError(
-                "GEOMETRIC ratio=1.0 is a uniform vector; use STEP(k_s=N) instead."
+                "GEOMETRIC r=1.0 is a uniform vector; use STEP(k_s=N) instead."
             )
         start = int(start)
         if start < 0:
             raise ValueError(f"GEOMETRIC start must be non-negative, got {start}.")
-        self.params = {"ratio": ratio, "start": start, "c": float(c)}
+        self.params = {"r": r, "start": start, "c": float(c)}
 
 
 class HAMMING(_VectorObj):
@@ -534,9 +535,9 @@ class TENSOR(_VectorObj):
 
     >>> # 3D source: Gaussian-like profile factorisable across axes
     >>> circuit, info = encode(
-    ...     TENSOR([(GEOMETRIC(ratio=0.9), 16),
-    ...             (GEOMETRIC(ratio=0.9), 16),
-    ...             (GEOMETRIC(ratio=0.9), 16)]),
+    ...     TENSOR([(GEOMETRIC(r=0.9), 16),
+    ...             (GEOMETRIC(r=0.9), 16),
+    ...             (GEOMETRIC(r=0.9), 16)]),
     ...     N=16 * 16 * 16)
     """
     def __init__(self, components):
@@ -688,7 +689,7 @@ class PARTITION(_VectorObj):
       SPARSE([(x_i, v_i)])           : one singleton per (x_i, v_i).
       STEP(k_s, c), SQUARE(k1, k2, c): dyadic decomposition of [0, k_s)
                                        (resp. [k1, k2)), ratio = 1.
-      GEOMETRIC(ratio, start, c)     : dyadic decomposition of [start, N),
+      GEOMETRIC(r, start, c)     : dyadic decomposition of [start, N),
                                        ratio inherited.
 
     Circuit:
@@ -721,7 +722,7 @@ class PARTITION(_VectorObj):
     >>> circuit, info = encode(
     ...     PARTITION([
     ...         SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-    ...         GEOMETRIC(ratio=0.8, start=11),
+    ...         GEOMETRIC(r=0.8, start=11),
     ...     ]),
     ...     N=256)
     >>> info.success_probability   # 1.0, no post-selection
@@ -900,9 +901,9 @@ _PARAM_SCHEMAS = {
         "description": 'modes=[{"n": freq, "A": amp, "phi": phase}, ...]',
     },
     VectorType.GEOMETRIC: {
-        "required": {"ratio"},
+        "required": {"r"},
         "optional": {"c", "start"},
-        "description": "ratio=<base of geometric sequence>, start=<starting index (default 0)>",
+        "description": "r=<base (common ratio) of geometric sequence>, start=<starting index (default 0)>",
     },
     VectorType.HAMMING: {
         "required": {"r"},
