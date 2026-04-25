@@ -34,7 +34,7 @@ circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
 circuit, info = encode(WALSH(k=1, c0=1.0, c1=4.0), N=8)
 
 # Exponential decay — product state, zero two-qubit gates
-circuit, info = encode(GEOMETRIC(ratio=0.95), N=64)
+circuit, info = encode(GEOMETRIC(r=0.95), N=64)
 
 # Hamming-weight structured — product state, identical Ry per qubit, depth 1
 circuit, info = encode(HAMMING(r=0.5), N=64)
@@ -63,7 +63,7 @@ circuit, info = encode(
 # Ancilla-free disjoint-support composition via PARTITION
 circuit, info = encode(
     PARTITION([SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-               GEOMETRIC(ratio=0.8, k_s=11)]),
+               GEOMETRIC(r=0.8, k_s=11)]),
     N=256)
 ```
 
@@ -80,7 +80,7 @@ statevector-validated amplitude vector.
 | Step       | `STEP(k_e, c)`                | O(m)               | Shukla & Vedula (2024)       |
 | Square     | `SQUARE(k_s, k_e, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
 | Walsh      | `WALSH(k, c0, c1)`      | O(m)               | Welch et al. (2014)          |
-| Geometric  | `GEOMETRIC(r, c)`         | O(m), 0 CX, depth 1| Xie & Ben-Ami (2025)        |
+| Geometric  | `GEOMETRIC(r, k_s, k_e, c)`   | O(m) aligned / O(m²) general | Xie & Ben-Ami (2025) |
 | Hamming    | `HAMMING(r, c)`              | O(m), 0 CX, depth 1| Product state (this work)    |
 | Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
 | Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
@@ -108,7 +108,7 @@ Requires O(2^m) memory; disabled by default.
 
 Each `encode()` call returns an `EncodingInfo` with:
 
-- `kind` — pattern name (e.g. `"SPARSE"`, `"GEOMETRIC"`)
+- `pattern_name` — name of the recognized pattern (e.g. `"SPARSE"`, `"GEOMETRIC"`)
 - `N`, `m` — vector length and number of qubits
 - `params` — supplied vector parameters (e.g. `{"r": 0.95, "c": 1.0}`)
 - `gate_count` — total gates (pre-transpilation)

@@ -134,19 +134,26 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
     elif kind == PatternKind.GEOMETRIC:
         result.setdefault("c", 1.0)
         result.setdefault("k_s", 0)
+        result.setdefault("k_e", None)
         r = float(result["r"])
         if r <= 0:
             raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
         if abs(r - 1.0) < 1e-14:
-            raise ValueError("GEOMETRIC r=1.0 is a uniform vector; use STEP(k_e=N).")
+            raise ValueError("GEOMETRIC r=1.0 is a uniform vector; use STEP or SQUARE.")
         k_s = int(result["k_s"])
         if k_s < 0 or k_s >= N:
             raise ValueError(
                 f"GEOMETRIC k_s must satisfy 0 <= k_s < N; got k_s={k_s}, N={N}."
             )
-        # Tier-2: No alignment constraint - any k_s value 0 <= k_s < N is supported
+        # k_e defaults to N (backward-compat). Validate window.
+        k_e = N if result["k_e"] is None else int(result["k_e"])
+        if k_e <= k_s or k_e > N:
+            raise ValueError(
+                f"GEOMETRIC requires k_s < k_e <= N; got k_s={k_s}, k_e={k_e}, N={N}."
+            )
         result["r"] = r
         result["k_s"] = k_s
+        result["k_e"] = k_e
         result["c"] = float(result["c"])
 
     elif kind == PatternKind.DICKE:
@@ -222,15 +229,18 @@ def _synthesize_and_build_info(
             complexity = "O(m)"
     
     # GEOMETRIC: override complexity for dyadic (non-aligned) case.
-    # Regimes:
-    #   (a) k_s == 0                                    : O(m)
-    #   (b) [k_s, N) is a single aligned dyadic block   : O(m)
-    #   (c) otherwise                                     : O(m^2)
+    # Regimes (let w = k_e - k_s, k_e defaults to N):
+    #   (a) k_s == 0 and k_e == N                       : O(m)
+    #   (b) [k_s, k_e) is a single aligned dyadic block : O(m)
+    #   (c) otherwise                                   : O(m^2)
     if pattern.kind == PatternKind.GEOMETRIC:
         k_s = pattern.params.get("k_s", 0)
-        if k_s > 0:
-            N = 2 ** m
-            w = N - k_s
+        N = 2 ** m
+        k_e = pattern.params.get("k_e", N)
+        if k_e is None:
+            k_e = N
+        if not (k_s == 0 and k_e == N):
+            w = k_e - k_s
             aligned = (w & (w - 1)) == 0 and k_s % w == 0
             if not aligned:
                 complexity = "O(m^2)"
@@ -321,10 +331,13 @@ def _build_expected_vector(
         r = p["r"]
         c = p.get("c", 1.0)
         k_s = p.get("k_s", 0)
+        k_e = p.get("k_e", N)
+        if k_e is None:
+            k_e = N
         f = np.zeros(N, dtype=float)
-        if k_s < N:
-            idx = np.arange(k_s, N)
-            f[k_s:] = c * (r ** (idx - k_s))
+        if k_s < k_e:
+            idx = np.arange(k_s, k_e)
+            f[k_s:k_e] = c * (r ** (idx - k_s))
         return f
 
     if lt == PatternKind.HAMMING:
@@ -399,10 +412,13 @@ def _build_component_vector(comp: _Pattern, N: int):
         r = p["r"]
         c = p.get("c", 1.0)
         k_s = p.get("k_s", 0)
+        k_e = p.get("k_e", N)
+        if k_e is None:
+            k_e = N
         f = np.zeros(N, dtype=float)
-        if k_s < N:
-            idx = np.arange(k_s, N)
-            f[k_s:] = c * (r ** (idx - k_s))
+        if k_s < k_e:
+            idx = np.arange(k_s, k_e)
+            f[k_s:k_e] = c * (r ** (idx - k_s))
         return f
     if comp.kind == PatternKind.HAMMING:
         r = p["r"]
@@ -698,6 +714,13 @@ def _support_interval(comp):
     if vt == PatternKind.SPARSE:
         indices = [ld["k"] for ld in p["loads"]]
         return (min(indices), max(indices) + 1)
+    if vt == PatternKind.GEOMETRIC:
+        # Bounded only when k_e was explicitly set; otherwise support extends
+        # to N which the caller resolves separately.
+        k_e = p.get("k_e")
+        if k_e is not None:
+            return (p.get("k_s", 0), k_e)
+        return None
     # WALSH, FOURIER have full support
     return None
 
@@ -1163,9 +1186,11 @@ def _partition_atoms(comp, N):
         r = float(p["r"])
         c_seg = float(p.get("c", 1.0))
         k_s = int(p.get("k_s", 0))
-        if k_s >= N:
+        k_e_raw = p.get("k_e", N)
+        k_e = N if k_e_raw is None else int(k_e_raw)
+        if k_s >= k_e:
             return atoms
-        for (a_k, j_k) in _dyadic_decomposition(k_s, N):
+        for (a_k, j_k) in _dyadic_decomposition(k_s, k_e):
             c_at_a = c_seg * (r ** (a_k - k_s))
             atoms.append((a_k, j_k, c_at_a, r))
         return atoms

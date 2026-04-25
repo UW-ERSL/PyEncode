@@ -809,19 +809,21 @@ def _emit_walsh(m: int, params: dict) -> str:
 def _emit_geometric(m: int, params: dict) -> str:
     """Emit circuit code for GEOMETRIC.  Three regimes (see synthesizer):
 
-        (a) k_s == 0                  : plain product state
-        (b) single aligned dyadic block : product state on low bits + X's
-        (c) general                     : dyadic decomposition, Gleinig anchor
-                                          load + multi-controlled R_y spreads
+        (a) k_s == 0 and k_e == N        : plain product state
+        (b) single aligned dyadic block  : product state on low bits + X's
+        (c) general                      : dyadic decomposition, Gleinig anchor
+                                            load + multi-controlled R_y spreads
     """
     import math as _math
     r = params["r"]
     c = params.get("c", 1.0)
     k_s = params.get("k_s", 0)
     N = 2 ** m
+    k_e_raw = params.get("k_e", N)
+    k_e = N if k_e_raw is None else int(k_e_raw)
 
-    # Regime (a)
-    if k_s == 0:
+    # Regime (a): full register
+    if k_s == 0 and k_e == N:
         lines = [
             _header(m, f"GEOMETRIC  r={r}, c={c}"),
             f"import math",
@@ -837,8 +839,8 @@ def _emit_geometric(m: int, params: dict) -> str:
         ]
         return "\n".join(lines)
 
-    # Regime (b): single aligned dyadic block
-    w = N - k_s
+    # Regime (b): single aligned dyadic block [k_s, k_e)
+    w = k_e - k_s
     aligned = (w & (w - 1)) == 0 and k_s % w == 0
     if aligned:
         m_low = w.bit_length() - 1
@@ -846,13 +848,14 @@ def _emit_geometric(m: int, params: dict) -> str:
         upper_x_qubits = [m_low + j for j in range(m - m_low)
                           if (upper_val >> j) & 1]
         lines = [
-            _header(m, f"GEOMETRIC  r={r}, k_s={k_s}, c={c}"),
+            _header(m, f"GEOMETRIC  r={r}, k_s={k_s}, k_e={k_e}, c={c}"),
             f"import math",
             f"",
             f"m = {m}",
             f"r = {r!r}",
             f"k_s = {k_s}",
-            f"m_low = {m_low}     # log2(N - k_s)",
+            f"k_e = {k_e}",
+            f"m_low = {m_low}     # log2(k_e - k_s)",
             f"qc = QuantumCircuit(m, name='geometric')",
             f"",
             f"# Build geometric product state on lower m_low qubits",
@@ -860,7 +863,7 @@ def _emit_geometric(m: int, params: dict) -> str:
             f"    theta_j = 2.0 * math.atan(r ** (2 ** j))",
             f"    qc.ry(theta_j, j)",
             f"",
-            f"# Shift window to [k_s, N) via X gates on selected upper qubits",
+            f"# Shift window to [k_s, k_e) via X gates on selected upper qubits",
         ]
         if upper_x_qubits:
             for q in upper_x_qubits:
@@ -869,21 +872,16 @@ def _emit_geometric(m: int, params: dict) -> str:
             lines.append(f"# (no X gates needed for this k_s value)")
         return "\n".join(lines)
 
-    # Regime (c): dyadic decomposition.  The algorithm is Gleinig-Hoefler
-    # anchor load + multi-controlled R_y spread per block -- non-trivial
-    # to reproduce inline.  Emit a descriptive skeleton; the framework's
-    # auto-fallback (emitter.emit_code) will detect the "synthesized
-    # internally" marker and replace this with the gate-level extraction
-    # from the synthesized circuit.  Same pattern as SPARSE(s>1).
+    # Regime (c): dyadic decomposition of [k_s, k_e).
     from .synthesizer import _dyadic_decomposition
-    blocks = _dyadic_decomposition(k_s, N)
+    blocks = _dyadic_decomposition(k_s, k_e)
     lines = [
-        _header(m, f"GEOMETRIC  r={r}, k_s={k_s}, c={c} "
-                   f"(dyadic regime, [k_s,N) not power-of-2-aligned)"),
+        _header(m, f"GEOMETRIC  r={r}, k_s={k_s}, k_e={k_e}, c={c} "
+                   f"(dyadic regime, [k_s,k_e) not power-of-2-aligned)"),
         f"",
         f"m = {m}",
         f"qc = QuantumCircuit(m, name='geometric')",
-        f"# Dyadic decomposition of [{k_s}, {N}) into {len(blocks)} blocks:",
+        f"# Dyadic decomposition of [{k_s}, {k_e}) into {len(blocks)} blocks:",
         f"# dyadic_blocks = {blocks}",
         f"# Each block is a (a_k, j_k) covering [a_k, a_k + 2**j_k).",
         f"# Assembly: Gleinig-Hoefler anchor load + multi-controlled R_y",

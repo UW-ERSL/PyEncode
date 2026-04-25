@@ -1075,20 +1075,21 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
 def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     """
     GEOMETRIC: prepare |psi> proportional to
-        sum_{i=k_s}^{N-1}  r^(i - k_s) |i>            on m qubits,
-    zero elsewhere.  Three internal regimes are selected automatically:
+        sum_{i=k_s}^{k_e-1}  r^(i - k_s) |i>            on m qubits,
+    zero outside [k_s, k_e).  Three internal regimes are selected
+    automatically (let w = k_e - k_s, N = 2^m):
 
-      (a) k_s == 0
+      (a) k_s == 0 and k_e == N  (full register)
           Plain product state.  m R_y gates, 0 CX, depth 1.
           Theta_j = 2*arctan(r^(2^j)) on qubit j.
 
-      (b) [k_s, N) is a single dyadic block
-          i.e. w = N-k_s is a power of two AND k_s % w == 0.
+      (b) [k_s, k_e) is a single dyadic block
+          i.e. w is a power of two AND k_s % w == 0.
           log2(w) R_y gates on the low qubits plus X gates on the upper
           qubits that encode k_s // w.  Still depth 1, 0 CX.
 
-      (c) Otherwise  (truly offset, non-aligned k_s)
-          Dyadic decomposition of [k_s, N) into L <= m aligned blocks
+      (c) Otherwise  (general window)
+          Dyadic decomposition of [k_s, k_e) into L <= m aligned blocks
           {(a_k, j_k)} with block k covering [a_k, a_k + 2^j_k).  Each
           block already matches regime (b), so the full state is the
           weighted superposition (with disjoint supports)
@@ -1099,11 +1100,10 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
                                                  / (r^2 - 1) ),
 
           Assembly: Gleinig-Hoefler on the L anchor points {|a_k>} to
-          load the weights  (O(L*m) = O(m^2)), followed by a
-          multi-controlled R_y on each free bit of each block to spread
-          the anchor amplitude across the block (O(m^2) aggregate).
-          Total: O(m^2) gates, no ancilla, post-selection probability 1
-          (the blocks are disjoint).
+          load the weights, followed by a multi-controlled R_y on each
+          free bit of each block to spread the anchor amplitude across
+          the block.  Total: O(L*m^2) basis gates, no ancilla,
+          post-selection probability 1 (the blocks are disjoint).
 
     Parameters
     ----------
@@ -1112,7 +1112,8 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     params : dict
         Required:  'r' (float, > 0, != 1).
         Optional:  'k_s' (int, default 0, 0 <= k_s < N).
-                   'c'     (float, default 1.0) — affects only normalisation.
+                   'k_e' (int, default N, k_s < k_e <= N).
+                   'c'   (float, default 1.0) — affects only normalisation.
 
     References
     ----------
@@ -1123,17 +1124,20 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     r = params["r"]
     k_s = params.get("k_s", 0)
     N = 1 << m
+    k_e = params.get("k_e", N)
+    if k_e is None:
+        k_e = N
 
     qc = QuantumCircuit(m, name="geometric")
 
     # --- Regime (a): plain full-register product state -------------------
-    if k_s == 0:
+    if k_s == 0 and k_e == N:
         for j in range(m):
             qc.ry(2.0 * math.atan(r ** (1 << j)), j)
         return qc
 
-    # --- Regime (b): single dyadic block covering [k_s, N) -------------
-    w = N - k_s
+    # --- Regime (b): single dyadic block covering [k_s, k_e) -----------
+    w = k_e - k_s
     if (w & (w - 1)) == 0 and k_s % w == 0:
         m_low = w.bit_length() - 1
         for j in range(m_low):
@@ -1144,8 +1148,8 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
                 qc.x(m_low + j)
         return qc
 
-    # --- Regime (c): dyadic decomposition of [k_s, N) ------------------
-    blocks = _dyadic_decomposition(k_s, N)
+    # --- Regime (c): dyadic decomposition of [k_s, k_e) ----------------
+    blocks = _dyadic_decomposition(k_s, k_e)
     _dyadic_geometric_assemble(qc, m, r, k_s, blocks)
     return qc
 
@@ -1154,21 +1158,21 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
 # Helpers for GEOMETRIC regime (c)
 # ---------------------------------------------------------------------------
 
-def _dyadic_decomposition(s: int, N: int) -> list:
+def _dyadic_decomposition(s: int, e: int) -> list:
     """
-    Decompose the half-open interval [s, N) into maximal power-of-two-aligned
+    Decompose the half-open interval [s, e) into maximal power-of-two-aligned
     dyadic blocks.
 
     Each returned block is a pair (a_k, j_k) representing the interval
     [a_k, a_k + 2^j_k),  with  a_k % 2^j_k == 0.  The blocks are disjoint,
-    cover [s, N) exactly, and their count L satisfies L <= m = log2 N.
+    cover [s, e) exactly, and their count L satisfies L <= 2*ceil(log2(e)).
 
     Classical cost: O(L) integer ops.
 
     Algorithm: walk left-to-right, greedily picking the largest aligned
-    block starting at the current position that fits inside [s, N).
+    block starting at the current position that fits inside [s, e).
     At position `cur`, the largest admissible j is
-        j = min( trailing_zeros(cur),  floor(log2(N - cur)) )
+        j = min( trailing_zeros(cur),  floor(log2(e - cur)) )
     with the first term dropped when cur == 0.
 
     Reference: Bentley & Saxe, J. Algorithms 1(4):301-358, 1980
@@ -1178,9 +1182,10 @@ def _dyadic_decomposition(s: int, N: int) -> list:
     Parameters
     ----------
     s : int
-        Inclusive left endpoint (0 <= s < N).
-    N : int
-        Exclusive right endpoint, must be a power of 2.
+        Inclusive left endpoint (0 <= s < e).
+    e : int
+        Exclusive right endpoint.  Any positive integer (need not be a
+        power of 2; the algorithm handles arbitrary upper bounds).
 
     Returns
     -------
@@ -1189,8 +1194,8 @@ def _dyadic_decomposition(s: int, N: int) -> list:
     """
     blocks = []
     cur = s
-    while cur < N:
-        room = N - cur                       # largest j with 2^j <= room
+    while cur < e:
+        room = e - cur                       # largest j with 2^j <= room
         mx = room.bit_length() - 1
         if cur == 0:
             j = mx

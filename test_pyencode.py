@@ -1043,6 +1043,192 @@ class TestGeometricDyadic:
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
 
+class TestGeometricWindowed:
+    """
+    Coverage for the explicit-upper-bound form GEOMETRIC(r, k_s, k_e, c).
+
+    Mirrors SQUARE's [k_s, k_e) interval semantics. Backward-compatible:
+    omitting k_e (or passing k_e=None) preserves the original behaviour
+    of [k_s, N).
+    """
+
+    @staticmethod
+    def _reference(r, k_s, k_e, N, c=1.0):
+        """Unnormalised reference: c*r^(i-k_s) on [k_s, k_e), zero else."""
+        f = np.zeros(N, dtype=float)
+        f[k_s:k_e] = c * r ** np.arange(k_e - k_s)
+        return f / np.linalg.norm(f)
+
+    # ------------------------------------------------------------------
+    # Backward compatibility
+    # ------------------------------------------------------------------
+
+    def test_default_k_e_matches_no_k_e(self):
+        """GEOMETRIC(r, k_s) == GEOMETRIC(r, k_s, k_e=N) statevector-wise."""
+        for (r, k_s, N) in [(0.5, 0, 8), (0.7, 4, 16), (0.8, 5, 32)]:
+            qc1, info1 = encode(GEOMETRIC(r=r, k_s=k_s), N=N)
+            qc2, info2 = encode(GEOMETRIC(r=r, k_s=k_s, k_e=N), N=N)
+            sv1 = np.abs(np.array(statevector(qc1)))
+            sv2 = np.abs(np.array(statevector(qc2)))
+            np.testing.assert_allclose(sv1, sv2, atol=1e-10,
+                                       err_msg=f"r={r}, k_s={k_s}, N={N}")
+            assert info1.gate_count == info2.gate_count
+
+    def test_explicit_k_e_none_is_default(self):
+        """Passing k_e=None explicitly is identical to omitting it."""
+        qc1, _ = encode(GEOMETRIC(r=0.6, k_s=2), N=16)
+        qc2, _ = encode(GEOMETRIC(r=0.6, k_s=2, k_e=None), N=16)
+        sv1 = np.abs(np.array(statevector(qc1)))
+        sv2 = np.abs(np.array(statevector(qc2)))
+        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+
+    # ------------------------------------------------------------------
+    # Regime (b): aligned single dyadic block
+    # ------------------------------------------------------------------
+
+    def test_aligned_lower_half(self):
+        """[0, N/2): aligned single block, depth-1 product state."""
+        N = 16
+        qc, info = encode(GEOMETRIC(r=0.5, k_s=0, k_e=8), N=N, validate=True)
+        ref = self._reference(0.5, 0, 8, N)
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+        # Aligned regime: zero CX gates
+        assert info.gate_count_2q == 0
+        assert info.complexity == "O(m)"
+
+    def test_aligned_upper_half(self):
+        """[N/2, N): aligned single block with X on top qubit."""
+        N = 16
+        qc, info = encode(GEOMETRIC(r=0.5, k_s=8, k_e=16), N=N, validate=True)
+        ref = self._reference(0.5, 8, 16, N)
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+        assert info.gate_count_2q == 0
+        assert info.complexity == "O(m)"
+
+    def test_aligned_quarter(self):
+        """[N/4, N/2): aligned single block, internal."""
+        N = 16
+        qc, info = encode(GEOMETRIC(r=0.7, k_s=4, k_e=8), N=N, validate=True)
+        ref = self._reference(0.7, 4, 8, N)
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+        assert info.gate_count_2q == 0
+        assert info.complexity == "O(m)"
+
+    def test_aligned_two_wide(self):
+        """[4, 6): smallest non-trivial aligned window (w=2, k_s%2==0)."""
+        N = 8
+        qc, info = encode(GEOMETRIC(r=0.7, k_s=4, k_e=6), N=N, validate=True)
+        ref = self._reference(0.7, 4, 6, N)
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+        assert info.gate_count_2q == 0
+
+    def test_aligned_singleton(self):
+        """[k, k+1): width-1 aligned window degenerates to a basis state."""
+        N = 8
+        qc, info = encode(GEOMETRIC(r=0.5, k_s=3, k_e=4), N=N, validate=True)
+        ref = np.zeros(N); ref[3] = 1.0
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+        assert info.gate_count_2q == 0
+
+    # ------------------------------------------------------------------
+    # Regime (c): unaligned window via dyadic decomposition
+    # ------------------------------------------------------------------
+
+    def test_unaligned_window_small(self):
+        """[2, 10): not aligned (k_s % 8 != 0), uses dyadic regime."""
+        N = 16
+        qc, info = encode(GEOMETRIC(r=0.5, k_s=2, k_e=10), N=N, validate=True)
+        ref = self._reference(0.5, 2, 10, N)
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+        assert info.complexity == "O(m^2)"
+
+    def test_unaligned_window_growth_r(self):
+        """Growth ratio (r > 1) on a windowed support."""
+        N = 16
+        qc, info = encode(GEOMETRIC(r=1.5, k_s=3, k_e=11), N=N, validate=True)
+        ref = self._reference(1.5, 3, 11, N)
+        sv = np.abs(np.array(statevector(qc)))
+        np.testing.assert_allclose(sv, ref, atol=1e-10)
+
+    def test_unaligned_window_various(self):
+        """Sweep several windows and ratios."""
+        for (r, k_s, k_e, N) in [
+            (0.5, 1, 7, 8),
+            (0.6, 5, 13, 16),
+            (0.9, 3, 13, 16),
+            (0.3, 2, 17, 32),
+        ]:
+            qc, _ = encode(GEOMETRIC(r=r, k_s=k_s, k_e=k_e), N=N,
+                           validate=True)
+            ref = self._reference(r, k_s, k_e, N)
+            sv = np.abs(np.array(statevector(qc)))
+            np.testing.assert_allclose(
+                sv, ref, atol=1e-10,
+                err_msg=f"r={r}, k_s={k_s}, k_e={k_e}, N={N}")
+
+    def test_zero_outside_window(self):
+        """Amplitudes are exactly zero outside [k_s, k_e)."""
+        N = 32
+        qc, _ = encode(GEOMETRIC(r=0.7, k_s=5, k_e=20), N=N)
+        sv = np.abs(np.array(statevector(qc)))
+        # Strict zeros below k_s and at-or-above k_e.
+        assert np.all(sv[:5]   < 1e-12)
+        assert np.all(sv[20:]  < 1e-12)
+        # Strict positives inside.
+        assert np.all(sv[5:20] > 1e-6)
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def test_invalid_k_e_le_k_s(self):
+        """k_e <= k_s raises ValueError at construction time."""
+        with pytest.raises(ValueError, match="k_s < k_e"):
+            GEOMETRIC(r=0.5, k_s=5, k_e=5)
+        with pytest.raises(ValueError, match="k_s < k_e"):
+            GEOMETRIC(r=0.5, k_s=10, k_e=2)
+
+    def test_invalid_k_e_gt_N(self):
+        """k_e > N raises at encode time (N is only known then)."""
+        with pytest.raises(ValueError, match="k_e <= N"):
+            encode(GEOMETRIC(r=0.5, k_s=2, k_e=20), N=8)
+
+    # ------------------------------------------------------------------
+    # Composition: PARTITION of windowed GEOMETRICs
+    # ------------------------------------------------------------------
+
+    def test_partition_two_disjoint_windows(self):
+        """Two disjoint windowed GEOMETRICs compose under PARTITION."""
+        N = 32
+        qc, info = encode(
+            PARTITION([
+                GEOMETRIC(r=0.5, k_s=0,  k_e=8),
+                GEOMETRIC(r=0.7, k_s=16, k_e=24),
+            ]),
+            N=N, validate=True)
+        # Check supports
+        sv = np.abs(np.array(statevector(qc)))
+        assert np.all(sv[8:16] < 1e-12)
+        assert np.all(sv[24:]  < 1e-12)
+        assert np.all(sv[0:8]  > 1e-9)
+        assert np.all(sv[16:24] > 1e-9)
+        assert info.success_probability == 1.0
+
+    def test_partition_overlap_rejected(self):
+        """Overlapping windowed GEOMETRICs must be rejected by PARTITION."""
+        with pytest.raises(ValueError, match="overlap"):
+            encode(PARTITION([
+                GEOMETRIC(r=0.5, k_s=0, k_e=8),
+                GEOMETRIC(r=0.7, k_s=4, k_e=12),  # overlaps [4, 8)
+            ]), N=16)
+
+
 class TestScaling:
     """
     Verify that each pattern's gate count scales as O(poly(m)),

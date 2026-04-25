@@ -202,23 +202,26 @@ def _predict_walsh(m: int, params: dict) -> dict:
 def _predict_geometric(m: int, params: dict) -> dict:
     """GEOMETRIC: three regimes (see synthesizer._synth_geometric).
 
-    Regime (a) k_s == 0                       : m R_y gates, 0 CX, depth 1.
-    Regime (b) single dyadic block              : log2(w) + popcount(k_s/w)
-                                                   1-qubit gates, 0 CX, depth 1.
-    Regime (c) general dyadic decomposition     : O(m^2) gates total,
-                                                   bounded by
-                                                     anchors (L*m) + spread
-                                                     (sum_k j_k * (m - j_k))
-                                                   multi-controlled ops.
+    Let w = k_e - k_s (k_e defaults to N).
+      Regime (a) k_s == 0 and k_e == N        : m R_y gates, 0 CX, depth 1.
+      Regime (b) single aligned dyadic block  : log2(w) + popcount(k_s/w)
+                                                  1-qubit gates, 0 CX, depth 1.
+      Regime (c) general dyadic decomposition : O(L*m^2) basis gates,
+                                                  bounded by
+                                                    anchors (L*MCRy) + spread
+                                                    (sum_k j_k * MCRy(m-j_k))
+                                                  multi-controlled ops.
 
     Transpiler may collapse small-angle rotations; returned counts are
     upper bounds.
     """
     k_s = params.get("k_s", 0)
     N = 1 << m
+    k_e_raw = params.get("k_e", N)
+    k_e = N if k_e_raw is None else int(k_e_raw)
 
-    # Regime (a)
-    if k_s == 0:
+    # Regime (a): full register
+    if k_s == 0 and k_e == N:
         return dict(
             gate_count_1q=m,
             gate_count_2q=0,
@@ -227,7 +230,7 @@ def _predict_geometric(m: int, params: dict) -> dict:
             exact=False,
         )
 
-    w = N - k_s
+    w = k_e - k_s
 
     # Regime (b): single dyadic block
     if (w & (w - 1)) == 0 and k_s % w == 0:
@@ -242,13 +245,11 @@ def _predict_geometric(m: int, params: dict) -> dict:
             exact=False,
         )
 
-    # Regime (c): dyadic decomposition.  Analytical O(m^2) bound using
-    # the MCRy cost model (see _mcry_cost).  Anchor load via Gleinig-
-    # Hoefler uses one MCRy per anchor reduction with up to (m-1) controls.
+    # Regime (c): dyadic decomposition of [k_s, k_e).
     blocks = []
     cur = k_s
-    while cur < N:
-        room = N - cur
+    while cur < k_e:
+        room = k_e - cur
         mx = room.bit_length() - 1
         if cur == 0:
             j = mx
@@ -522,8 +523,10 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
                 atoms.extend(_partition_dyadic_blocks(k_s, k_e))
         elif vt == PatternKind.GEOMETRIC:
             k_s = int(p.get("k_s", 0))
-            if k_s < N:
-                atoms.extend(_partition_dyadic_blocks(k_s, N))
+            k_e_raw = p.get("k_e", N)
+            k_e = N if k_e_raw is None else int(k_e_raw)
+            if k_s < k_e:
+                atoms.extend(_partition_dyadic_blocks(k_s, k_e))
         else:
             raise TypeError(
                 f"PARTITION: component type {vt.name} has full or dense "

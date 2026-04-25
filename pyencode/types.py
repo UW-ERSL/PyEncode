@@ -158,28 +158,33 @@ class FOURIER(_Pattern):
 
 
 class GEOMETRIC(_Pattern):
-    """GEOMETRIC(r, k_s=0, c=1.0) — geometric sequence, optionally offset.
+    """GEOMETRIC(r, k_s=0, k_e=None, c=1.0) — geometric sequence on [k_s, k_e).
 
     Prepares a state proportional to:
-      f_i = c * r^(i - k_s)   for i in [k_s, N),
-      f_i = 0                   for i in [0, k_s).
+      f_i = c * r^(i - k_s)   for i in [k_s, k_e),
+      f_i = 0                 elsewhere.
 
-    With k_s=0 (default), the vector is multiplicatively separable over
+    The default k_e=None means "use N" (i.e. the support is [k_s, N)),
+    matching the historical behavior. An explicit k_e gives an upper bound
+    on the support window, mirroring the SQUARE(k_s, k_e, c) API.
+
+    With k_s=0 and k_e=N, the vector is multiplicatively separable over
     the bits of i:
       f_i = c * r^(sum_j b_j * 2^j) = c * prod_j r^(b_j * 2^j)
     so the quantum state is a product state prepared by m independent
     R_y rotations — one per qubit, zero entangling gates, depth 1.
 
-    With k_s > 0, there are two implementation tiers:
+    For a restricted window [k_s, k_e), there are two implementation tiers:
 
-    Tier 1 (power-of-2-aligned): If the window width w = N - k_s is a 
-    power of 2 AND k_s is a multiple of w, uses an efficient construction
-    with geometric product state on lower qubits + X gates on upper qubits.
+    Tier 1 (power-of-2-aligned): If the window width w = k_e - k_s is a
+    power of 2 AND k_s is a multiple of w, the construction uses a
+    geometric product state on the lower log2(w) qubits plus X gates on
+    the upper qubits to fix the window position.
     Gate count: log2(w) + popcount(k_s/w), zero two-qubit gates, depth 1.
 
-    Tier 2 (arbitrary offset): For any other k_s value, uses sparse
-    encoding techniques to synthesize the geometric amplitudes directly.
-    Gate count: O(w*m) where w = N - k_s, includes two-qubit gates.
+    Tier 2 (arbitrary window): For any other (k_s, k_e), uses dyadic
+    decomposition of [k_s, k_e) and Gleinig-Hoefler anchor loading.
+    Cost: O(L*m^2) basis gates with L <= m blocks; includes two-qubit gates.
 
     Parameters
     ----------
@@ -188,33 +193,42 @@ class GEOMETRIC(_Pattern):
         0 < r and r != 1. Typical values: 0 < r < 1 for decay,
         r > 1 for growth.
     k_s : int, optional (default 0)
-        Starting index of the geometric sequence. Amplitudes below this
-        index are zero. Any value 0 <= k_s < N is supported.
-        Tier 1 examples at N=64: k_s=0, 32, 48, 56, 60, 62, 63.
-        Tier 2 examples at N=64: k_s=4, 10, 17, etc.
+        Starting index (inclusive). Amplitudes below this index are zero.
+        Must satisfy 0 <= k_s < N.
+    k_e : int or None, optional (default None)
+        Ending index (exclusive). Amplitudes at or above this index are
+        zero. None means k_e = N (full window from k_s to end of register).
+        Must satisfy k_s < k_e <= N.
     c : float, optional
         Leading amplitude (default 1.0). Only affects normalization.
 
     Examples
     --------
-    >>> circuit, info = encode(GEOMETRIC(r=0.95), N=64)
-    >>> circuit, info = encode(GEOMETRIC(r=0.5), N=16)
-    >>> circuit, info = encode(GEOMETRIC(r=0.9, k_s=32), N=64)  # tier 1
-    >>> circuit, info = encode(GEOMETRIC(r=0.8, k_s=4), N=256)  # tier 2
+    >>> circuit, info = encode(GEOMETRIC(r=0.95), N=64)               # full window
+    >>> circuit, info = encode(GEOMETRIC(r=0.5, k_s=0, k_e=8), N=16)  # tier 1: lower half
+    >>> circuit, info = encode(GEOMETRIC(r=0.9, k_s=32), N=64)        # tier 1: upper half
+    >>> circuit, info = encode(GEOMETRIC(r=0.8, k_s=4, k_e=10), N=16) # tier 2
     """
-    def __init__(self, r, k_s=0, c=1.0):
+    def __init__(self, r, k_s=0, k_e=None, c=1.0):
         self.kind = PatternKind.GEOMETRIC
         r = float(r)
         if r <= 0:
             raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
         if abs(r - 1.0) < 1e-14:
             raise ValueError(
-                "GEOMETRIC r=1.0 is a uniform vector; use STEP(k_e=N) instead."
+                "GEOMETRIC r=1.0 is a uniform vector; use STEP or SQUARE instead."
             )
         k_s = int(k_s)
         if k_s < 0:
             raise ValueError(f"GEOMETRIC k_s must be non-negative, got {k_s}.")
-        self.params = {"r": r, "k_s": k_s, "c": float(c)}
+        if k_e is not None:
+            k_e = int(k_e)
+            if k_e <= k_s:
+                raise ValueError(
+                    f"GEOMETRIC requires k_s < k_e; got k_s={k_s}, k_e={k_e}."
+                )
+        # Store k_e as None when unset; _validate_params resolves to N.
+        self.params = {"r": r, "k_s": k_s, "k_e": k_e, "c": float(c)}
 
 
 class HAMMING(_Pattern):
@@ -902,8 +916,8 @@ _PARAM_SCHEMAS = {
     },
     PatternKind.GEOMETRIC: {
         "required": {"r"},
-        "optional": {"c", "k_s"},
-        "description": "r=<base (common ratio) of geometric sequence>, k_s=<starting index (default 0)>",
+        "optional": {"c", "k_s", "k_e"},
+        "description": "r=<base (common ratio) of geometric sequence>, k_s=<starting index (default 0)>, k_e=<ending index, default N>",
     },
     PatternKind.HAMMING: {
         "required": {"r"},
