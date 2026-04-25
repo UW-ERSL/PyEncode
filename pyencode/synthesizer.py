@@ -124,7 +124,7 @@ def _synth_uniform_load(m: int, params: dict) -> QuantumCircuit:
 
 
 # ---------------------------------------------------------------------------
-# Step load  f[:k_s] = c
+# Step load  f[:k_e] = c
 # ---------------------------------------------------------------------------
 
 def _synth_step_load(m: int, params: dict) -> QuantumCircuit:
@@ -156,10 +156,10 @@ def _synth_step_load(m: int, params: dict) -> QuantumCircuit:
     preparation of uniform quantum superposition states.
     Quantum Inf. Process. 23, 38.
     """
-    M = params["k_s"]
+    M = params["k_e"]
     N = 2 ** m
     if M <= 0 or M > N:
-        raise ValueError(f"k_s={M} out of range [1, {N}]")
+        raise ValueError(f"k_e={M} out of range [1, {N}]")
 
     qc = QuantumCircuit(m, name="step_load")
 
@@ -230,35 +230,35 @@ def _synth_step_load(m: int, params: dict) -> QuantumCircuit:
 
 
 # ---------------------------------------------------------------------------
-# Square load  f[k1:k2] = c
+# Square load  f[k_s:k_e] = c
 # ---------------------------------------------------------------------------
 
 def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
     """
-    Prepare (1/√w) Σ_{j=k1}^{k2-1} |j⟩  where w = k2 - k1.
+    Prepare (1/√w) Σ_{j=k_s}^{k_e-1} |j⟩  where w = k_e - k_s.
 
     Construction
     ------------
-    Uses the identity  [k1, k2)  =  shift of  [0, w)  by constant k1:
+    Uses the identity  [k_s, k_e)  =  shift of  [0, w)  by constant k_s:
 
-        |ψ_sq⟩ = ADD(k1) · STEP(w)
+        |ψ_sq⟩ = ADD(k_s) · STEP(w)
 
     where STEP(w) prepares the uniform superposition over [0, w) and
-    ADD(k1) is the Draper QFT-based adder for the classical constant k1.
+    ADD(k_s) is the Draper QFT-based adder for the classical constant k_s.
 
     Steps
     -----
     1. STEP(w) on m qubits: O(m) gates.
-    2. ADD(k1): QFT + O(m) phase gates + QFT†.
+    2. ADD(k_s): QFT + O(m) phase gates + QFT†.
        The QFT dominates at O(m²), making the total circuit O(m²).
 
     Special cases
     -------------
-    k1 = 0 : reduces to plain STEP(k2) with no adder — O(m) total.
+    k_s = 0 : reduces to plain STEP(k_e) with no adder — O(m) total.
     Aligned power-of-2 block : X gates + H gates — O(m) total.
 
     Gate count: O(m) for STEP + O(m²) for adder = O(m²) in general.
-    For k1 = 0: O(m).  For power-of-2-aligned blocks: O(m).
+    For k_s = 0: O(m).  For power-of-2-aligned blocks: O(m).
 
     Note on the paper's O(m) claim
     --------------------------------
@@ -268,32 +268,32 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
     deterministically uncomputed; in practice the STEP+adder approach
     here is simpler, correct, and ancilla-free.
     """
-    k1 = params["k1"]
-    k2 = params["k2"]
+    k_s = params["k_s"]
+    k_e = params["k_e"]
     N  = 2 ** m
-    w  = k2 - k1
+    w  = k_e - k_s
 
     if w <= 0:
-        raise ValueError(f"SQUARE requires k1 < k2, got k1={k1} k2={k2}")
+        raise ValueError(f"SQUARE requires k_s < k_e, got k_s={k_s} k_e={k_e}")
 
-    # ── Special case: k1 == 0 → plain STEP, no adder ─────────────────────
-    if k1 == 0:
-        return _synth_step_load(m, {"k_s": k2})
+    # ── Special case: k_s == 0 → plain STEP, no adder ─────────────────────
+    if k_s == 0:
+        return _synth_step_load(m, {"k_e": k_e})
 
     # ── Special case: aligned power-of-2 block → X + H, no adder ─────────
-    if (w & (w - 1)) == 0 and (k1 % w == 0):
+    if (w & (w - 1)) == 0 and (k_s % w == 0):
         p = int(round(math.log2(w)))
         qc = QuantumCircuit(m, name="square_load")
         for bit in range(m):
-            if (k1 >> bit) & 1:
+            if (k_s >> bit) & 1:
                 qc.x(bit)
         for q in range(p):
             qc.h(q)
         return qc
 
-    # ── General case: STEP(w) + Draper QFT constant adder(k1) ────────────
-    step = _synth_step_load(m, {"k_s": w})
-    adder = _draper_add_const(m, k1)
+    # ── General case: STEP(w) + Draper QFT constant adder(k_s) ────────────
+    step = _synth_step_load(m, {"k_e": w})
+    adder = _draper_add_const(m, k_s)
     qc = step.compose(adder)
     qc.name = "square_load"
     return qc
@@ -1075,27 +1075,27 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
 def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     """
     GEOMETRIC: prepare |psi> proportional to
-        sum_{i=start}^{N-1}  r^(i - start) |i>            on m qubits,
+        sum_{i=k_s}^{N-1}  r^(i - k_s) |i>            on m qubits,
     zero elsewhere.  Three internal regimes are selected automatically:
 
-      (a) start == 0
+      (a) k_s == 0
           Plain product state.  m R_y gates, 0 CX, depth 1.
           Theta_j = 2*arctan(r^(2^j)) on qubit j.
 
-      (b) [start, N) is a single dyadic block
-          i.e. w = N-start is a power of two AND start % w == 0.
+      (b) [k_s, N) is a single dyadic block
+          i.e. w = N-k_s is a power of two AND k_s % w == 0.
           log2(w) R_y gates on the low qubits plus X gates on the upper
-          qubits that encode start // w.  Still depth 1, 0 CX.
+          qubits that encode k_s // w.  Still depth 1, 0 CX.
 
-      (c) Otherwise  (truly offset, non-aligned start)
-          Dyadic decomposition of [start, N) into L <= m aligned blocks
+      (c) Otherwise  (truly offset, non-aligned k_s)
+          Dyadic decomposition of [k_s, N) into L <= m aligned blocks
           {(a_k, j_k)} with block k covering [a_k, a_k + 2^j_k).  Each
           block already matches regime (b), so the full state is the
           weighted superposition (with disjoint supports)
 
               |psi> = sum_k (w_k / Z) |block_k>,
 
-              w_k = r^(a_k - start) * sqrt( (r^(2*2^j_k) - 1)
+              w_k = r^(a_k - k_s) * sqrt( (r^(2*2^j_k) - 1)
                                                  / (r^2 - 1) ),
 
           Assembly: Gleinig-Hoefler on the L anchor points {|a_k>} to
@@ -1111,7 +1111,7 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
         Number of qubits (N = 2^m).
     params : dict
         Required:  'r' (float, > 0, != 1).
-        Optional:  'start' (int, default 0, 0 <= start < N).
+        Optional:  'k_s' (int, default 0, 0 <= k_s < N).
                    'c'     (float, default 1.0) — affects only normalisation.
 
     References
@@ -1121,32 +1121,32 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     Bentley & Saxe, J. Algorithms 1(4), 1980 (dyadic interval decomposition).
     """
     r = params["r"]
-    start = params.get("start", 0)
+    k_s = params.get("k_s", 0)
     N = 1 << m
 
     qc = QuantumCircuit(m, name="geometric")
 
     # --- Regime (a): plain full-register product state -------------------
-    if start == 0:
+    if k_s == 0:
         for j in range(m):
             qc.ry(2.0 * math.atan(r ** (1 << j)), j)
         return qc
 
-    # --- Regime (b): single dyadic block covering [start, N) -------------
-    w = N - start
-    if (w & (w - 1)) == 0 and start % w == 0:
+    # --- Regime (b): single dyadic block covering [k_s, N) -------------
+    w = N - k_s
+    if (w & (w - 1)) == 0 and k_s % w == 0:
         m_low = w.bit_length() - 1
         for j in range(m_low):
             qc.ry(2.0 * math.atan(r ** (1 << j)), j)
-        upper_val = start // w
+        upper_val = k_s // w
         for j in range(m - m_low):
             if (upper_val >> j) & 1:
                 qc.x(m_low + j)
         return qc
 
-    # --- Regime (c): dyadic decomposition of [start, N) ------------------
-    blocks = _dyadic_decomposition(start, N)
-    _dyadic_geometric_assemble(qc, m, r, start, blocks)
+    # --- Regime (c): dyadic decomposition of [k_s, N) ------------------
+    blocks = _dyadic_decomposition(k_s, N)
+    _dyadic_geometric_assemble(qc, m, r, k_s, blocks)
     return qc
 
 
@@ -1205,11 +1205,11 @@ def _dyadic_decomposition(s: int, N: int) -> list:
 def _dyadic_geometric_assemble(qc: QuantumCircuit,
                                m: int,
                                r: float,
-                               start: int,
+                               k_s: int,
                                blocks: list) -> None:
     """
     Build the GEOMETRIC circuit for regime (c) into `qc` (acts on all m
-    qubits).  `blocks` is the output of _dyadic_decomposition(start, N).
+    qubits).  `blocks` is the output of _dyadic_decomposition(k_s, N).
 
     Two-step assembly:
 
@@ -1227,13 +1227,13 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
                standard product-state formula applies.
 
     The weights are
-        w_k^2 = r^(2*(a_k - start)) * (r^(2*2^j_k) - 1) / (r^2 - 1)
-              = sum_{i in block_k} r^(2*(i - start))
-    so that sum_k w_k^2 = Z^2 = sum_{i=start}^{N-1} r^(2*(i - start)).
+        w_k^2 = r^(2*(a_k - k_s)) * (r^(2*2^j_k) - 1) / (r^2 - 1)
+              = sum_{i in block_k} r^(2*(i - k_s))
+    so that sum_k w_k^2 = Z^2 = sum_{i=k_s}^{N-1} r^(2*(i - k_s)).
 
     Correctness sketch: after step 2, the amplitude on |a_k + i> for
-    i in [0, 2^j_k) is  (w_k/Z) * r^i / sqrt(w_k^2 / r^(2*(a_k-start)))
-    = r^(a_k + i - start) / Z,  which matches the target state.
+    i in [0, 2^j_k) is  (w_k/Z) * r^i / sqrt(w_k^2 / r^(2*(a_k-k_s)))
+    = r^(a_k + i - k_s) / Z,  which matches the target state.
     """
     r2 = r * r
 
@@ -1246,7 +1246,7 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
             block_norm2 = float(size)
         else:
             block_norm2 = (r2 ** size - 1.0) / (r2 - 1.0)
-        weights.append((r ** (a_k - start)) * math.sqrt(block_norm2))
+        weights.append((r ** (a_k - k_s)) * math.sqrt(block_norm2))
     Z = math.sqrt(sum(w * w for w in weights))
 
     # Step 1: load anchor superposition via Gleinig-Hoefler on L points.
@@ -1369,7 +1369,7 @@ def _synth_staircase(m: int, params: dict) -> QuantumCircuit:
         step k:   CR_y(theta_k) controlled by q_{k-1}, target q_k,
                                                           for k = 1..m-1
 
-    At the start of step k the "active" branch carries the probability mass
+    At the k_s of step k the "active" branch carries the probability mass
     of all levels >= k.  The angle theta_k is chosen so that cos(theta_k/2)
     is f_k's share of that mass and sin(theta_k/2) is the remaining tail.
 

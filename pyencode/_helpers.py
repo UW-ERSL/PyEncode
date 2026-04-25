@@ -100,18 +100,18 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
 
     if kind == PatternKind.STEP:
         result.setdefault("c", 1.0)
-        k_s = int(result["k_s"])
-        if k_s < 1 or k_s > N:
-            raise ValueError(f"k_s={k_s} out of range [1, {N}].")
-        result["k_s"] = k_s
+        k_e = int(result["k_e"])
+        if k_e < 1 or k_e > N:
+            raise ValueError(f"k_e={k_e} out of range [1, {N}].")
+        result["k_e"] = k_e
         result["c"] = float(result["c"])
 
     elif kind == PatternKind.SQUARE:
         result.setdefault("c", 1.0)
-        k1, k2 = int(result["k1"]), int(result["k2"])
-        if k1 < 0 or k2 > N or k1 >= k2:
-            raise ValueError(f"Invalid range [{k1}, {k2}) for N={N}.")
-        result["k1"], result["k2"] = k1, k2
+        k_s, k_e = int(result["k_s"]), int(result["k_e"])
+        if k_s < 0 or k_e > N or k_s >= k_e:
+            raise ValueError(f"Invalid range [{k_s}, {k_e}) for N={N}.")
+        result["k_s"], result["k_e"] = k_s, k_e
         result["c"] = float(result["c"])
 
     elif kind == PatternKind.SPARSE:
@@ -133,20 +133,20 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
 
     elif kind == PatternKind.GEOMETRIC:
         result.setdefault("c", 1.0)
-        result.setdefault("start", 0)
+        result.setdefault("k_s", 0)
         r = float(result["r"])
         if r <= 0:
             raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
         if abs(r - 1.0) < 1e-14:
-            raise ValueError("GEOMETRIC r=1.0 is a uniform vector; use STEP(k_s=N).")
-        start = int(result["start"])
-        if start < 0 or start >= N:
+            raise ValueError("GEOMETRIC r=1.0 is a uniform vector; use STEP(k_e=N).")
+        k_s = int(result["k_s"])
+        if k_s < 0 or k_s >= N:
             raise ValueError(
-                f"GEOMETRIC start must satisfy 0 <= start < N; got start={start}, N={N}."
+                f"GEOMETRIC k_s must satisfy 0 <= k_s < N; got k_s={k_s}, N={N}."
             )
-        # Tier-2: No alignment constraint - any start value 0 <= start < N is supported
+        # Tier-2: No alignment constraint - any k_s value 0 <= k_s < N is supported
         result["r"] = r
-        result["start"] = start
+        result["k_s"] = k_s
         result["c"] = float(result["c"])
 
     elif kind == PatternKind.DICKE:
@@ -214,24 +214,24 @@ def _synthesize_and_build_info(
 
     # SQUARE: override complexity for special cases that avoid the Draper adder
     if pattern.kind == PatternKind.SQUARE:
-        k1 = pattern.params.get("k1", 0)
-        k2 = pattern.params.get("k2", 0)
-        w  = k2 - k1
-        aligned = (w > 0) and ((w & (w - 1)) == 0) and (k1 % w == 0)
-        if k1 == 0 or aligned:
+        k_s = pattern.params.get("k_s", 0)
+        k_e = pattern.params.get("k_e", 0)
+        w  = k_e - k_s
+        aligned = (w > 0) and ((w & (w - 1)) == 0) and (k_s % w == 0)
+        if k_s == 0 or aligned:
             complexity = "O(m)"
     
     # GEOMETRIC: override complexity for dyadic (non-aligned) case.
     # Regimes:
-    #   (a) start == 0                                    : O(m)
-    #   (b) [start, N) is a single aligned dyadic block   : O(m)
+    #   (a) k_s == 0                                    : O(m)
+    #   (b) [k_s, N) is a single aligned dyadic block   : O(m)
     #   (c) otherwise                                     : O(m^2)
     if pattern.kind == PatternKind.GEOMETRIC:
-        start = pattern.params.get("start", 0)
-        if start > 0:
+        k_s = pattern.params.get("k_s", 0)
+        if k_s > 0:
             N = 2 ** m
-            w = N - start
-            aligned = (w & (w - 1)) == 0 and start % w == 0
+            w = N - k_s
+            aligned = (w & (w - 1)) == 0 and k_s % w == 0
             if not aligned:
                 complexity = "O(m^2)"
 
@@ -292,10 +292,10 @@ def _build_expected_vector(
     lt = pattern.kind
     p  = pattern.params
     if lt == PatternKind.STEP:
-        f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
+        f = np.zeros(N); f[:p["k_e"]] = p.get("c", 1.0); return f
 
     if lt == PatternKind.SQUARE:
-        f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
+        f = np.zeros(N); f[p["k_s"]:p["k_e"]] = p.get("c", 1.0); return f
 
     if lt == PatternKind.WALSH:
         k = p["k"]
@@ -320,11 +320,11 @@ def _build_expected_vector(
     if lt == PatternKind.GEOMETRIC:
         r = p["r"]
         c = p.get("c", 1.0)
-        start = p.get("start", 0)
+        k_s = p.get("k_s", 0)
         f = np.zeros(N, dtype=float)
-        if start < N:
-            idx = np.arange(start, N)
-            f[start:] = c * (r ** (idx - start))
+        if k_s < N:
+            idx = np.arange(k_s, N)
+            f[k_s:] = c * (r ** (idx - k_s))
         return f
 
     if lt == PatternKind.HAMMING:
@@ -378,9 +378,9 @@ def _build_component_vector(comp: _Pattern, N: int):
     """Materialise a single component vector from its constructor."""
     p = comp.params
     if comp.kind == PatternKind.STEP:
-        f = np.zeros(N); f[:p["k_s"]] = p.get("c", 1.0); return f
+        f = np.zeros(N); f[:p["k_e"]] = p.get("c", 1.0); return f
     if comp.kind == PatternKind.SQUARE:
-        f = np.zeros(N); f[p["k1"]:p["k2"]] = p.get("c", 1.0); return f
+        f = np.zeros(N); f[p["k_s"]:p["k_e"]] = p.get("c", 1.0); return f
     if comp.kind == PatternKind.WALSH:
         k = p["k"]
         c0 = p.get("c0", 1.0)
@@ -398,11 +398,11 @@ def _build_component_vector(comp: _Pattern, N: int):
     if comp.kind == PatternKind.GEOMETRIC:
         r = p["r"]
         c = p.get("c", 1.0)
-        start = p.get("start", 0)
+        k_s = p.get("k_s", 0)
         f = np.zeros(N, dtype=float)
-        if start < N:
-            idx = np.arange(start, N)
-            f[start:] = c * (r ** (idx - start))
+        if k_s < N:
+            idx = np.arange(k_s, N)
+            f[k_s:] = c * (r ** (idx - k_s))
         return f
     if comp.kind == PatternKind.HAMMING:
         r = p["r"]
@@ -688,13 +688,13 @@ def _validate_fourier_params(params: dict, N: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def _support_interval(comp):
-    """Return (k1, k2) interval of support, or None if full/unknown support."""
+    """Return (k_s, k_e) interval of support, or None if full/unknown support."""
     vt = comp.kind
     p  = comp.params
     if vt == PatternKind.STEP:
-        return (0, p["k_s"])
+        return (0, p["k_e"])
     if vt == PatternKind.SQUARE:
-        return (p["k1"], p["k2"])
+        return (p["k_s"], p["k_e"])
     if vt == PatternKind.SPARSE:
         indices = [ld["k"] for ld in p["loads"]]
         return (min(indices), max(indices) + 1)
@@ -1144,29 +1144,29 @@ def _partition_atoms(comp, N):
         return atoms
     if comp.kind == PatternKind.STEP:
         c = float(p.get("c", 1.0))
-        k_s = int(p["k_s"])
-        if k_s <= 0:
+        k_e = int(p["k_e"])
+        if k_e <= 0:
             return atoms
-        for (a_k, j_k) in _dyadic_decomposition(0, k_s):
+        for (a_k, j_k) in _dyadic_decomposition(0, k_e):
             atoms.append((a_k, j_k, c, 1.0))
         return atoms
     if comp.kind == PatternKind.SQUARE:
         c = float(p.get("c", 1.0))
-        k1 = int(p["k1"])
-        k2 = int(p["k2"])
-        if k2 <= k1:
+        k_s = int(p["k_s"])
+        k_e = int(p["k_e"])
+        if k_e <= k_s:
             return atoms
-        for (a_k, j_k) in _dyadic_decomposition(k1, k2):
+        for (a_k, j_k) in _dyadic_decomposition(k_s, k_e):
             atoms.append((a_k, j_k, c, 1.0))
         return atoms
     if comp.kind == PatternKind.GEOMETRIC:
         r = float(p["r"])
         c_seg = float(p.get("c", 1.0))
-        start = int(p.get("start", 0))
-        if start >= N:
+        k_s = int(p.get("k_s", 0))
+        if k_s >= N:
             return atoms
-        for (a_k, j_k) in _dyadic_decomposition(start, N):
-            c_at_a = c_seg * (r ** (a_k - start))
+        for (a_k, j_k) in _dyadic_decomposition(k_s, N):
+            c_at_a = c_seg * (r ** (a_k - k_s))
             atoms.append((a_k, j_k, c_at_a, r))
         return atoms
     raise TypeError(

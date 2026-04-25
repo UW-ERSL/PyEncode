@@ -220,22 +220,22 @@ def _emit_uniform_load(m: int, params: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Step load  f[:k_s] = c
+# Step load  f[:k_e] = c
 # ---------------------------------------------------------------------------
 
 def _emit_step_load(m: int, params: dict) -> str:
-    k_s = params["k_s"]
+    k_e = params["k_e"]
     N   = 2 ** m
-    lines = [_header(m, f"STEP_LOAD  k_s={k_s}")]
+    lines = [_header(m, f"STEP_LOAD  k_e={k_e}")]
 
-    if k_s & (k_s - 1) == 0:
+    if k_e & (k_e - 1) == 0:
         # Power-of-2: pure H gates
-        p = int(round(math.log2(k_s)))
+        p = int(round(math.log2(k_e)))
         lines += [
             f"qc = QuantumCircuit({m}, name='step_load')",
             f"",
-            f"# k_s={k_s} = 2^{p}: apply H to the {p} lowest qubits.",
-            f"# Upper qubits remain |0>, restricting support to [0, {k_s}).",
+            f"# k_e={k_e} = 2^{p}: apply H to the {p} lowest qubits.",
+            f"# Upper qubits remain |0>, restricting support to [0, {k_e}).",
         ]
         for q in range(p):
             lines.append(f"qc.h({q})")
@@ -246,13 +246,13 @@ def _emit_step_load(m: int, params: dict) -> str:
             f"",
             f"qc = QuantumCircuit({m}, name='step_load')",
             f"",
-            f"# k_s={k_s} is not a power of 2 — use a binary-tree Ry decomposition.",
+            f"# k_e={k_e} is not a power of 2 — use a binary-tree Ry decomposition.",
             f"# Each Ry angle splits amplitude between 'within range' and 'outside'.",
         ]
-        lines += _step_ry_lines(k_s, m)
+        lines += _step_ry_lines(k_e, m)
 
     lines.append("")
-    lines.append(f"# Circuit prepares (1/sqrt({k_s})) sum_{{k=0}}^{{{k_s-1}}} |k>")
+    lines.append(f"# Circuit prepares (1/sqrt({k_e})) sum_{{k=0}}^{{{k_e-1}}} |k>")
     return "\n".join(lines)
 
 
@@ -293,39 +293,39 @@ def _step_ry_lines(k: int, m: int) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Square load  f[k1:k2] = c
+# Square load  f[k_s:k_e] = c
 # ---------------------------------------------------------------------------
 
 def _emit_square_load(m: int, params: dict) -> str:
-    k1 = params["k1"]
-    k2 = params["k2"]
-    w  = k2 - k1
-    lines = [_header(m, f"SQUARE_LOAD  k1={k1}  k2={k2}")]
+    k_s = params["k_s"]
+    k_e = params["k_e"]
+    w  = k_e - k_s
+    lines = [_header(m, f"SQUARE_LOAD  k_s={k_s}  k_e={k_e}")]
 
-    if (w & (w - 1)) == 0 and (k1 % w == 0):
+    if (w & (w - 1)) == 0 and (k_s % w == 0):
         p = int(round(math.log2(w)))
         lines += [
             f"qc = QuantumCircuit({m}, name='square_load')",
             f"",
-            f"# Segment [{k1}, {k2}) is w-aligned (k1={k1} is a multiple of w={w}=2^{p}).",
-            f"# Encode start address k1={k1} on upper bits, then H on lower {p} bits.",
+            f"# Segment [{k_s}, {k_e}) is w-aligned (k_s={k_s} is a multiple of w={w}=2^{p}).",
+            f"# Encode k_s address k_s={k_s} on upper bits, then H on lower {p} bits.",
         ]
         for bit in range(m):
-            if (k1 >> bit) & 1:
+            if (k_s >> bit) & 1:
                 lines.append(f"qc.x({bit})  # set address bit {bit}")
         for q in range(p):
             lines.append(f"qc.h({q})  # uniform superposition over segment")
     else:
         lines += [
             f"",
-            f"# General segment [{k1}, {k2}): STEP({w}) + Draper adder({k1})",
+            f"# General segment [{k_s}, {k_e}): STEP({w}) + Draper adder({k_s})",
             f"# (circuit synthesized internally by PyEncode)",
             f"qc = QuantumCircuit({m}, name='square_load')",
         ]
 
     lines.append("")
     lines.append(
-        f"# Circuit prepares (1/sqrt({w})) sum_{{k={k1}}}^{{{k2-1}}} |k>"
+        f"# Circuit prepares (1/sqrt({w})) sum_{{k={k_s}}}^{{{k_e-1}}} |k>"
     )
     return "\n".join(lines)
 
@@ -809,7 +809,7 @@ def _emit_walsh(m: int, params: dict) -> str:
 def _emit_geometric(m: int, params: dict) -> str:
     """Emit circuit code for GEOMETRIC.  Three regimes (see synthesizer):
 
-        (a) start == 0                  : plain product state
+        (a) k_s == 0                  : plain product state
         (b) single aligned dyadic block : product state on low bits + X's
         (c) general                     : dyadic decomposition, Gleinig anchor
                                           load + multi-controlled R_y spreads
@@ -817,11 +817,11 @@ def _emit_geometric(m: int, params: dict) -> str:
     import math as _math
     r = params["r"]
     c = params.get("c", 1.0)
-    start = params.get("start", 0)
+    k_s = params.get("k_s", 0)
     N = 2 ** m
 
     # Regime (a)
-    if start == 0:
+    if k_s == 0:
         lines = [
             _header(m, f"GEOMETRIC  r={r}, c={c}"),
             f"import math",
@@ -838,21 +838,21 @@ def _emit_geometric(m: int, params: dict) -> str:
         return "\n".join(lines)
 
     # Regime (b): single aligned dyadic block
-    w = N - start
-    aligned = (w & (w - 1)) == 0 and start % w == 0
+    w = N - k_s
+    aligned = (w & (w - 1)) == 0 and k_s % w == 0
     if aligned:
         m_low = w.bit_length() - 1
-        upper_val = start // w
+        upper_val = k_s // w
         upper_x_qubits = [m_low + j for j in range(m - m_low)
                           if (upper_val >> j) & 1]
         lines = [
-            _header(m, f"GEOMETRIC  r={r}, start={start}, c={c}"),
+            _header(m, f"GEOMETRIC  r={r}, k_s={k_s}, c={c}"),
             f"import math",
             f"",
             f"m = {m}",
             f"r = {r!r}",
-            f"start = {start}",
-            f"m_low = {m_low}     # log2(N - start)",
+            f"k_s = {k_s}",
+            f"m_low = {m_low}     # log2(N - k_s)",
             f"qc = QuantumCircuit(m, name='geometric')",
             f"",
             f"# Build geometric product state on lower m_low qubits",
@@ -860,13 +860,13 @@ def _emit_geometric(m: int, params: dict) -> str:
             f"    theta_j = 2.0 * math.atan(r ** (2 ** j))",
             f"    qc.ry(theta_j, j)",
             f"",
-            f"# Shift window to [start, N) via X gates on selected upper qubits",
+            f"# Shift window to [k_s, N) via X gates on selected upper qubits",
         ]
         if upper_x_qubits:
             for q in upper_x_qubits:
                 lines.append(f"qc.x({q})")
         else:
-            lines.append(f"# (no X gates needed for this start value)")
+            lines.append(f"# (no X gates needed for this k_s value)")
         return "\n".join(lines)
 
     # Regime (c): dyadic decomposition.  The algorithm is Gleinig-Hoefler
@@ -876,14 +876,14 @@ def _emit_geometric(m: int, params: dict) -> str:
     # internally" marker and replace this with the gate-level extraction
     # from the synthesized circuit.  Same pattern as SPARSE(s>1).
     from .synthesizer import _dyadic_decomposition
-    blocks = _dyadic_decomposition(start, N)
+    blocks = _dyadic_decomposition(k_s, N)
     lines = [
-        _header(m, f"GEOMETRIC  r={r}, start={start}, c={c} "
-                   f"(dyadic regime, [start,N) not power-of-2-aligned)"),
+        _header(m, f"GEOMETRIC  r={r}, k_s={k_s}, c={c} "
+                   f"(dyadic regime, [k_s,N) not power-of-2-aligned)"),
         f"",
         f"m = {m}",
         f"qc = QuantumCircuit(m, name='geometric')",
-        f"# Dyadic decomposition of [{start}, {N}) into {len(blocks)} blocks:",
+        f"# Dyadic decomposition of [{k_s}, {N}) into {len(blocks)} blocks:",
         f"# dyadic_blocks = {blocks}",
         f"# Each block is a (a_k, j_k) covering [a_k, a_k + 2**j_k).",
         f"# Assembly: Gleinig-Hoefler anchor load + multi-controlled R_y",

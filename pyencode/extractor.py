@@ -111,32 +111,32 @@ def _extract_step_load(f: np.ndarray, atol: float) -> dict:
             "Did you mean UNIFORM?"
         )
 
-    k_s = int(np.argmax(near_zero))           # first zero index
-    if k_s == 0:
+    k_e = int(np.argmax(near_zero))           # first zero index
+    if k_e == 0:
         raise ValueError(
             "Vector does not match declared STEP: "
-            "f[0] is zero (step must start from index 0)."
+            "f[0] is zero (step must k_s from index 0)."
         )
 
     c = float(f[0])
-    prefix_dev = float(np.max(np.abs(f[:k_s] - c)))
+    prefix_dev = float(np.max(np.abs(f[:k_e] - c)))
     if prefix_dev > atol:
         raise ValueError(
             f"Vector does not match declared STEP: "
-            f"prefix f[0:{k_s}] is not constant "
+            f"prefix f[0:{k_e}] is not constant "
             f"(max deviation = {prefix_dev:.2e})."
         )
 
-    tail_max = float(np.max(np.abs(f[k_s:])))
+    tail_max = float(np.max(np.abs(f[k_e:])))
     if tail_max > atol:
         raise ValueError(
             f"Vector does not match declared STEP: "
-            f"tail f[{k_s}:] is not zero "
+            f"tail f[{k_e}:] is not zero "
             f"(max |f[i]| = {tail_max:.2e}).  "
             f"Did you mean SQUARE?"
         )
 
-    return {"k_s": k_s, "c": c}
+    return {"k_e": k_e, "c": c}
 
 
 def _extract_square_load(f: np.ndarray, atol: float) -> dict:
@@ -149,28 +149,28 @@ def _extract_square_load(f: np.ndarray, atol: float) -> dict:
             "all entries are zero."
         )
 
-    k1 = int(nonzero_idx[0])
-    k2 = int(nonzero_idx[-1]) + 1
-    expected_count = k2 - k1
+    k_s = int(nonzero_idx[0])
+    k_e = int(nonzero_idx[-1]) + 1
+    expected_count = k_e - k_s
 
     if len(nonzero_idx) != expected_count:
         raise ValueError(
             f"Vector does not match declared SQUARE: "
             f"nonzero entries are not contiguous.  "
             f"Found {len(nonzero_idx)} nonzero entries spanning "
-            f"indices [{k1}, {k2}), expected {expected_count}."
+            f"indices [{k_s}, {k_e}), expected {expected_count}."
         )
 
-    c = float(f[k1])
-    block_dev = float(np.max(np.abs(f[k1:k2] - c)))
+    c = float(f[k_s])
+    block_dev = float(np.max(np.abs(f[k_s:k_e] - c)))
     if block_dev > atol:
         raise ValueError(
             f"Vector does not match declared SQUARE: "
-            f"block f[{k1}:{k2}] is not constant "
+            f"block f[{k_s}:{k_e}] is not constant "
             f"(max deviation = {block_dev:.2e})."
         )
 
-    return {"k1": k1, "k2": k2, "c": c}
+    return {"k_s": k_s, "k_e": k_e, "c": c}
 
 
 # ── sinusoidal / cosine via projection ────────────────────────────
@@ -451,10 +451,10 @@ def _reconstruct(kind: PatternKind, N: int, params: dict) -> np.ndarray:
         return np.full(N, p["c"])
 
     if kind == PatternKind.STEP:
-        f = np.zeros(N); f[:p["k_s"]] = p["c"]; return f
+        f = np.zeros(N); f[:p["k_e"]] = p["c"]; return f
 
     if kind == PatternKind.SQUARE:
-        f = np.zeros(N); f[p["k1"]:p["k2"]] = p["c"]; return f
+        f = np.zeros(N); f[p["k_s"]:p["k_e"]] = p["c"]; return f
 
     if kind == PatternKind.SINE:
         return p["A"] * np.sin(2 * math.pi * p["n"] * k / N + p.get("phi", 0.0))

@@ -22,10 +22,10 @@ from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, HA
 circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
 
 # Prefix uniform superposition [0, 4)
-circuit, info = encode(STEP(k_s=4, c=1.0), N=8)
+circuit, info = encode(STEP(k_e=4, c=1.0), N=8)
 
 # General interval [2, 6) via Draper adder
-circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+circuit, info = encode(SQUARE(k_s=2, k_e=6, c=1.0), N=8)
 
 # Sinusoidal mode via inverse QFT
 circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
@@ -56,14 +56,14 @@ circuit, info = encode(
 
 # Weighted superposition of patterns via SUM (implemented using the LCU technique)
 circuit, info = encode(
-    SUM([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
-         (3.0, SQUARE(k1=8, k2=16, c=1.0))]),
+    SUM([(1.0, SQUARE(k_s=0, k_e=8, c=1.0)),
+         (3.0, SQUARE(k_s=8, k_e=16, c=1.0))]),
     N=16)
 
 # Ancilla-free disjoint-support composition via PARTITION
 circuit, info = encode(
     PARTITION([SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-               GEOMETRIC(ratio=0.8, start=11)]),
+               GEOMETRIC(ratio=0.8, k_s=11)]),
     N=256)
 ```
 
@@ -77,10 +77,10 @@ statevector-validated amplitude vector.
 | Pattern    | Constructor                    | Complexity         | Source                       |
 |------------|--------------------------------|--------------------|------------------------------|
 | Sparse     | `SPARSE([(x,a), ...])`        | O(s·m)             | Gleinig & Hoefler (2021)     |
-| Step       | `STEP(k_s, c)`                | O(m)               | Shukla & Vedula (2024)       |
-| Square     | `SQUARE(k1, k2, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
+| Step       | `STEP(k_e, c)`                | O(m)               | Shukla & Vedula (2024)       |
+| Square     | `SQUARE(k_s, k_e, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
 | Walsh      | `WALSH(k, c0, c1)`      | O(m)               | Welch et al. (2014)          |
-| Geometric  | `GEOMETRIC(ratio, c)`         | O(m), 0 CX, depth 1| Xie & Ben-Ami (2025)        |
+| Geometric  | `GEOMETRIC(r, c)`         | O(m), 0 CX, depth 1| Xie & Ben-Ami (2025)        |
 | Hamming    | `HAMMING(r, c)`              | O(m), 0 CX, depth 1| Product state (this work)    |
 | Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
 | Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
@@ -110,7 +110,7 @@ Each `encode()` call returns an `EncodingInfo` with:
 
 - `kind` — pattern name (e.g. `"SPARSE"`, `"GEOMETRIC"`)
 - `N`, `m` — vector length and number of qubits
-- `params` — supplied vector parameters (e.g. `{"ratio": 0.95, "c": 1.0}`)
+- `params` — supplied vector parameters (e.g. `{"r": 0.95, "c": 1.0}`)
 - `gate_count` — total gates (pre-transpilation)
 - `gate_count_1q`, `gate_count_2q` — U and CX counts after transpilation to {cx, u}
 - `circuit_depth` — circuit depth after transpilation to {cx, u} (determines minimum execution time when gates on disjoint qubits run in parallel; may differ from the raw circuit depth visible via `print(circuit)`)
@@ -201,13 +201,13 @@ p = predict_gates(TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 32),
                   N=32*32)
 
 # SUM: weighted superposition (ancilla-based via the LCU technique)
-p = predict_gates(SUM([(0.5, SQUARE(k1=0, k2=8, c=1.0)),
-                       (0.5, SQUARE(k1=8, k2=16, c=1.0))]),
+p = predict_gates(SUM([(0.5, SQUARE(k_s=0, k_e=8, c=1.0)),
+                       (0.5, SQUARE(k_s=8, k_e=16, c=1.0))]),
                   N=16)
 
 # PARTITION: disjoint-support composition (ancilla-free, p = 1)
 p = predict_gates(PARTITION([SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-                             GEOMETRIC(ratio=0.8, start=11)]),
+                             GEOMETRIC(r=0.8, k_s=11)]),
                   N=256)
 ```
 

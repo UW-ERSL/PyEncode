@@ -133,8 +133,8 @@ def fig_sparse_two():
 
 def fig_step():
     """STEP: prefix uniform superposition."""
-    print("\n--- STEP: k_s=4, N=8 ---")
-    circuit, info = encode(STEP(k_s=4, c=1.0), N=8)
+    print("\n--- STEP: k_e=4, N=8 ---")
+    circuit, info = encode(STEP(k_e=4, c=1.0), N=8)
     print_info("encode", info)
     f = np.zeros(8); f[:4] = 1.0
     plot_vector(f, 8, r"STEP: $f_{[:4]}=1$, $N=8$", "step_vector.png")
@@ -144,7 +144,7 @@ def fig_step():
 def fig_square():
     """SQUARE: general interval."""
     print("\n--- SQUARE: [4,8), N=8 ---")
-    circuit, info = encode(SQUARE(k1=4, k2=8, c=1.0), N=8)
+    circuit, info = encode(SQUARE(k_s=4, k_e=8, c=1.0), N=8)
     print_info("encode", info)
     f = np.zeros(8); f[4:8] = 1.0
     plot_vector(f, 8, r"SQUARE: $f_{[4:8]}=1$, $N=8$", "square_vector.png")
@@ -206,19 +206,19 @@ def fig_geometric():
 
 
 def fig_geometric_arbitrary():
-    """GEOMETRIC with arbitrary start: dyadic decomposition path (O(m^2))."""
-    print("\n--- GEOMETRIC: ratio=0.8, start=5, N=16 ---")
+    """GEOMETRIC with arbitrary k_s: dyadic decomposition path (O(m^2))."""
+    print("\n--- GEOMETRIC: ratio=0.8, k_s=5, N=16 ---")
     N = 16
     ratio = 0.8
-    start = 5
-    circuit, info = encode(GEOMETRIC(r=ratio, start=start), N=N)
+    k_s = 5
+    circuit, info = encode(GEOMETRIC(r=ratio, k_s=k_s), N=N)
     print_info("encode", info)
     # Support: [5, 16) decomposes into [5,6) U [6,8) U [8,16) — three aligned blocks.
     f = np.zeros(N)
-    for i in range(start, N):
-        f[i] = ratio ** (i - start)
+    for i in range(k_s, N):
+        f[i] = ratio ** (i - k_s)
     plot_vector(f, N,
-                rf"GEOMETRIC: $r={ratio:g}$, $\mathrm{{start}}={start}$, $N={N}$",
+                rf"GEOMETRIC: $r={ratio:g}$, $\mathrm{{k_s}}={k_s}$, $N={N}$",
                 "geometric_arbitrary_vector.png")
     save_circuit(circuit, "geometric_arbitrary_circuit.png", scale=0.5)
 
@@ -324,8 +324,8 @@ def fig_lcu_disjoint():
     print("\n--- SUM disjoint: two SQUARE intervals, N=16 ---")
     N = 16
     circuit, info = encode(
-        SUM([(1.0, SQUARE(k1=0, k2=8, c=1.0)),
-             (3.0, SQUARE(k1=8, k2=16, c=1.0))]),
+        SUM([(1.0, SQUARE(k_s=0, k_e=8, c=1.0)),
+             (3.0, SQUARE(k_s=8, k_e=16, c=1.0))]),
         N=N)
     print_info("encode", info)
     print(f"  success_probability = {info.success_probability:.4f}")
@@ -346,7 +346,7 @@ def fig_lcu_overlap():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         circuit, info = encode(
-            SUM([(1.0, STEP(k_s=16, c=1.0)),
+            SUM([(1.0, STEP(k_e=16, c=1.0)),
                  (1.0, FOURIER(modes=[(1, 1.0, 0)]))]),
             N=N)
     print_info("encode", info)
@@ -405,10 +405,10 @@ def fig_finance():
     print("\n--- Quantum Finance (SUM) ---")
     N = 16
     circuit, info = encode(
-        SUM([(0.10, SQUARE(k1=0,  k2=4,  c=1.0)),
-             (0.40, SQUARE(k1=4,  k2=8,  c=1.0)),
-             (0.35, SQUARE(k1=8,  k2=12, c=1.0)),
-             (0.15, SQUARE(k1=12, k2=16, c=1.0))]),
+        SUM([(0.10, SQUARE(k_s=0,  k_e=4,  c=1.0)),
+             (0.40, SQUARE(k_s=4,  k_e=8,  c=1.0)),
+             (0.35, SQUARE(k_s=8,  k_e=12, c=1.0)),
+             (0.15, SQUARE(k_s=12, k_e=16, c=1.0))]),
         N=N)
     print_info("encode", info)
     print(f"  success_probability = {info.success_probability:.4f}")
@@ -431,7 +431,7 @@ def fig_gate_count_vs_m():
 
     m values: 4, 6, 8, 10, 12  (N = 16 to 4096)
 
-    SQUARE uses non-aligned intervals (k1 = N//4 + 1, k2 = 3*N//4 + 1)
+    SQUARE uses non-aligned intervals (k_s = N//4 + 1, k_e = 3*N//4 + 1)
     to reflect realistic usage rather than power-of-2 boundaries.
     """
     print("\n--- Gate Count vs m figure ---")
@@ -474,13 +474,13 @@ def fig_gate_count_vs_m():
         patterns["SPARSE ($s=2$)"].append(pyencode_transpile_total(c))
 
         # STEP: non-power-of-2 cutoff
-        c, _ = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+        c, _ = encode(STEP(k_e=3 * N // 4, c=1.0), N=N)
         patterns["STEP"].append(pyencode_transpile_total(c))
 
         # SQUARE: non-aligned interval
-        k1 = N // 4 + 1
-        k2 = 3 * N // 4 + 1
-        c, _ = encode(SQUARE(k1=k1, k2=k2, c=1.0), N=N)
+        k_s = N // 4 + 1
+        k_e = 3 * N // 4 + 1
+        c, _ = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=N)
         patterns["SQUARE"].append(pyencode_transpile_total(c))
 
         # WALSH: mid-register bit, generalized
@@ -574,7 +574,7 @@ def fig_gate_count_vs_m_reduced():
 
     m values: 4, 6, 8, 10, 12  (N = 16 to 4096)
 
-    SQUARE uses non-aligned intervals (k1 = N//4 + 1, k2 = 3*N//4 + 1)
+    SQUARE uses non-aligned intervals (k_s = N//4 + 1, k_e = 3*N//4 + 1)
     to reflect realistic usage rather than power-of-2 boundaries.
     """
     print("\n--- Gate Count vs m figure ---")
@@ -615,7 +615,7 @@ def fig_gate_count_vs_m_reduced():
         patterns["SPARSE ($s=2$)"].append(pyencode_transpile_total(c))
 
         # STEP: non-power-of-2 cutoff
-        c, _ = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+        c, _ = encode(STEP(k_e=3 * N // 4, c=1.0), N=N)
         patterns["STEP"].append(pyencode_transpile_total(c))
 
         # WALSH: mid-register bit, generalized
@@ -716,9 +716,9 @@ def gate_count_table():
     cases = [
         ("SPARSE s=1 (k=20)",    SPARSE([(20, 1.0)]),
          np.eye(N)[20]),
-        ("STEP (k_s=4)",         STEP(k_s=4, c=1.0),
+        ("STEP (k_e=4)",         STEP(k_e=4, c=1.0),
          np.r_[np.ones(4), np.zeros(N-4)]),
-        ("SQUARE ([12,52), general)", SQUARE(k1=12, k2=52, c=1.0),
+        ("SQUARE ([12,52), general)", SQUARE(k_s=12, k_e=52, c=1.0),
          np.r_[np.zeros(12), np.ones(40), np.zeros(N-52)]),
         ("FOURIER T=1 n=1",      FOURIER(modes=[(1, 1.0, 0)]),
          np.sin(2*np.pi*k/N)),

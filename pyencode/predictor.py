@@ -109,11 +109,11 @@ def _predict_sparse(m: int, params: dict) -> dict:
 def _predict_step(m: int, params: dict) -> dict:
     """STEP: 1q = m-1 for pc=1; 1q = m + 4*pc - 6 for pc>=2.
     2q = max(0, 2*pc - 3).  depth = 1 for pc<=1 else 4*pc - 5.  Exact."""
-    k_s = int(params["k_s"])
-    if k_s == 0:
+    k_e = int(params["k_e"])
+    if k_e == 0:
         return dict(gate_count_1q=0, gate_count_2q=0, circuit_depth=0,
                     complexity="O(m)", exact=True)
-    pc = bin(k_s).count("1")
+    pc = bin(k_e).count("1")
     if pc == 1:
         return dict(gate_count_1q=m - 1, gate_count_2q=0, circuit_depth=1,
                     complexity="O(m)", exact=True)
@@ -127,20 +127,20 @@ def _predict_step(m: int, params: dict) -> dict:
 
 
 def _predict_square(m: int, params: dict) -> dict:
-    """SQUARE: if aligned or k1=0 reduces to STEP + shift; else Draper adder.
+    """SQUARE: if aligned or k_s=0 reduces to STEP + shift; else Draper adder.
     Exact for aligned/prefix cases; upper bound for general intervals."""
-    k1 = int(params["k1"])
-    k2 = int(params["k2"])
-    w = k2 - k1
-    aligned = (w > 0) and ((w & (w - 1)) == 0) and (k1 % w == 0)
-    if k1 == 0:
-        return _predict_step(m, {"k_s": w})
+    k_s = int(params["k_s"])
+    k_e = int(params["k_e"])
+    w = k_e - k_s
+    aligned = (w > 0) and ((w & (w - 1)) == 0) and (k_s % w == 0)
+    if k_s == 0:
+        return _predict_step(m, {"k_e": w})
     if aligned:
         # Power-of-2-aligned block: X gates on upper qubits + Hadamards
         # on lower qubits. 1q = m - 1 in typical case (same as STEP prefix).
         p = int(math.log2(w))
-        # Upper qubits carrying k1 bits: popcount of (k1 >> p)
-        upper_pc = bin(k1 >> p).count("1")
+        # Upper qubits carrying k_s bits: popcount of (k_s >> p)
+        upper_pc = bin(k_s >> p).count("1")
         return dict(
             gate_count_1q=p + upper_pc,
             gate_count_2q=0,
@@ -202,8 +202,8 @@ def _predict_walsh(m: int, params: dict) -> dict:
 def _predict_geometric(m: int, params: dict) -> dict:
     """GEOMETRIC: three regimes (see synthesizer._synth_geometric).
 
-    Regime (a) start == 0                       : m R_y gates, 0 CX, depth 1.
-    Regime (b) single dyadic block              : log2(w) + popcount(start/w)
+    Regime (a) k_s == 0                       : m R_y gates, 0 CX, depth 1.
+    Regime (b) single dyadic block              : log2(w) + popcount(k_s/w)
                                                    1-qubit gates, 0 CX, depth 1.
     Regime (c) general dyadic decomposition     : O(m^2) gates total,
                                                    bounded by
@@ -214,11 +214,11 @@ def _predict_geometric(m: int, params: dict) -> dict:
     Transpiler may collapse small-angle rotations; returned counts are
     upper bounds.
     """
-    start = params.get("start", 0)
+    k_s = params.get("k_s", 0)
     N = 1 << m
 
     # Regime (a)
-    if start == 0:
+    if k_s == 0:
         return dict(
             gate_count_1q=m,
             gate_count_2q=0,
@@ -227,12 +227,12 @@ def _predict_geometric(m: int, params: dict) -> dict:
             exact=False,
         )
 
-    w = N - start
+    w = N - k_s
 
     # Regime (b): single dyadic block
-    if (w & (w - 1)) == 0 and start % w == 0:
+    if (w & (w - 1)) == 0 and k_s % w == 0:
         m_low = w.bit_length() - 1
-        upper_val = start // w
+        upper_val = k_s // w
         x_gates = bin(upper_val).count("1")
         return dict(
             gate_count_1q=m_low + x_gates,
@@ -246,7 +246,7 @@ def _predict_geometric(m: int, params: dict) -> dict:
     # the MCRy cost model (see _mcry_cost).  Anchor load via Gleinig-
     # Hoefler uses one MCRy per anchor reduction with up to (m-1) controls.
     blocks = []
-    cur = start
+    cur = k_s
     while cur < N:
         room = N - cur
         mx = room.bit_length() - 1
@@ -513,17 +513,17 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
             for load in p["loads"]:
                 atoms.append((int(load["k"]), 0))
         elif vt == PatternKind.STEP:
-            k_s = int(p["k_s"])
-            if k_s > 0:
-                atoms.extend(_partition_dyadic_blocks(0, k_s))
+            k_e = int(p["k_e"])
+            if k_e > 0:
+                atoms.extend(_partition_dyadic_blocks(0, k_e))
         elif vt == PatternKind.SQUARE:
-            k1, k2 = int(p["k1"]), int(p["k2"])
-            if k2 > k1:
-                atoms.extend(_partition_dyadic_blocks(k1, k2))
+            k_s, k_e = int(p["k_s"]), int(p["k_e"])
+            if k_e > k_s:
+                atoms.extend(_partition_dyadic_blocks(k_s, k_e))
         elif vt == PatternKind.GEOMETRIC:
-            start = int(p.get("start", 0))
-            if start < N:
-                atoms.extend(_partition_dyadic_blocks(start, N))
+            k_s = int(p.get("k_s", 0))
+            if k_s < N:
+                atoms.extend(_partition_dyadic_blocks(k_s, N))
         else:
             raise TypeError(
                 f"PARTITION: component type {vt.name} has full or dense "

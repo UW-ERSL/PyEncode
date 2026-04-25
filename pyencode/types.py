@@ -10,7 +10,7 @@ from typing import Optional
 
 from .recognizer import PatternKind
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -32,26 +32,26 @@ class _Pattern:
 # ---------------------------------------------------------------------------
 
 class STEP(_Pattern):
-    """STEP(k_s, c) — prefix uniform superposition [0, k_s). O(m) gates.
+    """STEP(k_e, c) — prefix uniform superposition [0, k_e). O(m) gates.
 
     Implements the Shukla-Vedula (2024) interval circuit.
-    STEP(k_s=N) produces the full uniform superposition H^m|0>.
+    STEP(k_e=N) produces the full uniform superposition H^m|0>.
     """
-    def __init__(self, k_s, c=1.0):
+    def __init__(self, k_e, c=1.0):
         self.kind = PatternKind.STEP
-        self.params = {"k_s": int(k_s), "c": float(c)}
+        self.params = {"k_e": int(k_e), "c": float(c)}
 
 
 class SQUARE(_Pattern):
-    """SQUARE(k1, k2, c) — interval uniform superposition [k1, k2). O(m^2) gates.
+    """SQUARE(k_s, k_e, c) — interval uniform superposition [k_s, k_e). O(m^2) gates.
 
     Extends STEP to arbitrary intervals via a Draper QFT-based constant adder.
-    O(m) for k1=0 or power-of-2-aligned blocks.
-    SQUARE(k1=0, k2=k_s) is identical to STEP(k_s).
+    O(m) for k_s=0 or power-of-2-aligned blocks.
+    SQUARE(k_s=0, k_e=k_e) is identical to STEP(k_e).
     """
-    def __init__(self, k1, k2, c=1.0):
+    def __init__(self, k_s, k_e, c=1.0):
         self.kind = PatternKind.SQUARE
-        self.params = {"k1": int(k1), "k2": int(k2), "c": float(c)}
+        self.params = {"k_s": int(k_s), "k_e": int(k_e), "c": float(c)}
 
 
 class WALSH(_Pattern):
@@ -158,28 +158,28 @@ class FOURIER(_Pattern):
 
 
 class GEOMETRIC(_Pattern):
-    """GEOMETRIC(r, start=0, c=1.0) — geometric sequence, optionally offset.
+    """GEOMETRIC(r, k_s=0, c=1.0) — geometric sequence, optionally offset.
 
     Prepares a state proportional to:
-      f_i = c * r^(i - start)   for i in [start, N),
-      f_i = 0                   for i in [0, start).
+      f_i = c * r^(i - k_s)   for i in [k_s, N),
+      f_i = 0                   for i in [0, k_s).
 
-    With start=0 (default), the vector is multiplicatively separable over
+    With k_s=0 (default), the vector is multiplicatively separable over
     the bits of i:
       f_i = c * r^(sum_j b_j * 2^j) = c * prod_j r^(b_j * 2^j)
     so the quantum state is a product state prepared by m independent
     R_y rotations — one per qubit, zero entangling gates, depth 1.
 
-    With start > 0, there are two implementation tiers:
+    With k_s > 0, there are two implementation tiers:
 
-    Tier 1 (power-of-2-aligned): If the window width w = N - start is a 
-    power of 2 AND start is a multiple of w, uses an efficient construction
+    Tier 1 (power-of-2-aligned): If the window width w = N - k_s is a 
+    power of 2 AND k_s is a multiple of w, uses an efficient construction
     with geometric product state on lower qubits + X gates on upper qubits.
-    Gate count: log2(w) + popcount(start/w), zero two-qubit gates, depth 1.
+    Gate count: log2(w) + popcount(k_s/w), zero two-qubit gates, depth 1.
 
-    Tier 2 (arbitrary offset): For any other start value, uses sparse
+    Tier 2 (arbitrary offset): For any other k_s value, uses sparse
     encoding techniques to synthesize the geometric amplitudes directly.
-    Gate count: O(w*m) where w = N - start, includes two-qubit gates.
+    Gate count: O(w*m) where w = N - k_s, includes two-qubit gates.
 
     Parameters
     ----------
@@ -187,11 +187,11 @@ class GEOMETRIC(_Pattern):
         Base (common ratio) of the geometric sequence. Must satisfy
         0 < r and r != 1. Typical values: 0 < r < 1 for decay,
         r > 1 for growth.
-    start : int, optional (default 0)
+    k_s : int, optional (default 0)
         Starting index of the geometric sequence. Amplitudes below this
-        index are zero. Any value 0 <= start < N is supported.
-        Tier 1 examples at N=64: start=0, 32, 48, 56, 60, 62, 63.
-        Tier 2 examples at N=64: start=4, 10, 17, etc.
+        index are zero. Any value 0 <= k_s < N is supported.
+        Tier 1 examples at N=64: k_s=0, 32, 48, 56, 60, 62, 63.
+        Tier 2 examples at N=64: k_s=4, 10, 17, etc.
     c : float, optional
         Leading amplitude (default 1.0). Only affects normalization.
 
@@ -199,22 +199,22 @@ class GEOMETRIC(_Pattern):
     --------
     >>> circuit, info = encode(GEOMETRIC(r=0.95), N=64)
     >>> circuit, info = encode(GEOMETRIC(r=0.5), N=16)
-    >>> circuit, info = encode(GEOMETRIC(r=0.9, start=32), N=64)  # tier 1
-    >>> circuit, info = encode(GEOMETRIC(r=0.8, start=4), N=256)  # tier 2
+    >>> circuit, info = encode(GEOMETRIC(r=0.9, k_s=32), N=64)  # tier 1
+    >>> circuit, info = encode(GEOMETRIC(r=0.8, k_s=4), N=256)  # tier 2
     """
-    def __init__(self, r, start=0, c=1.0):
+    def __init__(self, r, k_s=0, c=1.0):
         self.kind = PatternKind.GEOMETRIC
         r = float(r)
         if r <= 0:
             raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
         if abs(r - 1.0) < 1e-14:
             raise ValueError(
-                "GEOMETRIC r=1.0 is a uniform vector; use STEP(k_s=N) instead."
+                "GEOMETRIC r=1.0 is a uniform vector; use STEP(k_e=N) instead."
             )
-        start = int(start)
-        if start < 0:
-            raise ValueError(f"GEOMETRIC start must be non-negative, got {start}.")
-        self.params = {"r": r, "start": start, "c": float(c)}
+        k_s = int(k_s)
+        if k_s < 0:
+            raise ValueError(f"GEOMETRIC k_s must be non-negative, got {k_s}.")
+        self.params = {"r": r, "k_s": k_s, "c": float(c)}
 
 
 class HAMMING(_Pattern):
@@ -598,14 +598,14 @@ class SUM(_Pattern):
     --------
     >>> # Piecewise-constant: two disjoint intervals (p = 1)
     >>> circuit, info = encode(
-    ...     SUM([(1.0, SQUARE(k1=0,  k2=8,  c=1.0)),
-    ...          (4.0, SQUARE(k1=8,  k2=16, c=1.0))]), N=16)
+    ...     SUM([(1.0, SQUARE(k_s=0,  k_e=8,  c=1.0)),
+    ...          (4.0, SQUARE(k_s=8,  k_e=16, c=1.0))]), N=16)
     >>> # info.success_probability -> 1.0
     >>> # (For this specific disjoint case, PARTITION is cheaper.)
 
     >>> # Mixed patterns: overlapping (p < 1, warning issued)
     >>> circuit, info = encode(
-    ...     SUM([(1.0, STEP(k_s=8, c=1.0)),
+    ...     SUM([(1.0, STEP(k_e=8, c=1.0)),
     ...          (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
     >>> # UserWarning: overlapping support, p < 1.0
 
@@ -687,9 +687,9 @@ class PARTITION(_Pattern):
 
     Component -> atoms:
       SPARSE([(x_i, v_i)])           : one singleton per (x_i, v_i).
-      STEP(k_s, c), SQUARE(k1, k2, c): dyadic decomposition of [0, k_s)
-                                       (resp. [k1, k2)), ratio = 1.
-      GEOMETRIC(r, start, c)     : dyadic decomposition of [start, N),
+      STEP(k_e, c), SQUARE(k_s, k_e, c): dyadic decomposition of [0, k_e)
+                                       (resp. [k_s, k_e)), ratio = 1.
+      GEOMETRIC(r, k_s, c)     : dyadic decomposition of [k_s, N),
                                        ratio inherited.
 
     Circuit:
@@ -722,16 +722,16 @@ class PARTITION(_Pattern):
     >>> circuit, info = encode(
     ...     PARTITION([
     ...         SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-    ...         GEOMETRIC(r=0.8, start=11),
+    ...         GEOMETRIC(r=0.8, k_s=11),
     ...     ]),
     ...     N=256)
     >>> info.success_probability   # 1.0, no post-selection
 
     >>> # Multi-interval piecewise-constant
     >>> circuit, info = encode(
-    ...     PARTITION([SQUARE(k1=0,  k2=4,  c=1.0),
-    ...                SQUARE(k1=8,  k2=12, c=2.0),
-    ...                SQUARE(k1=14, k2=16, c=3.0)]),
+    ...     PARTITION([SQUARE(k_s=0,  k_e=4,  c=1.0),
+    ...                SQUARE(k_s=8,  k_e=12, c=2.0),
+    ...                SQUARE(k_s=14, k_e=16, c=3.0)]),
     ...     N=16)
 
     References
@@ -856,7 +856,7 @@ class EncodingInfo:
 
 _COMPLEXITY = {
     PatternKind.STEP:    "O(m)",
-    PatternKind.SQUARE:  "O(m²)",   # general; O(m) for k1=0 or aligned blocks
+    PatternKind.SQUARE:  "O(m²)",   # general; O(m) for k_s=0 or aligned blocks
     PatternKind.WALSH:   "O(m)",
     PatternKind.SPARSE:  "O(s\u00b7m)",
     PatternKind.FOURIER: "O(m\u00b2)",
@@ -876,14 +876,14 @@ _COMPLEXITY = {
 
 _PARAM_SCHEMAS = {
     PatternKind.STEP: {
-        "required": {"k_s"},
+        "required": {"k_e"},
         "optional": {"c"},
-        "description": "k_s=<prefix end index>",
+        "description": "k_e=<prefix end index>",
     },
     PatternKind.SQUARE: {
-        "required": {"k1", "k2"},
+        "required": {"k_s", "k_e"},
         "optional": {"c"},
-        "description": "k1=<start>, k2=<end>",
+        "description": "k_s=<k_s>, k_e=<end>",
     },
     PatternKind.WALSH: {
         "required": {"k"},
@@ -902,8 +902,8 @@ _PARAM_SCHEMAS = {
     },
     PatternKind.GEOMETRIC: {
         "required": {"r"},
-        "optional": {"c", "start"},
-        "description": "r=<base (common ratio) of geometric sequence>, start=<starting index (default 0)>",
+        "optional": {"c", "k_s"},
+        "description": "r=<base (common ratio) of geometric sequence>, k_s=<starting index (default 0)>",
     },
     PatternKind.HAMMING: {
         "required": {"r"},

@@ -140,43 +140,43 @@ class TestSparse:
 class TestStep:
 
     def test_basic(self):
-        circuit, info = encode(STEP(k_s=4, c=2.0), N=8)
+        circuit, info = encode(STEP(k_e=4, c=2.0), N=8)
         assert info.kind == "STEP"
         expected = np.zeros(8); expected[:4] = 2.0
         assert_encodes(circuit, expected)
 
     def test_non_power_of_two(self):
-        for k_s in [3, 5, 6, 7, 37, 48, 60, 63]:
-            circuit, info = encode(STEP(k_s=k_s, c=1.0), N=64)
-            expected = np.zeros(64); expected[:k_s] = 1.0
+        for k_e in [3, 5, 6, 7, 37, 48, 60, 63]:
+            circuit, info = encode(STEP(k_e=k_e, c=1.0), N=64)
+            expected = np.zeros(64); expected[:k_e] = 1.0
             assert_encodes(circuit, expected)
 
     def test_full_range_is_uniform(self):
-        """STEP(k_s=N) produces the m-Hadamard uniform superposition."""
-        circuit, info = encode(STEP(k_s=8, c=1.0), N=8)
+        """STEP(k_e=N) produces the m-Hadamard uniform superposition."""
+        circuit, info = encode(STEP(k_e=8, c=1.0), N=8)
         assert_encodes(circuit, np.ones(8))
 
     def test_gate_count_at_most_m(self):
         for m in [2, 3, 4, 5, 6]:
             N = 2 ** m
-            _, info = encode(STEP(k_s=N // 2, c=1.0), N=N)
+            _, info = encode(STEP(k_e=N // 2, c=1.0), N=N)
             assert info.gate_count <= m * 4  # generous bound
 
     def test_complexity(self):
-        _, info = encode(STEP(k_s=4, c=1.0), N=8)
+        _, info = encode(STEP(k_e=4, c=1.0), N=8)
         assert info.complexity == "O(m)"
 
     def test_validate(self):
-        _, info = encode(STEP(k_s=5, c=1.0), N=8, validate=True)
+        _, info = encode(STEP(k_e=5, c=1.0), N=8, validate=True)
         assert info.validated
 
     def test_k_s_zero_raises(self):
         with pytest.raises(ValueError):
-            encode(STEP(k_s=0, c=1.0), N=8)
+            encode(STEP(k_e=0, c=1.0), N=8)
 
     def test_k_s_beyond_N_raises(self):
         with pytest.raises(ValueError):
-            encode(STEP(k_s=9, c=1.0), N=8)
+            encode(STEP(k_e=9, c=1.0), N=8)
 
 
 # ===================================================================
@@ -186,59 +186,59 @@ class TestStep:
 class TestSquare:
 
     def test_basic(self):
-        circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+        circuit, info = encode(SQUARE(k_s=2, k_e=6, c=1.0), N=8)
         assert info.kind == "SQUARE"
         expected = np.zeros(8); expected[2:6] = 1.0
         assert_encodes(circuit, expected)
 
     def test_aligned(self):
-        circuit, info = encode(SQUARE(k1=8, k2=16, c=1.0), N=16)
+        circuit, info = encode(SQUARE(k_s=8, k_e=16, c=1.0), N=16)
         expected = np.zeros(16); expected[8:16] = 1.0
         assert_encodes(circuit, expected)
 
     def test_general_non_aligned(self):
-        for k1, k2 in [(1, 5), (3, 7), (8, 24), (10, 50)]:
-            circuit, info = encode(SQUARE(k1=k1, k2=k2, c=1.0), N=64)
-            expected = np.zeros(64); expected[k1:k2] = 1.0
+        for k_s, k_e in [(1, 5), (3, 7), (8, 24), (10, 50)]:
+            circuit, info = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=64)
+            expected = np.zeros(64); expected[k_s:k_e] = 1.0
             assert_encodes(circuit, expected)
 
     def test_complexity_general(self):
         """General non-aligned SQUARE: O(m²) via Draper adder."""
-        _, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+        _, info = encode(SQUARE(k_s=2, k_e=6, c=1.0), N=8)
         assert info.complexity == "O(m²)"
 
     def test_complexity_k1_zero(self):
-        """SQUARE with k1=0 reduces to STEP: O(m)."""
-        _, info = encode(SQUARE(k1=0, k2=4, c=1.0), N=8)
+        """SQUARE with k_s=0 reduces to STEP: O(m)."""
+        _, info = encode(SQUARE(k_s=0, k_e=4, c=1.0), N=8)
         assert info.complexity == "O(m)"
 
     def test_complexity_aligned(self):
         """Power-of-2-aligned SQUARE: O(m) special case."""
-        _, info = encode(SQUARE(k1=8, k2=16, c=1.0), N=64)
+        _, info = encode(SQUARE(k_s=8, k_e=16, c=1.0), N=64)
         assert info.complexity == "O(m)"
 
     def test_validate(self):
-        _, info = encode(SQUARE(k1=3, k2=7, c=1.0), N=8, validate=True)
+        _, info = encode(SQUARE(k_s=3, k_e=7, c=1.0), N=8, validate=True)
         assert info.validated
 
     def test_k1_equals_zero_is_step(self):
-        """SQUARE(k1=0, k2=k_s) should match STEP(k_s)."""
+        """SQUARE(k_s=0, k_e=k_e) should match STEP(k_e)."""
         N = 8
-        c1, _ = encode(SQUARE(k1=0, k2=4, c=1.0), N=N)
-        c2, _ = encode(STEP(k_s=4, c=1.0), N=N)
+        c1, _ = encode(SQUARE(k_s=0, k_e=4, c=1.0), N=N)
+        c2, _ = encode(STEP(k_e=4, c=1.0), N=N)
         expected = np.zeros(N); expected[:4] = 1.0
         assert_encodes(c1, expected)
         assert_encodes(c2, expected)
 
     def test_invalid_range_raises(self):
         with pytest.raises(ValueError):
-            encode(SQUARE(k1=6, k2=2, c=1.0), N=8)  # k1 >= k2
+            encode(SQUARE(k_s=6, k_e=2, c=1.0), N=8)  # k_s >= k_e
 
     def test_composite_list(self):
         """List of SQUARE constructors encodes a piecewise-constant vector."""
         circuit, info = encode([
-            SQUARE(k1=0,  k2=4,  c=1.0),
-            SQUARE(k1=4,  k2=8,  c=3.0),
+            SQUARE(k_s=0,  k_e=4,  c=1.0),
+            SQUARE(k_s=4,  k_e=8,  c=3.0),
         ], N=8)
         # Composite uses LCU with ancilla qubits; verify it runs and
         # returns the right metadata rather than checking statevector directly.
@@ -357,14 +357,14 @@ class TestConstructors:
         assert f.params["modes"][0]["phi"] == 0.0
 
     def test_step_stores_params(self):
-        s = STEP(k_s=4, c=2.0)
-        assert s.params["k_s"] == 4
+        s = STEP(k_e=4, c=2.0)
+        assert s.params["k_e"] == 4
         assert s.params["c"] == 2.0
 
     def test_square_stores_params(self):
-        s = SQUARE(k1=2, k2=6, c=1.0)
-        assert s.params["k1"] == 2
-        assert s.params["k2"] == 6
+        s = SQUARE(k_s=2, k_e=6, c=1.0)
+        assert s.params["k_s"] == 2
+        assert s.params["k_e"] == 6
 
 
 
@@ -454,8 +454,8 @@ class TestSum:
     def test_two_disjoint_squares_correct_state(self):
         """Two disjoint SQUARE intervals: post-selected state is correct."""
         circuit, info = encode(
-            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                 (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
+            SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0, SQUARE(k_s=4, k_e=8, c=1.0))]), N=8)
         assert info.kind == "SUM"
         # p = sum_j beta_j^4 = 2*(1/sqrt(2))^4 = 0.5 for 2 equal-weight disjoint
         assert abs(info.success_probability - 0.5) < 1e-6
@@ -465,8 +465,8 @@ class TestSum:
     def test_two_disjoint_squares_unequal_weights(self):
         """Disjoint SQUARE with different weights: post-selected state correct."""
         circuit, info = encode(
-            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                 (4.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
+            SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (4.0, SQUARE(k_s=4, k_e=8, c=1.0))]), N=8)
         assert 0 < info.success_probability < 1.0
         expected = np.array([1,1,1,1,4,4,4,4], dtype=float)
         assert_encodes_lcu(circuit, expected, n_anc=1)
@@ -474,9 +474,9 @@ class TestSum:
     def test_three_disjoint_squares(self):
         """Three disjoint intervals — 2 ancilla qubits."""
         circuit, info = encode(
-            SUM([(1.0, SQUARE(k1=0,  k2=4,  c=2.0)),
-                 (1.0, SQUARE(k1=4,  k2=8,  c=3.0)),
-                 (1.0, SQUARE(k1=8,  k2=16, c=1.0))]), N=16)
+            SUM([(1.0, SQUARE(k_s=0,  k_e=4,  c=2.0)),
+                 (1.0, SQUARE(k_s=4,  k_e=8,  c=3.0)),
+                 (1.0, SQUARE(k_s=8,  k_e=16, c=1.0))]), N=16)
         assert 0 < info.success_probability <= 1.0
         expected = np.array([2]*4 + [3]*4 + [1]*8, dtype=float)
         assert_encodes_lcu(circuit, expected, n_anc=2)
@@ -484,8 +484,8 @@ class TestSum:
     def test_disjoint_step_square(self):
         """STEP + SQUARE with disjoint support: post-selected state correct."""
         circuit, info = encode(
-            SUM([(1.0, STEP(k_s=4,  c=2.0)),
-                 (1.0, SQUARE(k1=4, k2=8, c=3.0))]), N=8)
+            SUM([(1.0, STEP(k_e=4,  c=2.0)),
+                 (1.0, SQUARE(k_s=4, k_e=8, c=3.0))]), N=8)
         assert 0 < info.success_probability <= 1.0
         expected = np.array([2,2,2,2,3,3,3,3], dtype=float)
         assert_encodes_lcu(circuit, expected, n_anc=1)
@@ -496,7 +496,7 @@ class TestSum:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             circuit, info = encode(
-                SUM([(1.0, STEP(k_s=8,   c=1.0)),
+                SUM([(1.0, STEP(k_e=8,   c=1.0)),
                      (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
             assert len(w) == 1
             assert "overlapping" in str(w[0].message).lower()
@@ -506,20 +506,20 @@ class TestSum:
 
     def test_single_component(self):
         """Single-component SUM reduces to plain encode."""
-        c1, i1 = encode(SUM([(1.0, STEP(k_s=4, c=1.0))]), N=8)
-        c2, i2 = encode(STEP(k_s=4, c=1.0), N=8)
+        c1, i1 = encode(SUM([(1.0, STEP(k_e=4, c=1.0))]), N=8)
+        c2, i2 = encode(STEP(k_e=4, c=1.0), N=8)
         assert i1.gate_count == i2.gate_count
 
     def test_validate_disjoint(self):
         _, info = encode(
-            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                 (1.0, SQUARE(k1=4, k2=8, c=2.0))]),
+            SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0, SQUARE(k_s=4, k_e=8, c=2.0))]),
             N=8, validate=True)
         assert info.validated
 
     def test_negative_weight_raises(self):
         with pytest.raises(ValueError, match="positive"):
-            SUM([(-1.0, STEP(k_s=4, c=1.0))])
+            SUM([(-1.0, STEP(k_e=4, c=1.0))])
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):
@@ -531,8 +531,8 @@ class TestSum:
 
     def test_success_probability_in_info(self):
         _, info = encode(
-            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                 (1.0, SQUARE(k1=4, k2=8, c=1.0))]), N=8)
+            SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0, SQUARE(k_s=4, k_e=8, c=1.0))]), N=8)
         assert hasattr(info, 'success_probability')
         assert 0.0 < info.success_probability <= 1.0
 
@@ -692,26 +692,26 @@ class TestGeometric:
     def test_lcu_composability(self):
         """GEOMETRIC can be used as a SUM component."""
         circuit, info = encode(
-            SUM([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, GEOMETRIC(r=0.5))]),
             N=16)
         assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
 
-    # === start parameter tests ===
+    # === k_s parameter tests ===
 
     def test_start_zero_backward_compatibility(self):
-        """start=0 should be identical to the original GEOMETRIC."""
+        """k_s=0 should be identical to the original GEOMETRIC."""
         c1, i1 = encode(GEOMETRIC(r=0.7), N=16)
-        c2, i2 = encode(GEOMETRIC(r=0.7, start=0), N=16)
+        c2, i2 = encode(GEOMETRIC(r=0.7, k_s=0), N=16)
         sv1 = np.array(statevector(c1))
         sv2 = np.array(statevector(c2))
         np.testing.assert_allclose(sv1, sv2, atol=1e-15)
         assert i1.gate_count == i2.gate_count
 
     def test_start_aligned_half(self):
-        """start=N/2: geometric decay starting at midpoint."""
-        circuit, info = encode(GEOMETRIC(r=0.5, start=32), N=64)
+        """k_s=N/2: geometric decay starting at midpoint."""
+        circuit, info = encode(GEOMETRIC(r=0.5, k_s=32), N=64)
         expected = np.zeros(64)
         expected[32:] = 0.5 ** np.arange(32)  # 0.5^0, 0.5^1, ..., 0.5^31
         assert_encodes(circuit, expected)
@@ -721,8 +721,8 @@ class TestGeometric:
         assert info.circuit_depth == 1
 
     def test_start_aligned_three_quarters(self):
-        """start=3N/4: geometric in the upper quarter."""
-        circuit, info = encode(GEOMETRIC(r=0.6, start=48), N=64)
+        """k_s=3N/4: geometric in the upper quarter."""
+        circuit, info = encode(GEOMETRIC(r=0.6, k_s=48), N=64)
         expected = np.zeros(64)
         expected[48:] = 0.6 ** np.arange(16)  # decay for 16 elements
         assert_encodes(circuit, expected)
@@ -731,8 +731,8 @@ class TestGeometric:
         assert info.gate_count_2q == 0
 
     def test_start_aligned_near_end(self):
-        """start=56 at N=64: geometric in just the last 8 slots."""
-        circuit, info = encode(GEOMETRIC(r=0.3, start=56), N=64)
+        """k_s=56 at N=64: geometric in just the last 8 slots."""
+        circuit, info = encode(GEOMETRIC(r=0.3, k_s=56), N=64)
         expected = np.zeros(64)
         expected[56:] = 0.3 ** np.arange(8)
         assert_encodes(circuit, expected)
@@ -741,8 +741,8 @@ class TestGeometric:
         assert info.gate_count_2q == 0
 
     def test_start_dyadic_small(self):
-        """Dyadic regime: start=10, N=64 (w=54, not power-of-2-aligned)."""
-        circuit, info = encode(GEOMETRIC(r=0.5, start=10), N=64)
+        """Dyadic regime: k_s=10, N=64 (w=54, not power-of-2-aligned)."""
+        circuit, info = encode(GEOMETRIC(r=0.5, k_s=10), N=64)
         assert info.complexity == "O(m^2)"
         assert info.gate_count_2q > 0          # must have entangling gates
         assert info.success_probability == 1.0  # disjoint-support blocks
@@ -752,8 +752,8 @@ class TestGeometric:
         assert_encodes(circuit, expected)
 
     def test_start_dyadic_non_multiple(self):
-        """Dyadic regime: start=40, N=64 (w=24, aligned in multi-block sense)."""
-        circuit, info = encode(GEOMETRIC(r=0.5, start=40), N=64)
+        """Dyadic regime: k_s=40, N=64 (w=24, aligned in multi-block sense)."""
+        circuit, info = encode(GEOMETRIC(r=0.5, k_s=40), N=64)
         assert info.complexity == "O(m^2)"
         assert info.gate_count_2q > 0
         assert info.success_probability == 1.0
@@ -763,8 +763,8 @@ class TestGeometric:
         assert_encodes(circuit, expected)
 
     def test_start_dyadic_user_case(self):
-        """Dyadic regime: the motivating case start=4, N=256."""
-        circuit, info = encode(GEOMETRIC(r=0.8, start=4), N=256)
+        """Dyadic regime: the motivating case k_s=4, N=256."""
+        circuit, info = encode(GEOMETRIC(r=0.8, k_s=4), N=256)
         assert info.complexity == "O(m^2)"
         assert info.success_probability == 1.0
 
@@ -781,23 +781,23 @@ class TestGeometric:
         assert_encodes(circuit, expected, tol=1e-4)
 
     def test_start_validation_bounds(self):
-        """start must be in range [0, N)."""
-        with pytest.raises(ValueError, match="start < N"):
-            encode(GEOMETRIC(r=0.5, start=64), N=64)
+        """k_s must be in range [0, N)."""
+        with pytest.raises(ValueError, match="k_s < N"):
+            encode(GEOMETRIC(r=0.5, k_s=64), N=64)
         with pytest.raises(ValueError, match="non-negative"):
-            GEOMETRIC(r=0.5, start=-1)
+            GEOMETRIC(r=0.5, k_s=-1)
 
     def test_start_validate_mode(self):
-        """Validation should work correctly with start parameter."""
-        circuit, info = encode(GEOMETRIC(r=0.8, start=8), N=16, validate=True)
+        """Validation should work correctly with k_s parameter."""
+        circuit, info = encode(GEOMETRIC(r=0.8, k_s=8), N=16, validate=True)
         assert info.validated is True
         expected = np.zeros(16)
         expected[8:] = 0.8 ** np.arange(8)
         np.testing.assert_allclose(np.abs(info.vector), expected, atol=1e-10)
 
     def test_start_emitted_code_runs(self):
-        """Emitted code should work for start offset."""
-        circuit, info = encode(GEOMETRIC(r=0.9, start=16), N=32)
+        """Emitted code should work for k_s offset."""
+        circuit, info = encode(GEOMETRIC(r=0.9, k_s=16), N=32)
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
@@ -806,9 +806,9 @@ class TestGeometric:
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_start_custom_c_normalization(self):
-        """c parameter still works with start offset."""
-        c1, _ = encode(GEOMETRIC(r=0.7, start=8, c=1.0), N=16)
-        c2, _ = encode(GEOMETRIC(r=0.7, start=8, c=3.0), N=16)
+        """c parameter still works with k_s offset."""
+        c1, _ = encode(GEOMETRIC(r=0.7, k_s=8, c=1.0), N=16)
+        c2, _ = encode(GEOMETRIC(r=0.7, k_s=8, c=3.0), N=16)
         sv1 = np.abs(np.array(statevector(c1)))
         sv2 = np.abs(np.array(statevector(c2)))
         np.testing.assert_allclose(sv1, sv2, atol=1e-10)
@@ -821,7 +821,7 @@ class TestGeometric:
 class TestGeometricDyadic:
     """
     Correctness + complexity tests for the regime-(c) dyadic path of
-    _synth_geometric, where [start, N) is NOT a single aligned dyadic
+    _synth_geometric, where [k_s, N) is NOT a single aligned dyadic
     block and the synthesizer decomposes the support into up to m
     power-of-2-aligned sub-blocks.
 
@@ -836,7 +836,7 @@ class TestGeometricDyadic:
     # ------------------------------------------------------------------
 
     def test_decomposition_covers_interval_exactly(self):
-        """Union of dyadic blocks equals [start, N) exactly, disjointly."""
+        """Union of dyadic blocks equals [k_s, N) exactly, disjointly."""
         from pyencode.synthesizer import _dyadic_decomposition
         for (s, N) in [(1, 16), (5, 16), (7, 32), (100, 1024),
                        (123, 1024), (3, 256), (255, 256)]:
@@ -875,20 +875,20 @@ class TestGeometricDyadic:
     # ------------------------------------------------------------------
 
     def test_regime_aligned_reports_Om(self):
-        """Aligned start (regime b) reports O(m) and uses 0 CX gates."""
-        # start = N/2, N/4*k, etc. -- all single-block dyadic
+        """Aligned k_s (regime b) reports O(m) and uses 0 CX gates."""
+        # k_s = N/2, N/4*k, etc. -- all single-block dyadic
         for (r, s, N) in [(0.5, 32, 64), (0.7, 48, 64), (0.3, 56, 64),
                           (0.9, 128, 256)]:
-            _, info = encode(GEOMETRIC(r=r, start=s), N=N)
+            _, info = encode(GEOMETRIC(r=r, k_s=s), N=N)
             assert info.complexity == "O(m)", (
                 f"(s={s}, N={N}): got {info.complexity}")
             assert info.gate_count_2q == 0
 
     def test_regime_dyadic_reports_Om2(self):
-        """Non-aligned start (regime c) reports O(m^2), non-zero CX."""
+        """Non-aligned k_s (regime c) reports O(m^2), non-zero CX."""
         for (r, s, N) in [(0.5, 5, 16), (0.8, 4, 256), (0.9, 100, 1024),
                           (0.7, 1, 128), (0.3, 123, 256)]:
-            _, info = encode(GEOMETRIC(r=r, start=s), N=N)
+            _, info = encode(GEOMETRIC(r=r, k_s=s), N=N)
             assert info.complexity == "O(m^2)", (
                 f"(s={s}, N={N}): got {info.complexity}")
             assert info.gate_count_2q > 0
@@ -898,17 +898,17 @@ class TestGeometricDyadic:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _reference(ratio, start, N):
+    def _reference(ratio, k_s, N):
         f = np.zeros(N)
-        f[start:] = ratio ** np.arange(N - start)
+        f[k_s:] = ratio ** np.arange(N - k_s)
         return f / np.linalg.norm(f)
 
     def test_statevector_exhaustive_small(self):
-        """Exhaustive correctness for N in {8, 16, 32}, all start, a few ratios."""
+        """Exhaustive correctness for N in {8, 16, 32}, all k_s, a few ratios."""
         for N in [8, 16, 32]:
             for r in [0.3, 0.5, 0.8, 1.5]:
                 for s in range(1, N):
-                    qc, _ = encode(GEOMETRIC(r=r, start=s), N=N)
+                    qc, _ = encode(GEOMETRIC(r=r, k_s=s), N=N)
                     sv = np.abs(np.array(statevector(qc)))
                     ref = np.abs(self._reference(r, s, N))
                     np.testing.assert_allclose(
@@ -922,7 +922,7 @@ class TestGeometricDyadic:
             for s in [1, 3, 7, 100, N // 3, N - 3]:
                 if s >= N:
                     continue
-                qc, _ = encode(GEOMETRIC(r=0.9, start=s), N=N)
+                qc, _ = encode(GEOMETRIC(r=0.9, k_s=s), N=N)
                 sv = np.abs(np.array(statevector(qc)))
                 ref = np.abs(self._reference(0.9, s, N))
                 np.testing.assert_allclose(
@@ -931,20 +931,20 @@ class TestGeometricDyadic:
                 )
 
     def test_zeros_before_start(self):
-        """Amplitudes on |i> for i < start must be exactly zero."""
+        """Amplitudes on |i> for i < k_s must be exactly zero."""
         for (r, s, N) in [(0.5, 5, 16), (0.8, 4, 256), (0.9, 100, 1024)]:
-            qc, _ = encode(GEOMETRIC(r=r, start=s), N=N)
+            qc, _ = encode(GEOMETRIC(r=r, k_s=s), N=N)
             sv = np.array(statevector(qc))
             assert np.max(np.abs(sv[:s])) < 1e-10, (
-                f"Non-zero amplitude before start (s={s}, N={N}): "
+                f"Non-zero amplitude before k_s (s={s}, N={N}): "
                 f"max={np.max(np.abs(sv[:s])):.2e}"
             )
 
     def test_c_only_affects_normalization(self):
         """The c parameter is a pure scalar prefactor (normalised out)."""
         for (r, s, N) in [(0.7, 5, 32), (0.8, 4, 256)]:
-            qc1, _ = encode(GEOMETRIC(r=r, start=s, c=1.0), N=N)
-            qc2, _ = encode(GEOMETRIC(r=r, start=s, c=7.3), N=N)
+            qc1, _ = encode(GEOMETRIC(r=r, k_s=s, c=1.0), N=N)
+            qc2, _ = encode(GEOMETRIC(r=r, k_s=s, c=7.3), N=N)
             sv1 = np.abs(np.array(statevector(qc1)))
             sv2 = np.abs(np.array(statevector(qc2)))
             np.testing.assert_allclose(sv1, sv2, atol=1e-10)
@@ -952,7 +952,7 @@ class TestGeometricDyadic:
     def test_r_above_and_below_one(self):
         """Growth (r>1) and decay (r<1) both work in the dyadic regime."""
         for r in [0.2, 0.5, 0.95, 1.05, 1.5, 2.0]:
-            qc, _ = encode(GEOMETRIC(r=r, start=5), N=32)
+            qc, _ = encode(GEOMETRIC(r=r, k_s=5), N=32)
             sv = np.abs(np.array(statevector(qc)))
             ref = np.abs(self._reference(r, 5, 32))
             np.testing.assert_allclose(sv, ref, atol=1e-8,
@@ -967,24 +967,24 @@ class TestGeometricDyadic:
         counts = []
         for m in [4, 6, 8, 10]:
             N = 1 << m
-            _, info = encode(GEOMETRIC(r=0.9, start=3), N=N)
+            _, info = encode(GEOMETRIC(r=0.9, k_s=3), N=N)
             counts.append(info.gate_count)
         # Cubic fit c0 + c1*m + c2*m^2 should bound the growth; gate count
         # at m=10 should be at most ~ 30 * (m=10)^2 = 3000, not 2^10 * 10.
         assert counts[-1] < 50 * (10 ** 2), (
             f"Gate count {counts[-1]} at m=10 exceeds quadratic budget.")
-        # Monotone in m for a fixed start
+        # Monotone in m for a fixed k_s
         assert counts == sorted(counts), (
             f"Gate count not monotone in m: {counts}")
 
     def test_gate_count_beats_old_sparse_fallback(self):
         """
         Old sparse fallback produced O((N-s)*m) gates.  New dyadic
-        construction must be strictly, materially smaller for any start
-        whose [start,N) has more than ~ m non-zero amplitudes.
+        construction must be strictly, materially smaller for any k_s
+        whose [k_s,N) has more than ~ m non-zero amplitudes.
         """
         # User's reported case
-        _, info = encode(GEOMETRIC(r=0.8, start=4), N=256)
+        _, info = encode(GEOMETRIC(r=0.8, k_s=4), N=256)
         # Old: ~ 17 000 gates.  Dyadic is O(m^2) = 64 * const; under 2 000 easily.
         assert info.gate_count < 2000, (
             f"Expected < 2000 gates, got {info.gate_count} "
@@ -993,12 +993,12 @@ class TestGeometricDyadic:
 
     def test_gate_count_worst_case_start_one(self):
         """
-        start=1 gives the maximum number of dyadic blocks (L = m) and is
+        k_s=1 gives the maximum number of dyadic blocks (L = m) and is
         therefore the stress case.  Must still be sub-cubic.
         """
         for m in [5, 7, 9]:
             N = 1 << m
-            _, info = encode(GEOMETRIC(r=0.9, start=1), N=N)
+            _, info = encode(GEOMETRIC(r=0.9, k_s=1), N=N)
             # Very loose bound: 100 * m^2.  Guards against accidental O(N*m).
             assert info.gate_count < 100 * m * m, (
                 f"m={m}: {info.gate_count} gates exceeds 100*m^2 budget.")
@@ -1009,7 +1009,7 @@ class TestGeometricDyadic:
 
     def test_validate_mode(self):
         """validate=True returns the classically-constructed reference vector."""
-        qc, info = encode(GEOMETRIC(r=0.7, start=5),
+        qc, info = encode(GEOMETRIC(r=0.7, k_s=5),
                           N=16, validate=True)
         assert info.validated is True
         # info.vector is UNnormalized (matches existing regime-b convention)
@@ -1020,8 +1020,8 @@ class TestGeometricDyadic:
     def test_lcu_composability(self):
         """A dyadic-regime GEOMETRIC still works as a SUM component."""
         qc, info = encode(
-            SUM([(1.0, STEP(k_s=8, c=1.0)),
-                 (2.0, GEOMETRIC(r=0.5, start=5))]),
+            SUM([(1.0, STEP(k_e=8, c=1.0)),
+                 (2.0, GEOMETRIC(r=0.5, k_s=5))]),
             N=16)
         assert info.kind == "SUM"
         assert 0 < info.success_probability <= 1.0
@@ -1034,7 +1034,7 @@ class TestGeometricDyadic:
         and give the same state vector as the originally-synthesized
         circuit.  Same guarantee as regimes (a) and (b).
         """
-        qc, info = encode(GEOMETRIC(r=0.8, start=5), N=32)
+        qc, info = encode(GEOMETRIC(r=0.8, k_s=5), N=32)
         namespace = {"QuantumCircuit": QuantumCircuit}
         exec(compile(info.circuit_code, "<emit>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
@@ -1091,8 +1091,8 @@ class TestScaling:
         gate_vals = []
         for m in self.M_VALS:
             N = 2 ** m
-            # k_s = 3*N//4 gives a non-trivial binary decomposition
-            _, info = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+            # k_e = 3*N//4 gives a non-trivial binary decomposition
+            _, info = encode(STEP(k_e=3 * N // 4, c=1.0), N=N)
             gate_vals.append(info.gate_count)
         _assert_poly_scaling(self.M_VALS, gate_vals, "STEP")
 
@@ -1101,9 +1101,9 @@ class TestScaling:
         gate_vals = []
         for m in self.M_VALS:
             N = 2 ** m
-            k1 = N // 4
-            k2 = 3 * N // 4
-            _, info = encode(SQUARE(k1=k1, k2=k2, c=1.0), N=N)
+            k_s = N // 4
+            k_e = 3 * N // 4
+            _, info = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=N)
             gate_vals.append(info.gate_count)
         _assert_poly_scaling(self.M_VALS, gate_vals, "SQUARE")
 
@@ -1152,8 +1152,8 @@ class TestScaling:
         """
         for m in self.M_VALS:
             N = 2 ** m
-            _, info_sq = encode(SQUARE(k1=N // 4, k2=3 * N // 4, c=1.0), N=N)
-            _, info_st = encode(STEP(k_s=3 * N // 4, c=1.0), N=N)
+            _, info_sq = encode(SQUARE(k_s=N // 4, k_e=3 * N // 4, c=1.0), N=N)
+            _, info_st = encode(STEP(k_e=3 * N // 4, c=1.0), N=N)
             ratio = info_sq.gate_count / max(info_st.gate_count, 1)
             assert ratio < 6, (
                 f"m={m}: SQUARE gate count ({info_sq.gate_count}) is more than "
@@ -1173,8 +1173,8 @@ class TestScaling:
 
         checks = [
             ("SPARSE(s=1)", encode(SPARSE([(N // 2 - 1, 1.0)]), N=N)[1].gate_count),
-            ("STEP",        encode(STEP(k_s=3 * N // 4, c=1.0), N=N)[1].gate_count),
-            ("SQUARE",      encode(SQUARE(k1=N // 4, k2=3 * N // 4, c=1.0), N=N)[1].gate_count),
+            ("STEP",        encode(STEP(k_e=3 * N // 4, c=1.0), N=N)[1].gate_count),
+            ("SQUARE",      encode(SQUARE(k_s=N // 4, k_e=3 * N // 4, c=1.0), N=N)[1].gate_count),
             ("WALSH",       encode(WALSH(k=m // 2), N=N)[1].gate_count),
             ("GEOMETRIC",   encode(GEOMETRIC(r=0.95), N=N)[1].gate_count),
             ("FOURIER(T=1)",encode(FOURIER(modes=[(1, 1.0, 0)]), N=N)[1].gate_count),
@@ -1261,7 +1261,7 @@ class TestHamming:
     def test_lcu_composability(self):
         """HAMMING can be used as a SUM component."""
         circuit, info = encode(
-            SUM([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, HAMMING(r=0.5))]),
             N=16)
         assert info.kind == "SUM"
@@ -1385,7 +1385,7 @@ class TestStaircase:
 
     def test_lcu_composability(self):
         circuit, info = encode(
-            SUM([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
+            SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
                  (2.0, STAIRCASE(r=0.5))]),
             N=16)
         assert info.kind == "SUM"
@@ -1572,7 +1572,7 @@ class TestTensor:
         circuit, info = encode(
             TENSOR([(GEOMETRIC(r=0.7), 4),
                     (HAMMING(r=0.5), 8),
-                    (SQUARE(k1=1, k2=5, c=1.0), 8)]),
+                    (SQUARE(k_s=1, k_e=5, c=1.0), 8)]),
             N=4 * 8 * 8, validate=True)
         assert info.validated is True
         assert info.N == 256
@@ -1753,7 +1753,7 @@ class TestPolynomial:
     def test_lcu_composability(self):
         """POLYNOMIAL can be used as a SUM component."""
         circuit, info = encode(
-            SUM([(1.0, STEP(k_s=8, c=1.0)),
+            SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, POLYNOMIAL(coeffs=[0.0, 1.0]))]),
             N=16)
         assert info.kind == "SUM"
@@ -1881,17 +1881,17 @@ class TestPredictor:
             assert p["circuit_depth"] == d_t
 
     def test_step_exact(self):
-        """STEP: popcount-based closed form for various k_s."""
+        """STEP: popcount-based closed form for various k_e."""
         from pyencode import predict_gates, STEP
         for m in [6, 8, 10, 12]:
             N = 2**m
             test_cases = [N//2, 3*N//4, N//2 + N//4 + N//8, N-1]
-            for k_s in test_cases:
-                u_t, c_t, d_t = self._ground(STEP(k_s=k_s, c=1.0), N)
-                p = predict_gates(STEP(k_s=k_s, c=1.0), N)
+            for k_e in test_cases:
+                u_t, c_t, d_t = self._ground(STEP(k_e=k_e, c=1.0), N)
+                p = predict_gates(STEP(k_e=k_e, c=1.0), N)
                 assert p["exact"] is True
                 assert p["gate_count_1q"] == u_t, \
-                    f"m={m}, k_s={k_s}: 1q {p['gate_count_1q']} != {u_t}"
+                    f"m={m}, k_e={k_e}: 1q {p['gate_count_1q']} != {u_t}"
                 assert p["gate_count_2q"] == c_t
                 assert p["circuit_depth"] == d_t
 
@@ -1922,8 +1922,8 @@ class TestPredictor:
         from pyencode import predict_gates, SQUARE
         for m in [6, 8, 10, 12]:
             N = 2**m
-            u_t, c_t, d_t = self._ground(SQUARE(k1=0, k2=N//2, c=1.0), N)
-            p = predict_gates(SQUARE(k1=0, k2=N//2, c=1.0), N)
+            u_t, c_t, d_t = self._ground(SQUARE(k_s=0, k_e=N//2, c=1.0), N)
+            p = predict_gates(SQUARE(k_s=0, k_e=N//2, c=1.0), N)
             assert p["exact"] is True
             assert p["gate_count_1q"] == u_t
 
@@ -1944,8 +1944,8 @@ class TestPredictor:
         from pyencode import predict_gates, SQUARE
         for m in [8, 10, 12]:
             N = 2**m
-            u_t, c_t, d_t = self._ground(SQUARE(k1=N//4+1, k2=3*N//4+1, c=1.0), N)
-            p = predict_gates(SQUARE(k1=N//4+1, k2=3*N//4+1, c=1.0), N)
+            u_t, c_t, d_t = self._ground(SQUARE(k_s=N//4+1, k_e=3*N//4+1, c=1.0), N)
+            p = predict_gates(SQUARE(k_s=N//4+1, k_e=3*N//4+1, c=1.0), N)
             assert p["exact"] is False
             assert p["gate_count_1q"] + p["gate_count_2q"] >= u_t + c_t - 5
 
@@ -1978,24 +1978,24 @@ class TestPredictor:
             predict_gates(HAMMING(r=0.7), N=5)  # not a power of 2
 
     def test_geometric_start_prediction(self):
-        """Predict GEOMETRIC with start offset: log2(w) + popcount(start/w) gates."""
+        """Predict GEOMETRIC with k_s offset: log2(w) + popcount(k_s/w) gates."""
         from pyencode import predict_gates, encode, GEOMETRIC
         import warnings
         
-        # Test cases: (N, start, expected_1q_gates)
+        # Test cases: (N, k_s, expected_1q_gates)
         test_cases = [
             (64, 0,  6),   # vanilla: m=6 rotations
-            (64, 32, 6),   # start=N/2: log2(32)=5 + popcount(1)=1 = 6
-            (64, 48, 6),   # start=3N/4: log2(16)=4 + popcount(3)=2 = 6
-            (32, 24, 5),   # start=3N/4: log2(8)=3 + popcount(3)=2 = 5
-            (16, 8,  4),   # start=N/2: log2(8)=3 + popcount(1)=1 = 4
+            (64, 32, 6),   # k_s=N/2: log2(32)=5 + popcount(1)=1 = 6
+            (64, 48, 6),   # k_s=3N/4: log2(16)=4 + popcount(3)=2 = 6
+            (32, 24, 5),   # k_s=3N/4: log2(8)=3 + popcount(3)=2 = 5
+            (16, 8,  4),   # k_s=N/2: log2(8)=3 + popcount(1)=1 = 4
         ]
         
-        for N, start, expected_1q in test_cases:
-            p = predict_gates(GEOMETRIC(r=0.7, start=start), N)
+        for N, k_s, expected_1q in test_cases:
+            p = predict_gates(GEOMETRIC(r=0.7, k_s=k_s), N)
             assert p["exact"] is False  # transpiler may optimize small rotations
             assert p["gate_count_1q"] == expected_1q, \
-                f"N={N}, start={start}: pred {p['gate_count_1q']} != expected {expected_1q}"
+                f"N={N}, k_s={k_s}: pred {p['gate_count_1q']} != expected {expected_1q}"
             assert p["gate_count_2q"] == 0
             assert p["circuit_depth"] == 1
             
@@ -2003,10 +2003,10 @@ class TestPredictor:
             if N <= 32:  # avoid slow encode() for large N in tests
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    _, info = encode(GEOMETRIC(r=0.7, start=start), N)
+                    _, info = encode(GEOMETRIC(r=0.7, k_s=k_s), N)
                 # Prediction should be exact or close for aligned offsets
                 assert p["gate_count_1q"] == info.gate_count_1q, \
-                    f"N={N}, start={start}: predicted {p['gate_count_1q']} != actual {info.gate_count_1q}"
+                    f"N={N}, k_s={k_s}: predicted {p['gate_count_1q']} != actual {info.gate_count_1q}"
 
     def test_partition_sparse_geometric(self):
         """PARTITION predictor: SPARSE prefix + GEOMETRIC tail matches
@@ -2015,7 +2015,7 @@ class TestPredictor:
         from pyencode import predict_gates
         components = [
             SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-            GEOMETRIC(r=0.8, start=11),
+            GEOMETRIC(r=0.8, k_s=11),
         ]
         p = predict_gates(PARTITION(components), N=256)
         assert p["kind"] == "PARTITION"
@@ -2037,9 +2037,9 @@ class TestPredictor:
     def test_partition_multi_square(self):
         """PARTITION predictor with three disjoint SQUARE intervals."""
         from pyencode import predict_gates
-        components = [SQUARE(k1=0, k2=4, c=1.0),
-                      SQUARE(k1=8, k2=12, c=2.0),
-                      SQUARE(k1=14, k2=16, c=3.0)]
+        components = [SQUARE(k_s=0, k_e=4, c=1.0),
+                      SQUARE(k_s=8, k_e=12, c=2.0),
+                      SQUARE(k_s=14, k_e=16, c=3.0)]
         p = predict_gates(PARTITION(components), N=16)
         _, info = encode(PARTITION(components), N=16)
         actual = info.gate_count_1q + info.gate_count_2q
@@ -2066,7 +2066,7 @@ class TestPredictor:
             N = 1 << m
             p = predict_gates(
                 PARTITION([SPARSE([(1, 0.5), (3, 0.3)]),
-                           GEOMETRIC(r=0.9, start=5)]),
+                           GEOMETRIC(r=0.9, k_s=5)]),
                 N=N)
             preds.append((m, p["gate_count"]))
         # Monotone in m and bounded by a quadratic.
@@ -2081,7 +2081,7 @@ class TestPredictor:
         """Predictor must reject overlapping components just like encode()."""
         from pyencode import predict_gates
         with pytest.raises(ValueError, match="overlap"):
-            predict_gates(PARTITION([STEP(k_s=8), SQUARE(k1=4, k2=12)]),
+            predict_gates(PARTITION([STEP(k_e=8), SQUARE(k_s=4, k_e=12)]),
                           N=16)
 
     def test_partition_rejects_dense_component_in_predictor(self):
@@ -2102,10 +2102,10 @@ class TestPredictor:
         upper bound and stays within a constant factor of actual."""
         from pyencode import predict_gates
         cases = [
-            [SPARSE([(0, 0.5)]), GEOMETRIC(r=0.9, start=1)],          # worst start
-            [SPARSE([(2, 0.3), (5, 0.5)]), GEOMETRIC(r=0.8, start=7)],
-            [STEP(k_s=4, c=1.0), GEOMETRIC(r=0.7, start=4)],
-            [SQUARE(k1=1, k2=3), SQUARE(k1=5, k2=11)],
+            [SPARSE([(0, 0.5)]), GEOMETRIC(r=0.9, k_s=1)],          # worst k_s
+            [SPARSE([(2, 0.3), (5, 0.5)]), GEOMETRIC(r=0.8, k_s=7)],
+            [STEP(k_e=4, c=1.0), GEOMETRIC(r=0.7, k_s=4)],
+            [SQUARE(k_s=1, k_e=3), SQUARE(k_s=5, k_e=11)],
         ]
         for components in cases:
             p = predict_gates(PARTITION(components), N=32)
@@ -2156,13 +2156,13 @@ class TestPartition:
                 for load in p["loads"]:
                     f[int(load["k"])] += float(load["P"])
             elif vt.name == "STEP":
-                f[:int(p["k_s"])] += float(p.get("c", 1.0))
+                f[:int(p["k_e"])] += float(p.get("c", 1.0))
             elif vt.name == "SQUARE":
-                f[int(p["k1"]):int(p["k2"])] += float(p.get("c", 1.0))
+                f[int(p["k_s"]):int(p["k_e"])] += float(p.get("c", 1.0))
             elif vt.name == "GEOMETRIC":
                 r = float(p["r"])
                 c = float(p.get("c", 1.0))
-                s = int(p.get("start", 0))
+                s = int(p.get("k_s", 0))
                 f[s:] += c * (r ** np.arange(N - s))
         return f
 
@@ -2174,7 +2174,7 @@ class TestPartition:
         """The user's example: SPARSE prefix, GEOMETRIC tail, N=256."""
         components = [
             SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-            GEOMETRIC(r=0.8, start=11),
+            GEOMETRIC(r=0.8, k_s=11),
         ]
         qc, info = encode(PARTITION(components), N=256)
         assert info.kind == "PARTITION"
@@ -2193,7 +2193,7 @@ class TestPartition:
         disjoint combination, since no ancilla + no PREP/SELECT overhead."""
         components = [
             SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
-            GEOMETRIC(r=0.8, start=11),
+            GEOMETRIC(r=0.8, k_s=11),
         ]
         _, info_p = encode(PARTITION(components), N=256)
         import warnings
@@ -2201,7 +2201,7 @@ class TestPartition:
             warnings.simplefilter("ignore")   # LCU may warn about overlap
             _, info_l = encode(
                 SUM([(1.0, SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)])),
-                     (1.0, GEOMETRIC(r=0.8, start=11))]),
+                     (1.0, GEOMETRIC(r=0.8, k_s=11))]),
                 N=256)
         # Use total gate_count as the comparison metric since LCU's
         # transpile-based 2q count may be None for some combinations.
@@ -2217,9 +2217,9 @@ class TestPartition:
 
     def test_multi_square_piecewise_constant(self):
         """Three disjoint SQUARE intervals with distinct amplitudes."""
-        components = [SQUARE(k1=0, k2=4, c=1.0),
-                      SQUARE(k1=8, k2=12, c=2.0),
-                      SQUARE(k1=14, k2=16, c=3.0)]
+        components = [SQUARE(k_s=0, k_e=4, c=1.0),
+                      SQUARE(k_s=8, k_e=12, c=2.0),
+                      SQUARE(k_s=14, k_e=16, c=3.0)]
         qc, info = encode(PARTITION(components), N=16)
         assert info.success_probability == 1.0
 
@@ -2229,9 +2229,9 @@ class TestPartition:
             np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
 
     def test_step_plus_geometric_tail(self):
-        """STEP plateau followed by GEOMETRIC decay starting at k_s."""
-        components = [STEP(k_s=8, c=1.0),
-                      GEOMETRIC(r=0.7, start=8, c=1.0)]
+        """STEP plateau followed by GEOMETRIC decay starting at k_e."""
+        components = [STEP(k_e=8, c=1.0),
+                      GEOMETRIC(r=0.7, k_s=8, c=1.0)]
         qc, info = encode(PARTITION(components), N=32)
         assert info.success_probability == 1.0
 
@@ -2243,9 +2243,9 @@ class TestPartition:
     def test_sparse_interleaved_with_squares(self):
         """SPARSE singletons interleaved with SQUARE blocks."""
         components = [
-            SQUARE(k1=0, k2=2, c=1.0),
+            SQUARE(k_s=0, k_e=2, c=1.0),
             SPARSE([(3, 2.5)]),
-            SQUARE(k1=5, k2=9, c=0.5),
+            SQUARE(k_s=5, k_e=9, c=0.5),
             SPARSE([(10, 4.0), (13, -1.5)]),
         ]
         qc, info = encode(PARTITION(components), N=16)
@@ -2260,7 +2260,7 @@ class TestPartition:
         """Signed sparse values are correctly preserved (Gleinig handles
         sign through the anchor state; spread preserves sign uniformly)."""
         components = [SPARSE([(2, -0.6), (7, 0.4)]),
-                      GEOMETRIC(r=0.5, start=8)]
+                      GEOMETRIC(r=0.5, k_s=8)]
         qc, info = encode(PARTITION(components), N=16)
         expected = self._build_expected(components, 16)
         expected /= np.linalg.norm(expected)
@@ -2279,12 +2279,12 @@ class TestPartition:
     def test_overlap_raises(self):
         """Overlapping supports must raise ValueError."""
         with pytest.raises(ValueError, match="overlap"):
-            encode(PARTITION([STEP(k_s=8), SQUARE(k1=4, k2=12)]), N=16)
+            encode(PARTITION([STEP(k_e=8), SQUARE(k_s=4, k_e=12)]), N=16)
 
     def test_sparse_overlap_raises(self):
         """A SPARSE singleton inside another segment's interval is an overlap."""
         with pytest.raises(ValueError, match="overlap"):
-            encode(PARTITION([SQUARE(k1=0, k2=8, c=1.0),
+            encode(PARTITION([SQUARE(k_s=0, k_e=8, c=1.0),
                               SPARSE([(3, 0.5)])]),
                    N=16)
 
@@ -2303,11 +2303,11 @@ class TestPartition:
 
     def test_rejects_walsh_component(self):
         with pytest.raises(TypeError, match="PARTITION"):
-            PARTITION([WALSH(k=0), SQUARE(k1=4, k2=8)])
+            PARTITION([WALSH(k=0), SQUARE(k_s=4, k_e=8)])
 
     def test_rejects_hamming_component(self):
         with pytest.raises(TypeError, match="PARTITION"):
-            PARTITION([HAMMING(r=0.5), STEP(k_s=4)])
+            PARTITION([HAMMING(r=0.5), STEP(k_e=4)])
 
     def test_empty_components_raises(self):
         with pytest.raises(ValueError, match="at least one"):
@@ -2315,7 +2315,7 @@ class TestPartition:
 
     def test_non_pattern_raises(self):
         with pytest.raises(TypeError, match="pattern"):
-            PARTITION([(1.0, STEP(k_s=4))])   # LCU-style tuple, not allowed
+            PARTITION([(1.0, STEP(k_e=4))])   # LCU-style tuple, not allowed
 
     # ------------------------------------------------------------------
     # Correctness sweeps
@@ -2324,10 +2324,10 @@ class TestPartition:
     def test_exhaustive_small_N(self):
         """Sweep a few disjoint combinations for small N."""
         scenarios = [
-            [SPARSE([(0, 1.0)]), GEOMETRIC(r=0.5, start=1)],
-            [SQUARE(k1=0, k2=2, c=2.0), GEOMETRIC(r=0.7, start=2)],
-            [SPARSE([(1, 0.5), (3, 0.8)]), GEOMETRIC(r=0.6, start=4)],
-            [STEP(k_s=4, c=1.5), SPARSE([(5, 0.3), (7, -0.4)])],
+            [SPARSE([(0, 1.0)]), GEOMETRIC(r=0.5, k_s=1)],
+            [SQUARE(k_s=0, k_e=2, c=2.0), GEOMETRIC(r=0.7, k_s=2)],
+            [SPARSE([(1, 0.5), (3, 0.8)]), GEOMETRIC(r=0.6, k_s=4)],
+            [STEP(k_e=4, c=1.5), SPARSE([(5, 0.3), (7, -0.4)])],
         ]
         for components in scenarios:
             qc, info = encode(PARTITION(components), N=8)
@@ -2340,8 +2340,8 @@ class TestPartition:
 
     def test_single_component_delegates(self):
         """PARTITION with a single component must still be correct."""
-        for comp in [SPARSE([(3, 0.7)]), STEP(k_s=8, c=1.0),
-                     SQUARE(k1=2, k2=6, c=1.0), GEOMETRIC(r=0.8, start=4)]:
+        for comp in [SPARSE([(3, 0.7)]), STEP(k_e=8, c=1.0),
+                     SQUARE(k_s=2, k_e=6, c=1.0), GEOMETRIC(r=0.8, k_s=4)]:
             qc, info = encode(PARTITION([comp]), N=16)
             assert info.success_probability == 1.0
             expected = self._build_expected([comp], 16)
@@ -2361,7 +2361,7 @@ class TestPartition:
             N = 1 << m
             components = [
                 SPARSE([(1, 0.5), (3, 0.3)]),
-                GEOMETRIC(r=0.9, start=7),
+                GEOMETRIC(r=0.9, k_s=7),
             ]
             _, info = encode(PARTITION(components), N=N)
             counts.append(info.gate_count)
@@ -2375,9 +2375,9 @@ class TestPartition:
         """PARTITION is ancilla-free; success_probability is always 1."""
         for components in [
             [SPARSE([(0, 0.5), (15, 0.7)])],
-            [SQUARE(k1=0, k2=8, c=1.0)],
-            [SPARSE([(1, 0.3)]), GEOMETRIC(r=0.8, start=2)],
-            [STEP(k_s=4), SQUARE(k1=4, k2=8), GEOMETRIC(r=0.5, start=8)],
+            [SQUARE(k_s=0, k_e=8, c=1.0)],
+            [SPARSE([(1, 0.3)]), GEOMETRIC(r=0.8, k_s=2)],
+            [STEP(k_e=4), SQUARE(k_s=4, k_e=8), GEOMETRIC(r=0.5, k_s=8)],
         ]:
             _, info = encode(PARTITION(components), N=16)
             assert info.success_probability == 1.0
@@ -2388,7 +2388,7 @@ class TestPartition:
 
     def test_validate_mode(self):
         """validate=True materialises the classical reference vector."""
-        components = [SPARSE([(1, 0.4)]), GEOMETRIC(r=0.7, start=2)]
+        components = [SPARSE([(1, 0.4)]), GEOMETRIC(r=0.7, k_s=2)]
         _, info = encode(PARTITION(components), N=16, validate=True)
         assert info.validated is True
         ref = self._build_expected(components, 16)
@@ -2397,7 +2397,7 @@ class TestPartition:
 
     def test_emitted_code_runs(self):
         """The emitted code must round-trip through exec() to the same circuit."""
-        components = [SPARSE([(2, 0.5)]), GEOMETRIC(r=0.6, start=4)]
+        components = [SPARSE([(2, 0.5)]), GEOMETRIC(r=0.6, k_s=4)]
         qc, info = info_first = encode(PARTITION(components), N=16)
         ns = {}
         exec(compile(info.circuit_code, "<emit>", "exec"), ns)
@@ -2439,9 +2439,9 @@ class TestConstructorRepr:
     def test_other_constructors_round_trip(self):
         """STEP, SQUARE, GEOMETRIC, WALSH, HAMMING, STAIRCASE use
         constructor-compatible param names, so the base repr works."""
-        for obj in [STEP(k_s=4),
-                    SQUARE(k1=2, k2=6),
-                    GEOMETRIC(r=0.7, start=3),
+        for obj in [STEP(k_e=4),
+                    SQUARE(k_s=2, k_e=6),
+                    GEOMETRIC(r=0.7, k_s=3),
                     WALSH(k=1),
                     HAMMING(r=0.5),
                     STAIRCASE(r=0.8)]:
@@ -2455,7 +2455,7 @@ class TestConstructorRepr:
         (regression for the 'loads=' repr bug + the commented-out imports bug)."""
         qc, info = encode(
             TENSOR([(SPARSE([(1, 0.5), (3, 0.7)]), 4),
-                    (STEP(k_s=4), 4)]),
+                    (STEP(k_e=4), 4)]),
             N=16,
         )
         ns = {}
@@ -2470,7 +2470,7 @@ class TestConstructorRepr:
         """PARTITION's emitted code with a SPARSE component must round-trip."""
         qc, info = encode(
             PARTITION([SPARSE([(2, 0.5), (7, -0.3)]),
-                       GEOMETRIC(r=0.7, start=8)]),
+                       GEOMETRIC(r=0.7, k_s=8)]),
             N=16,
         )
         ns = {}
@@ -2507,8 +2507,8 @@ class TestLcuDeprecated:
         import warnings
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            LCU([(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                 (1.0, SQUARE(k1=4, k2=8, c=1.0))])
+            LCU([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0, SQUARE(k_s=4, k_e=8, c=1.0))])
             deprecations = [w for w in caught
                             if issubclass(w.category, DeprecationWarning)]
             assert len(deprecations) == 1
@@ -2519,8 +2519,8 @@ class TestLcuDeprecated:
     def test_lcu_produces_equivalent_sum_object(self):
         """LCU(...) must return a SUM instance with identical params."""
         import warnings
-        components = [(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                      (1.0, SQUARE(k1=4, k2=8, c=1.0))]
+        components = [(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                      (1.0, SQUARE(k_s=4, k_e=8, c=1.0))]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             via_lcu = LCU(components)
@@ -2532,8 +2532,8 @@ class TestLcuDeprecated:
     def test_lcu_encodes_same_circuit_as_sum(self):
         """encode() via the deprecated LCU name produces the same circuit."""
         import warnings
-        components = [(1.0, SQUARE(k1=0, k2=4, c=1.0)),
-                      (1.0, SQUARE(k1=4, k2=8, c=1.0))]
+        components = [(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                      (1.0, SQUARE(k_s=4, k_e=8, c=1.0))]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
             qc_lcu, info_lcu = encode(LCU(components), N=8)

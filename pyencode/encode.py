@@ -31,8 +31,8 @@ def encode(pattern, N: int, validate: bool = False, tol: float = 1e-6):
     pattern : _Pattern instance or list of _Pattern instances
         A typed constructor:
           SPARSE([(x1,a1), (x2,a2), ...])
-          STEP(k_s, c)
-          SQUARE(k1, k2, c)
+          STEP(k_e, c)
+          SQUARE(k_s, k_e, c)
           FOURIER(modes=[(n, A, phi), ...])
         Pass a list of SQUARE constructors for composite piecewise-constant
         vectors (e.g. Fermi-Hubbard PREP).
@@ -52,11 +52,11 @@ def encode(pattern, N: int, validate: bool = False, tol: float = 1e-6):
     --------
     >>> from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER
     >>> circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
-    >>> circuit, info = encode(STEP(k_s=4, c=1.0), N=8)
-    >>> circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+    >>> circuit, info = encode(STEP(k_e=4, c=1.0), N=8)
+    >>> circuit, info = encode(SQUARE(k_s=2, k_e=6, c=1.0), N=8)
     >>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
-    >>> circuit, info = encode([SQUARE(k1=0, k2=16, c=1.0),
-    ...                         SQUARE(k1=16, k2=24, c=4.0)], N=32)
+    >>> circuit, info = encode([SQUARE(k_s=0, k_e=16, c=1.0),
+    ...                         SQUARE(k_s=16, k_e=24, c=4.0)], N=32)
     """
     if isinstance(pattern, list):
         return _encode_composite(pattern, N, validate=validate, tol=tol)

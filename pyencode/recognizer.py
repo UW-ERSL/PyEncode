@@ -12,7 +12,7 @@ Supported patterns
   POINT_LOAD      : f[k] = P  (single node)
   UNIFORM_LOAD    : f = ones(N) * c
   STEP_LOAD       : f[:k] = c  (prefix slice)
-  SQUARE_LOAD     : f[k1:k2] = c  (interior segment)
+  SQUARE_LOAD     : f[k_s:k_e] = c  (interior segment)
   SINUSOIDAL_LOAD : f = sin(2*pi*n*k/N + phi)  (single mode, optional phase)
   COSINE_LOAD     : f = cos(2*pi*n*k/N + phi)  (single mode, optional phase)
   MULTI_POINT_LOAD: multiple f[k_i] = P_i with L >= 2, arbitrary weights
@@ -40,7 +40,7 @@ from typing import Optional
 
 class PatternKind(Enum):
     STEP            = auto()
-    SQUARE          = auto()   # f[k1:k2] = c  (interior segment)
+    SQUARE          = auto()   # f[k_s:k_e] = c  (interior segment)
     UNKNOWN         = auto()   # fallback to Qiskit StatePreparation
     # New unified types (paper API)
     SPARSE          = auto()   # Gleinig-Hoefler: s point masses at arbitrary indices
@@ -456,7 +456,7 @@ def _try_uniform_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
 
 def _try_step_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     """
-    Pattern: f[:k_s] = c   (prefix slice assignment)
+    Pattern: f[:k_e] = c   (prefix slice assignment)
     """
     subscript_assigns = [a for a in ctx.assignments
                          if a["kind"] == "subscript_assign"
@@ -470,27 +470,27 @@ def _try_step_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if idx_desc.get("kind") != "slice":
         return None
     if idx_desc.get("lower") is not None:
-        return None   # must start from 0
+        return None   # must k_s from 0
 
-    k_s = idx_desc.get("upper")
-    if k_s is None:
+    k_e = idx_desc.get("upper")
+    if k_e is None:
         return None
     if val_desc is None or not isinstance(val_desc.get("value"), (int, float)):
         return None
 
     c = float(val_desc["value"])
     N = ctx.N
-    if N is None or k_s > N:
+    if N is None or k_e > N:
         return None
 
-    return LoadPattern(PatternKind.STEP, N=N, params={"k_s": int(k_s), "c": c})
+    return LoadPattern(PatternKind.STEP, N=N, params={"k_e": int(k_e), "c": c})
 
 
 def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     """
-    Pattern: f[k1:k2] = c   (interior segment, k1 > 0)
+    Pattern: f[k_s:k_e] = c   (interior segment, k_s > 0)
 
-    The prepared state is (1/sqrt(k2-k1)) * sum_{j=k1}^{k2-1} |j>.
+    The prepared state is (1/sqrt(k_e-k_s)) * sum_{j=k_s}^{k_e-1} |j>.
     Circuit: difference of two step-load circuits via amplitude arithmetic.
     Gate count: O(m).
     """
@@ -506,11 +506,11 @@ def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
     if idx_desc.get("kind") != "slice":
         return None
 
-    k1 = idx_desc.get("lower")
-    k2 = idx_desc.get("upper")
-    if k1 is None or k2 is None:
+    k_s = idx_desc.get("lower")
+    k_e = idx_desc.get("upper")
+    if k_s is None or k_e is None:
         return None   # must have explicit lower AND upper bound
-    if k1 == 0:
+    if k_s == 0:
         return None   # that is a step load, not a square load
 
     if val_desc is None or not isinstance(val_desc.get("value"), (int, float)):
@@ -518,11 +518,11 @@ def _try_square_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:
 
     c  = float(val_desc["value"])
     N  = ctx.N
-    if N is None or k2 > N or k1 >= k2:
+    if N is None or k_e > N or k_s >= k_e:
         return None
 
     return LoadPattern(PatternKind.SQUARE, N=N,
-                       params={"k1": int(k1), "k2": int(k2), "c": c})
+                       params={"k_s": int(k_s), "k_e": int(k_e), "c": c})
 
 
 def _try_sinusoidal_load(ctx: _ExecutionContext) -> Optional[LoadPattern]:

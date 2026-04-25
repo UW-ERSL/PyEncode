@@ -9,8 +9,8 @@ Qiskit circuits — no vector materialization, no approximation.
 The exact pattern families are:
 
   SPARSE     :  Gleinig-Hoefler s-sparse state             O(s·m)
-  STEP       :  Prefix uniform superposition [0, k_s)      O(m)
-  SQUARE     :  Interval uniform superposition [k1, k2)    O(m²) / O(m) aligned
+  STEP       :  Prefix uniform superposition [0, k_e)      O(m)
+  SQUARE     :  Interval uniform superposition [k_s, k_e)    O(m²) / O(m) aligned
   WALSH      :  k-th Walsh function                        O(m)
   FOURIER    :  T sinusoidal modes via inverse QFT         O(m²)
   GEOMETRIC  :  Geometric product state c·rⁱ               O(m) / O(m²) offset
@@ -29,8 +29,8 @@ Usage
 -----
 >>> from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, DICKE
 >>> circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
->>> circuit, info = encode(STEP(k_s=4, c=1.0), N=8)
->>> circuit, info = encode(SQUARE(k1=2, k2=6, c=1.0), N=8)
+>>> circuit, info = encode(STEP(k_e=4, c=1.0), N=8)
+>>> circuit, info = encode(SQUARE(k_s=2, k_e=6, c=1.0), N=8)
 >>> circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
 >>> circuit, info = encode(DICKE(k=2), N=16)
 
@@ -86,4 +86,4 @@ __all__ = [
     "STEP",
     "SQUARE",
 ]
-__version__ = "2.0.0"
+__version__ = "3.0.0"
