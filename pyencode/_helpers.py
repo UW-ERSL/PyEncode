@@ -236,7 +236,7 @@ def _synthesize_and_build_info(
                 complexity = "O(m^2)"
 
     info = EncodingInfo(
-        kind=pattern.kind.name,
+        pattern_name=pattern.kind.name,
         N=N,
         m=m,
         gate_count=total_gates,
@@ -553,7 +553,7 @@ def _encode_composite(
     complexity = f"O({K} * component)"
 
     info = EncodingInfo(
-        kind="COMPOSITE",
+        pattern_name="COMPOSITE",
         N=N,
         m=m,
         gate_count=total_gates,
@@ -859,7 +859,7 @@ def _encode_sum(sum_obj, N, validate, tol):
     circuit_code = _emit_sum_circuit_code(qc, m, n_anc, comp_objs, weights)
 
     info = EncodingInfo(
-        kind="SUM",
+        pattern_name="SUM",
         N=N,
         m=m,
         gate_count=total_gates,
@@ -1070,7 +1070,7 @@ def _encode_tensor(tensor_obj, N, validate, tol):
     complexity = "O(sum of components)"
 
     info = EncodingInfo(
-        kind="TENSOR",
+        pattern_name="TENSOR",
         N=N,
         m=m,
         gate_count=total_gates,
@@ -1319,7 +1319,7 @@ def _encode_partition(part_obj, N, validate, tol):
 
     L = len(all_atoms)
     info = EncodingInfo(
-        kind="PARTITION",
+        pattern_name="PARTITION",
         N=N,
         m=m,
         gate_count=sum(qc.count_ops().values()),

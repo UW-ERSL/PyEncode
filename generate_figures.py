@@ -87,7 +87,7 @@ def save_circuit(circuit, filename, scale=0.8, fold=-1):
 
 
 def print_info(label, info):
-    print(f"  {label}: type={info.kind}, gates={info.gate_count}, "
+    print(f"  {label}: type={info.pattern_name}, gates={info.gate_count}, "
           f"complexity={info.complexity}")
 
 

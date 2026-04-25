@@ -29,7 +29,7 @@ component predictions plus composition overhead.
 Returned dict
 -------------
     {
-      "kind":    str,
+      "pattern_name":    str,
       "N":              int,
       "m":              int,
       "gate_count_1q":  int,    # predicted transpiled U count
@@ -420,7 +420,7 @@ def _predict_tensor(vec_obj: TENSOR) -> dict:
         complexities.append(comp_pred["complexity"])
     N = 1 << total_m
     return dict(
-        kind="TENSOR",
+        pattern_name="TENSOR",
         N=N,
         m=total_m,
         gate_count_1q=total_1q,
@@ -471,7 +471,7 @@ def _predict_sum(vec_obj: SUM, N: int) -> dict:
     total_depth += 2 * r
 
     return dict(
-        kind="SUM",
+        pattern_name="SUM",
         N=N,
         m=m + ancilla_qubits,
         gate_count_1q=total_1q,
@@ -552,7 +552,7 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
         sparse_params = {"loads": [{"k": a_k, "P": 1.0} for (a_k, _) in atoms]}
         inner = _predict_sparse(m, sparse_params)
         return dict(
-            kind="PARTITION",
+            pattern_name="PARTITION",
             N=N,
             m=m,
             gate_count_1q=inner["gate_count_1q"],
@@ -583,7 +583,7 @@ def _predict_partition(vec_obj: PARTITION, N: int) -> dict:
     total_1q = anchor_1q + spread_1q
     total_2q = anchor_2q + spread_2q
     return dict(
-        kind="PARTITION",
+        pattern_name="PARTITION",
         N=N,
         m=m,
         gate_count_1q=total_1q,
@@ -658,12 +658,12 @@ def predict_gates(pattern: Any, N: int) -> dict:
     --------
     >>> from pyencode import predict_gates, POLYNOMIAL, GEOMETRIC
     >>> predict_gates(POLYNOMIAL(coeffs=[0.0, 1.0]), N=4096)
-    {'kind': 'POLYNOMIAL', 'N': 4096, 'm': 12,
+    {'pattern_name': 'POLYNOMIAL', 'N': 4096, 'm': 12,
      'gate_count_1q': 56, 'gate_count_2q': 22, 'gate_count': 78,
      'circuit_depth': 45, 'complexity': 'O(m)', 'exact': True}
 
     >>> predict_gates(GEOMETRIC(r=0.95), N=65536)
-    {'kind': 'GEOMETRIC', 'N': 65536, 'm': 16, ...}
+    {'pattern_name': 'GEOMETRIC', 'N': 65536, 'm': 16, ...}
     """
     # Composite constructors
     if isinstance(pattern, TENSOR):
@@ -682,7 +682,7 @@ def predict_gates(pattern: Any, N: int) -> dict:
             total_2q += cp["gate_count_2q"]
             total_depth += cp["circuit_depth"]
         return dict(
-            kind="COMPOSITE",
+            pattern_name="COMPOSITE",
             N=N, m=m,
             gate_count_1q=total_1q, gate_count_2q=total_2q,
             gate_count=total_1q + total_2q,
@@ -708,7 +708,7 @@ def predict_gates(pattern: Any, N: int) -> dict:
         raise ValueError(f"No predictor available for {vtype.name}.")
 
     out = predictor(m, pattern.params)
-    out["kind"] = vtype.name
+    out["pattern_name"] = vtype.name
     out["N"] = N
     out["m"] = m
     out["gate_count"] = out["gate_count_1q"] + out["gate_count_2q"]

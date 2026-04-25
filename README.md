@@ -143,7 +143,7 @@ loop before committing to synthesis.
 from pyencode import predict_gates, POLYNOMIAL
 
 p = predict_gates(POLYNOMIAL(coeffs=[0.0, 1.0]), N=4096)
-# {'kind': 'POLYNOMIAL', 'N': 4096, 'm': 12,
+# {'pattern_name': 'POLYNOMIAL', 'N': 4096, 'm': 12,
 #  'gate_count_1q': 56, 'gate_count_2q': 22, 'gate_count': 78,
 #  'circuit_depth': 45, 'complexity': 'O(m)', 'exact': True}
 ```

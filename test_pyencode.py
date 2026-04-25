@@ -68,7 +68,7 @@ class TestSparse:
 
     def test_single_basic(self):
         circuit, info = encode(SPARSE([(3, 5.0)]), N=8)
-        assert info.kind == "SPARSE"
+        assert info.pattern_name == "SPARSE"
         assert info.N == 8 and info.m == 3
         expected = np.zeros(8); expected[3] = 5.0
         assert_encodes(circuit, expected)
@@ -141,7 +141,7 @@ class TestStep:
 
     def test_basic(self):
         circuit, info = encode(STEP(k_e=4, c=2.0), N=8)
-        assert info.kind == "STEP"
+        assert info.pattern_name == "STEP"
         expected = np.zeros(8); expected[:4] = 2.0
         assert_encodes(circuit, expected)
 
@@ -187,7 +187,7 @@ class TestSquare:
 
     def test_basic(self):
         circuit, info = encode(SQUARE(k_s=2, k_e=6, c=1.0), N=8)
-        assert info.kind == "SQUARE"
+        assert info.pattern_name == "SQUARE"
         expected = np.zeros(8); expected[2:6] = 1.0
         assert_encodes(circuit, expected)
 
@@ -242,7 +242,7 @@ class TestSquare:
         ], N=8)
         # Composite uses LCU with ancilla qubits; verify it runs and
         # returns the right metadata rather than checking statevector directly.
-        assert info.kind == "COMPOSITE"
+        assert info.pattern_name == "COMPOSITE"
         assert circuit.num_qubits >= 3  # m=3 data qubits + ancilla
 
 
@@ -254,7 +254,7 @@ class TestFourier:
 
     def test_single_sine(self):
         circuit, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=64)
-        assert info.kind == "FOURIER"
+        assert info.pattern_name == "FOURIER"
         k = np.arange(64)
         assert_encodes(circuit, np.sin(2 * np.pi * k / 64))
 
@@ -377,7 +377,7 @@ class TestWalsh:
     def test_k0_standard(self):
         """Standard Walsh k=0: alternates +/-1 every sample."""
         circuit, info = encode(WALSH(k=0), N=8)
-        assert info.kind == "WALSH"
+        assert info.pattern_name == "WALSH"
         expected = np.array([1,-1,1,-1,1,-1,1,-1], dtype=float)
         assert_encodes(circuit, expected)
 
@@ -456,7 +456,7 @@ class TestSum:
         circuit, info = encode(
             SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
                  (1.0, SQUARE(k_s=4, k_e=8, c=1.0))]), N=8)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         # p = sum_j beta_j^4 = 2*(1/sqrt(2))^4 = 0.5 for 2 equal-weight disjoint
         assert abs(info.success_probability - 0.5) < 1e-6
         expected = np.ones(8, dtype=float)
@@ -629,7 +629,7 @@ class TestGeometric:
 
     def test_decay_basic(self):
         circuit, info = encode(GEOMETRIC(r=0.5), N=8)
-        assert info.kind == "GEOMETRIC"
+        assert info.pattern_name == "GEOMETRIC"
         assert info.complexity == "O(m)"
         f = 0.5 ** np.arange(8)
         assert_encodes(circuit, f)
@@ -695,7 +695,7 @@ class TestGeometric:
             SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, GEOMETRIC(r=0.5))]),
             N=16)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     # === k_s parameter tests ===
@@ -1023,7 +1023,7 @@ class TestGeometricDyadic:
             SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, GEOMETRIC(r=0.5, k_s=5))]),
             N=16)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_emitted_code_runs_and_matches(self):
@@ -1197,7 +1197,7 @@ class TestHamming:
 
     def test_basic(self):
         circuit, info = encode(HAMMING(r=0.5), N=8)
-        assert info.kind == "HAMMING"
+        assert info.pattern_name == "HAMMING"
         assert info.complexity == "O(m)"
         pops = np.array([bin(i).count("1") for i in range(8)], dtype=float)
         f = 0.5 ** pops
@@ -1264,7 +1264,7 @@ class TestHamming:
             SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, HAMMING(r=0.5))]),
             N=16)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_hamming_weight_structure(self):
@@ -1291,7 +1291,7 @@ class TestStaircase:
 
     def test_basic(self):
         circuit, info = encode(STAIRCASE(r=0.5), N=8)
-        assert info.kind == "STAIRCASE"
+        assert info.pattern_name == "STAIRCASE"
         assert info.complexity == "O(m)"
         f = np.zeros(8)
         for k in range(4):
@@ -1388,7 +1388,7 @@ class TestStaircase:
             SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
                  (2.0, STAIRCASE(r=0.5))]),
             N=16)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         assert 0 < info.success_probability <= 1.0
 
 
@@ -1417,7 +1417,7 @@ class TestDicke:
 
     def test_basic(self):
         circuit, info = encode(DICKE(k=2), N=16)  # m = 4
-        assert info.kind == "DICKE"
+        assert info.pattern_name == "DICKE"
         assert info.complexity == "O(k*(m-k))"
         assert_encodes(circuit, _weight_k_vector(4, 2))
 
@@ -1527,7 +1527,7 @@ class TestDicke:
             SUM([(1.0, DICKE(k=1)),
                  (1.0, DICKE(k=3))]),
             N=16)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         assert 0 < info.success_probability <= 1.0
 
 
@@ -1542,7 +1542,7 @@ class TestTensor:
             TENSOR([(GEOMETRIC(r=0.5), 8),
                     (GEOMETRIC(r=0.8), 8)]),
             N=64)
-        assert info.kind == "TENSOR"
+        assert info.pattern_name == "TENSOR"
         assert info.N == 64
         assert info.m == 6
 
@@ -1655,7 +1655,7 @@ class TestPolynomial:
     def test_ramp_basic(self):
         """POLYNOMIAL(coeffs=[0, 1]) == ramp f(i) = i/(N-1)."""
         circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=16)
-        assert info.kind == "POLYNOMIAL"
+        assert info.pattern_name == "POLYNOMIAL"
         sv = np.array(statevector(circuit)).real
         f = self._normalised_eval([0.0, 1.0], 16)
         expected = f / np.linalg.norm(f)
@@ -1756,7 +1756,7 @@ class TestPolynomial:
             SUM([(1.0, STEP(k_e=8, c=1.0)),
                  (2.0, POLYNOMIAL(coeffs=[0.0, 1.0]))]),
             N=16)
-        assert info.kind == "SUM"
+        assert info.pattern_name == "SUM"
         assert 0 < info.success_probability <= 1.0
 
     def test_tensor_composability(self):
@@ -2018,7 +2018,7 @@ class TestPredictor:
             GEOMETRIC(r=0.8, k_s=11),
         ]
         p = predict_gates(PARTITION(components), N=256)
-        assert p["kind"] == "PARTITION"
+        assert p["pattern_name"] == "PARTITION"
         assert p["N"] == 256 and p["m"] == 8
         assert p["complexity"].startswith("O(L")
         assert p["exact"] is False
@@ -2177,7 +2177,7 @@ class TestPartition:
             GEOMETRIC(r=0.8, k_s=11),
         ]
         qc, info = encode(PARTITION(components), N=256)
-        assert info.kind == "PARTITION"
+        assert info.pattern_name == "PARTITION"
         assert info.success_probability == 1.0
         assert info.complexity.startswith("O(L")
         # No ancilla qubits: the register width is exactly m.
@@ -2538,7 +2538,7 @@ class TestLcuDeprecated:
             warnings.simplefilter("ignore", DeprecationWarning)
             qc_lcu, info_lcu = encode(LCU(components), N=8)
         qc_sum, info_sum = encode(SUM(components), N=8)
-        assert info_lcu.kind == info_sum.kind == "SUM"
+        assert info_lcu.pattern_name == info_sum.pattern_name == "SUM"
         assert info_lcu.gate_count == info_sum.gate_count
         assert info_lcu.success_probability == info_sum.success_probability
 

@@ -776,8 +776,8 @@ class EncodingInfo:
 
     Attributes
     ----------
-    kind : str
-        Name of the recognized vector pattern.
+    pattern_name : str
+        Name of the recognized pattern (e.g. "SPARSE", "STEP", "WALSH").
     N : int
         Number of vector components (must be a power of 2).
     m : int
@@ -809,7 +809,7 @@ class EncodingInfo:
         May differ from the raw circuit depth visible via print(circuit).
         None if transpilation was not performed.
     """
-    kind: str
+    pattern_name: str
     N: int
     m: int
     gate_count: int
@@ -826,7 +826,7 @@ class EncodingInfo:
     def __str__(self) -> str:
         lines = [
             f"PyEncode  v{__version__}",
-            f"  Pattern     : {self.kind}",
+            f"  Pattern     : {self.pattern_name}",
             f"  N           : {self.N}  (m = {self.m} qubits)",
             f"  Gate count  : {self.gate_count}",
             f"  Complexity  : {self.complexity}",
