@@ -123,11 +123,11 @@ def fig_sparse_single():
 
 def fig_sparse_two():
     """SPARSE s=2: two point masses."""
-    print("\n--- SPARSE s=2: f_1=3, f_6=4, N=8 ---")
-    circuit, info = encode(SPARSE([(1, 3.0), (6, 4.0)]), N=8)
+    print("\n--- SPARSE s=2: f_1=3, f_6=-4, N=8 ---")
+    circuit, info = encode(SPARSE([(1, 3.0), (6, -4.0)]), N=8)
     print_info("encode", info)
-    f = np.zeros(8); f[1] = 3.0; f[6] = 4.0
-    plot_vector(f, 8, r"SPARSE $s=2$: $f_1=3,\;f_6=4$, $N=8$", "composite_vector.png")
+    f = np.zeros(8); f[1] = 3.0; f[6] = -4.0
+    plot_vector(f, 8, r"SPARSE $s=2$: $f_1=3,\;f_6=-4$, $N=8$", "composite_vector.png")
     save_circuit(circuit, "composite_circuit.png", scale=1.0)
 
 
