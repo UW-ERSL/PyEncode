@@ -1000,12 +1000,27 @@ def _synth_sparse(m: int, params: dict) -> QuantumCircuit:
     """
     SPARSE: delegate to the Gleinig-Hoefler disjoint-point-load synthesizer.
 
-    For s=1 this reduces to _synth_point_load (X gates only).
-    For s>1 the full Gleinig-Hoefler O(s*m) construction is used.
+    For s=1 this reduces to _synth_point_load (X gates only); a negative
+    amplitude is encoded as a global phase of pi so that the sign is
+    preserved when the circuit is used as a controlled sub-block (e.g.
+    inside SUM, where a global phase becomes a relative phase).
+
+    For s>1 the full Gleinig-Hoefler O(s*m) construction is used.  When
+    any amplitude is negative we route through the signed loader, whose
+    pairwise rotation theta = -2*atan2(c_x1, c_x2) handles arbitrary
+    real amplitudes correctly without any post-hoc phase-flip pass.
     """
     loads = params["loads"]
+    has_negative = any(float(ld["P"]) < 0.0 for ld in loads)
+
     if len(loads) == 1:
-        return _synth_point_load(m, loads[0])
+        qc = _synth_point_load(m, loads[0])
+        if has_negative:
+            qc.global_phase += math.pi
+        return qc
+
+    if has_negative:
+        return _synth_disjoint_point_load_signed(m, params)
     return _synth_disjoint_point_load(m, params)
 
 

@@ -272,7 +272,16 @@ def _validate_circuit(
     expected: Optional[np.ndarray],
     tol: float,
 ):
-    """Simulate and compare to expected amplitude vector."""
+    """Simulate and compare to expected amplitude vector.
+
+    Quantum states are physically equivalent up to a single global phase,
+    so the comparison aligns the simulated state to the expected one by
+    the optimal global phase before checking amplitude-wise agreement.
+    Comparing |simulated| to |expected| directly (the previous behavior)
+    is strictly weaker: it admits wrong relative signs/phases between
+    components and silently masks bugs such as a sparse loader that
+    drops amplitude signs.
+    """
     from qiskit.quantum_info import Statevector
 
     if expected is None:
@@ -286,11 +295,21 @@ def _validate_circuit(
         raise ValueError("Expected amplitude vector is zero.")
     expected = expected / norm
 
-    if not np.allclose(np.abs(simulated), np.abs(expected), atol=tol):
-        max_err = np.max(np.abs(np.abs(simulated) - np.abs(expected)))
+    overlap = np.vdot(expected, simulated)
+    if abs(overlap) < 1e-12:
+        raise ValueError(
+            "Validation failed: simulated state is orthogonal to expected "
+            "(fidelity ~ 0)."
+        )
+    phase = overlap / abs(overlap)            # unit-modulus global phase
+    aligned_expected = phase * expected
+
+    if not np.allclose(simulated, aligned_expected, atol=tol):
+        max_err = np.max(np.abs(simulated - aligned_expected))
+        fidelity = abs(overlap) ** 2
         raise ValueError(
             f"Validation failed: max amplitude error = {max_err:.2e} "
-            f"> tol={tol}."
+            f"> tol={tol} (fidelity = {fidelity:.6f})."
         )
 
 

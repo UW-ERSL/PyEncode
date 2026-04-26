@@ -26,21 +26,36 @@ def statevector(circuit):
 
 
 def assert_encodes_sum(circuit, expected_f, n_anc, tol=1e-4):
-    """Verify SUM circuit (LCU Protocol 1) by post-selecting ancilla on |0>."""
+    """Verify SUM circuit (LCU Protocol 1) by post-selecting ancilla on |0>.
+
+    Comparison is performed up to a single global phase, which is the
+    correct equivalence for quantum states.  The previous version used
+    ``np.abs(...)`` amplitude-wise, which is strictly weaker than
+    "equal up to a global phase" and would silently accept circuits
+    with wrong relative signs between basis states.
+    """
     from qiskit.quantum_info import Statevector
     N = len(expected_f)
     norm = np.linalg.norm(expected_f)
     assert norm > 1e-12
-    expected = np.abs(expected_f / norm)
+    expected = expected_f / norm
 
     sv = np.array(Statevector(circuit))
-    sv_anc0 = sv[:N].real   # ancilla is MSB: anc=0 -> indices 0..N-1
+    sv_anc0 = sv[:N]                       # ancilla is MSB: anc=0 -> [0..N-1]
     norm_anc0 = np.linalg.norm(sv_anc0)
     assert norm_anc0 > 1e-12, "anc=0 subspace is empty"
-    simulated = np.abs(sv_anc0 / norm_anc0)
+    simulated = sv_anc0 / norm_anc0
+
+    overlap = np.vdot(expected, simulated)
+    assert abs(overlap) > 1e-12, "post-selected state orthogonal to expected"
+    phase = overlap / abs(overlap)
+    aligned = phase * expected
     np.testing.assert_allclose(
-        simulated, expected, atol=tol,
-        err_msg=f"SUM post-selected state mismatch.\nGot:      {np.round(simulated,4)}\nExpected: {np.round(expected,4)}"
+        simulated, aligned, atol=tol,
+        err_msg=(f"SUM post-selected state mismatch (fidelity="
+                 f"{abs(overlap)**2:.6f}).\n"
+                 f"Got:      {np.round(simulated,4)}\n"
+                 f"Expected: {np.round(aligned,4)}")
     )
 
 
@@ -50,14 +65,55 @@ assert_encodes_lcu = assert_encodes_sum
 
 
 def assert_encodes(circuit, expected_f, tol=1e-5):
+    """Compare a circuit's statevector to an expected amplitude vector.
+
+    Comparison is performed up to a single global phase: the correct
+    equivalence for physical quantum states.  The previous version used
+    ``np.abs(sv) vs np.abs(ref)``, which is strictly weaker and admits
+    wrong relative signs/phases between basis states.
+    """
     sv = statevector(circuit)
     norm = np.linalg.norm(expected_f)
     assert norm > 1e-12, "Reference vector is zero"
     ref = expected_f / norm
+
+    overlap = np.vdot(ref, sv)
+    assert abs(overlap) > 1e-12, (
+        f"Statevector orthogonal to reference (fidelity ~ 0).")
+    phase = overlap / abs(overlap)
+    aligned = phase * ref
     np.testing.assert_allclose(
-        np.abs(sv), np.abs(ref), atol=tol,
-        err_msg=f"Statevector mismatch.\nGot:      {np.abs(sv)}\nExpected: {np.abs(ref)}"
+        sv, aligned, atol=tol,
+        err_msg=(f"Statevector mismatch (fidelity={abs(overlap)**2:.6f}).\n"
+                 f"Got:      {sv}\nExpected: {aligned}")
     )
+
+
+def assert_states_equal(sv, expected, tol=1e-10):
+    """Phase-aligned amplitude-wise comparison of two state vectors.
+
+    Use for inline checks in tests.  Both inputs must already be
+    1-D arrays; ``expected`` need not be normalised.
+    """
+    sv = np.asarray(sv)
+    expected = np.asarray(expected, dtype=complex)
+    norm = np.linalg.norm(expected)
+    assert norm > 1e-12, "Reference vector is zero"
+    expected = expected / norm
+    overlap = np.vdot(expected, sv)
+    assert abs(overlap) > 1e-12, "states orthogonal"
+    phase = overlap / abs(overlap)
+    np.testing.assert_allclose(sv, phase * expected, atol=tol)
+
+
+def assert_circuits_equivalent(c1, c2, tol=1e-10):
+    """Phase-aligned check that two circuits prepare the same state."""
+    sv1 = statevector(c1)
+    sv2 = statevector(c2)
+    overlap = np.vdot(sv1, sv2)
+    assert abs(overlap) > 1e-12, "circuits prepare orthogonal states"
+    phase = overlap / abs(overlap)
+    np.testing.assert_allclose(sv2, phase * sv1, atol=tol)
 
 
 # ===================================================================
@@ -664,9 +720,7 @@ class TestGeometric:
         """c only affects normalization, not relative amplitudes."""
         c1, _ = encode(GEOMETRIC(r=0.7, c=1.0), N=8)
         c2, _ = encode(GEOMETRIC(r=0.7, c=5.0), N=8)
-        sv1 = np.abs(np.array(statevector(c1)))
-        sv2 = np.abs(np.array(statevector(c2)))
-        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+        assert_circuits_equivalent(c1, c2, tol=1e-10)
 
     def test_r_zero_raises(self):
         with pytest.raises(ValueError, match="positive"):
@@ -685,8 +739,8 @@ class TestGeometric:
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(np.array(statevector(circuit)))
-        sv_emit = np.abs(np.array(statevector(namespace["qc"])))
+        sv_orig = statevector(circuit)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
@@ -793,7 +847,7 @@ class TestGeometric:
         assert info.validated is True
         expected = np.zeros(16)
         expected[8:] = 0.8 ** np.arange(8)
-        np.testing.assert_allclose(np.abs(info.vector), expected, atol=1e-10)
+        np.testing.assert_allclose(info.vector, expected, atol=1e-10)
 
     def test_start_emitted_code_runs(self):
         """Emitted code should work for k_s offset."""
@@ -801,17 +855,15 @@ class TestGeometric:
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(np.array(statevector(circuit)))
-        sv_emit = np.abs(np.array(statevector(namespace["qc"])))
+        sv_orig = statevector(circuit)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_start_custom_c_normalization(self):
         """c parameter still works with k_s offset."""
         c1, _ = encode(GEOMETRIC(r=0.7, k_s=8, c=1.0), N=16)
         c2, _ = encode(GEOMETRIC(r=0.7, k_s=8, c=3.0), N=16)
-        sv1 = np.abs(np.array(statevector(c1)))
-        sv2 = np.abs(np.array(statevector(c2)))
-        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+        assert_circuits_equivalent(c1, c2, tol=1e-10)
 
 
 # ===================================================================
@@ -909,7 +961,7 @@ class TestGeometricDyadic:
             for r in [0.3, 0.5, 0.8, 1.5]:
                 for s in range(1, N):
                     qc, _ = encode(GEOMETRIC(r=r, k_s=s), N=N)
-                    sv = np.abs(np.array(statevector(qc)))
+                    sv = statevector(qc)
                     ref = np.abs(self._reference(r, s, N))
                     np.testing.assert_allclose(
                         sv, ref, atol=1e-8,
@@ -923,7 +975,7 @@ class TestGeometricDyadic:
                 if s >= N:
                     continue
                 qc, _ = encode(GEOMETRIC(r=0.9, k_s=s), N=N)
-                sv = np.abs(np.array(statevector(qc)))
+                sv = statevector(qc)
                 ref = np.abs(self._reference(0.9, s, N))
                 np.testing.assert_allclose(
                     sv, ref, atol=1e-6,
@@ -945,15 +997,13 @@ class TestGeometricDyadic:
         for (r, s, N) in [(0.7, 5, 32), (0.8, 4, 256)]:
             qc1, _ = encode(GEOMETRIC(r=r, k_s=s, c=1.0), N=N)
             qc2, _ = encode(GEOMETRIC(r=r, k_s=s, c=7.3), N=N)
-            sv1 = np.abs(np.array(statevector(qc1)))
-            sv2 = np.abs(np.array(statevector(qc2)))
-            np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+            assert_circuits_equivalent(qc1, qc2, tol=1e-10)
 
     def test_r_above_and_below_one(self):
         """Growth (r>1) and decay (r<1) both work in the dyadic regime."""
         for r in [0.2, 0.5, 0.95, 1.05, 1.5, 2.0]:
             qc, _ = encode(GEOMETRIC(r=r, k_s=5), N=32)
-            sv = np.abs(np.array(statevector(qc)))
+            sv = statevector(qc)
             ref = np.abs(self._reference(r, 5, 32))
             np.testing.assert_allclose(sv, ref, atol=1e-8,
                                        err_msg=f"ratio={r}")
@@ -1015,7 +1065,7 @@ class TestGeometricDyadic:
         # info.vector is UNnormalized (matches existing regime-b convention)
         ref = np.zeros(16)
         ref[5:] = 0.7 ** np.arange(11)
-        np.testing.assert_allclose(np.abs(info.vector), ref, atol=1e-10)
+        np.testing.assert_allclose(info.vector, ref, atol=1e-10)
 
     def test_lcu_composability(self):
         """A dyadic-regime GEOMETRIC still works as a SUM component."""
@@ -1038,8 +1088,8 @@ class TestGeometricDyadic:
         namespace = {"QuantumCircuit": QuantumCircuit}
         exec(compile(info.circuit_code, "<emit>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(np.array(statevector(qc)))
-        sv_emit = np.abs(np.array(statevector(namespace["qc"])))
+        sv_orig = statevector(qc)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
 
@@ -1068,8 +1118,8 @@ class TestGeometricWindowed:
         for (r, k_s, N) in [(0.5, 0, 8), (0.7, 4, 16), (0.8, 5, 32)]:
             qc1, info1 = encode(GEOMETRIC(r=r, k_s=k_s), N=N)
             qc2, info2 = encode(GEOMETRIC(r=r, k_s=k_s, k_e=N), N=N)
-            sv1 = np.abs(np.array(statevector(qc1)))
-            sv2 = np.abs(np.array(statevector(qc2)))
+            sv1 = statevector(qc1)
+            sv2 = statevector(qc2)
             np.testing.assert_allclose(sv1, sv2, atol=1e-10,
                                        err_msg=f"r={r}, k_s={k_s}, N={N}")
             assert info1.gate_count == info2.gate_count
@@ -1078,9 +1128,7 @@ class TestGeometricWindowed:
         """Passing k_e=None explicitly is identical to omitting it."""
         qc1, _ = encode(GEOMETRIC(r=0.6, k_s=2), N=16)
         qc2, _ = encode(GEOMETRIC(r=0.6, k_s=2, k_e=None), N=16)
-        sv1 = np.abs(np.array(statevector(qc1)))
-        sv2 = np.abs(np.array(statevector(qc2)))
-        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+        assert_circuits_equivalent(qc1, qc2, tol=1e-10)
 
     # ------------------------------------------------------------------
     # Regime (b): aligned single dyadic block
@@ -1091,7 +1139,7 @@ class TestGeometricWindowed:
         N = 16
         qc, info = encode(GEOMETRIC(r=0.5, k_s=0, k_e=8), N=N, validate=True)
         ref = self._reference(0.5, 0, 8, N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
         # Aligned regime: zero CX gates
         assert info.gate_count_2q == 0
@@ -1102,7 +1150,7 @@ class TestGeometricWindowed:
         N = 16
         qc, info = encode(GEOMETRIC(r=0.5, k_s=8, k_e=16), N=N, validate=True)
         ref = self._reference(0.5, 8, 16, N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
         assert info.gate_count_2q == 0
         assert info.complexity == "O(m)"
@@ -1112,7 +1160,7 @@ class TestGeometricWindowed:
         N = 16
         qc, info = encode(GEOMETRIC(r=0.7, k_s=4, k_e=8), N=N, validate=True)
         ref = self._reference(0.7, 4, 8, N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
         assert info.gate_count_2q == 0
         assert info.complexity == "O(m)"
@@ -1122,7 +1170,7 @@ class TestGeometricWindowed:
         N = 8
         qc, info = encode(GEOMETRIC(r=0.7, k_s=4, k_e=6), N=N, validate=True)
         ref = self._reference(0.7, 4, 6, N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
         assert info.gate_count_2q == 0
 
@@ -1131,7 +1179,7 @@ class TestGeometricWindowed:
         N = 8
         qc, info = encode(GEOMETRIC(r=0.5, k_s=3, k_e=4), N=N, validate=True)
         ref = np.zeros(N); ref[3] = 1.0
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
         assert info.gate_count_2q == 0
 
@@ -1144,7 +1192,7 @@ class TestGeometricWindowed:
         N = 16
         qc, info = encode(GEOMETRIC(r=0.5, k_s=2, k_e=10), N=N, validate=True)
         ref = self._reference(0.5, 2, 10, N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
         assert info.complexity == "O(m^2)"
 
@@ -1153,7 +1201,7 @@ class TestGeometricWindowed:
         N = 16
         qc, info = encode(GEOMETRIC(r=1.5, k_s=3, k_e=11), N=N, validate=True)
         ref = self._reference(1.5, 3, 11, N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         np.testing.assert_allclose(sv, ref, atol=1e-10)
 
     def test_unaligned_window_various(self):
@@ -1167,7 +1215,7 @@ class TestGeometricWindowed:
             qc, _ = encode(GEOMETRIC(r=r, k_s=k_s, k_e=k_e), N=N,
                            validate=True)
             ref = self._reference(r, k_s, k_e, N)
-            sv = np.abs(np.array(statevector(qc)))
+            sv = statevector(qc)
             np.testing.assert_allclose(
                 sv, ref, atol=1e-10,
                 err_msg=f"r={r}, k_s={k_s}, k_e={k_e}, N={N}")
@@ -1176,7 +1224,7 @@ class TestGeometricWindowed:
         """Amplitudes are exactly zero outside [k_s, k_e)."""
         N = 32
         qc, _ = encode(GEOMETRIC(r=0.7, k_s=5, k_e=20), N=N)
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         # Strict zeros below k_s and at-or-above k_e.
         assert np.all(sv[:5]   < 1e-12)
         assert np.all(sv[20:]  < 1e-12)
@@ -1213,7 +1261,7 @@ class TestGeometricWindowed:
             ]),
             N=N, validate=True)
         # Check supports
-        sv = np.abs(np.array(statevector(qc)))
+        sv = statevector(qc)
         assert np.all(sv[8:16] < 1e-12)
         assert np.all(sv[24:]  < 1e-12)
         assert np.all(sv[0:8]  > 1e-9)
@@ -1398,7 +1446,7 @@ class TestHamming:
     def test_r_equals_one_is_uniform(self):
         """r=1 gives the uniform superposition (all amplitudes equal)."""
         circuit, _ = encode(HAMMING(r=1.0), N=16)
-        sv = np.abs(statevector(circuit))
+        sv = statevector(circuit)
         np.testing.assert_allclose(sv, 1.0 / np.sqrt(16), atol=1e-10)
 
     def test_gate_count_equals_m(self):
@@ -1423,9 +1471,7 @@ class TestHamming:
         """c only affects global normalisation, not relative amplitudes."""
         c1, _ = encode(HAMMING(r=0.5, c=1.0), N=8)
         c2, _ = encode(HAMMING(r=0.5, c=7.0), N=8)
-        sv1 = np.abs(statevector(c1))
-        sv2 = np.abs(statevector(c2))
-        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+        assert_circuits_equivalent(c1, c2, tol=1e-10)
 
     def test_r_zero_raises(self):
         with pytest.raises(ValueError, match="positive"):
@@ -1440,8 +1486,8 @@ class TestHamming:
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(statevector(circuit))
-        sv_emit = np.abs(statevector(namespace["qc"]))
+        sv_orig = statevector(circuit)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
@@ -1536,9 +1582,7 @@ class TestStaircase:
     def test_custom_c_normalization(self):
         c1, _ = encode(STAIRCASE(r=0.6, c=1.0), N=16)
         c2, _ = encode(STAIRCASE(r=0.6, c=8.0), N=16)
-        sv1 = np.abs(statevector(c1))
-        sv2 = np.abs(statevector(c2))
-        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+        assert_circuits_equivalent(c1, c2, tol=1e-10)
 
     def test_growth_r_greater_than_one(self):
         circuit, _ = encode(STAIRCASE(r=2.0), N=8, validate=True)
@@ -1565,8 +1609,8 @@ class TestStaircase:
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(statevector(circuit))
-        sv_emit = np.abs(statevector(namespace["qc"]))
+        sv_orig = statevector(circuit)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
@@ -1619,7 +1663,7 @@ class TestDicke:
     def test_k_zero_is_ground_state(self):
         """k=0 gives |00...0>: only index 0 has nonzero amplitude."""
         circuit, info = encode(DICKE(k=0), N=16)
-        sv = np.abs(statevector(circuit))
+        sv = statevector(circuit)
         assert info.gate_count == 0
         assert info.gate_count_2q == 0
         np.testing.assert_allclose(sv[0], 1.0, atol=1e-12)
@@ -1630,7 +1674,7 @@ class TestDicke:
         m = 4
         N = 1 << m
         circuit, info = encode(DICKE(k=m), N=N)
-        sv = np.abs(statevector(circuit))
+        sv = statevector(circuit)
         assert info.gate_count == m             # m X gates
         assert info.gate_count_2q == 0
         assert info.circuit_depth == 1
@@ -1642,7 +1686,7 @@ class TestDicke:
         m, k = 5, 2
         N = 1 << m
         circuit, _ = encode(DICKE(k=k), N=N)
-        sv = np.abs(statevector(circuit))
+        sv = statevector(circuit)
         weight_k_idx = [i for i in range(N) if bin(i).count("1") == k]
         amps = sv[weight_k_idx]
         expected = 1.0 / np.sqrt(math.comb(m, k))
@@ -1686,9 +1730,7 @@ class TestDicke:
         """c only affects global normalisation; the |amplitudes| are equal."""
         c1, _ = encode(DICKE(k=2, c=1.0), N=16)
         c2, _ = encode(DICKE(k=2, c=7.0), N=16)
-        sv1 = np.abs(statevector(c1))
-        sv2 = np.abs(statevector(c2))
-        np.testing.assert_allclose(sv1, sv2, atol=1e-10)
+        assert_circuits_equivalent(c1, c2, tol=1e-10)
 
     def test_k_out_of_range_raises(self):
         with pytest.raises(ValueError, match=r"out of range"):
@@ -1703,8 +1745,8 @@ class TestDicke:
         namespace = {}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(statevector(circuit))
-        sv_emit = np.abs(statevector(namespace["qc"]))
+        sv_orig = statevector(circuit)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-8)
 
     def test_sum_composability(self):
@@ -1742,8 +1784,8 @@ class TestTensor:
             TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 16),
                     (FOURIER(modes=[(3, 1.0, 0)]), 16)]),
             N=256)
-        sv_m = np.abs(statevector(manual))
-        sv_a = np.abs(statevector(auto))
+        sv_m = statevector(manual)
+        sv_a = statevector(auto)
         np.testing.assert_allclose(sv_a, sv_m, atol=1e-10)
 
     def test_separable_poisson(self):
@@ -1812,8 +1854,8 @@ class TestTensor:
         """A one-component TENSOR should equal the component by itself."""
         c_plain, _ = encode(GEOMETRIC(r=0.7), N=16)
         c_tensor, _ = encode(TENSOR([(GEOMETRIC(r=0.7), 16)]), N=16)
-        sv_p = np.abs(statevector(c_plain))
-        sv_t = np.abs(statevector(c_tensor))
+        sv_p = statevector(c_plain)
+        sv_t = statevector(c_tensor)
         np.testing.assert_allclose(sv_p, sv_t, atol=1e-10)
 
 
@@ -1932,8 +1974,8 @@ class TestPolynomial:
         namespace = {"QuantumCircuit": QuantumCircuit}
         exec(compile(info.circuit_code, "<test>", "exec"), namespace)
         assert isinstance(namespace["qc"], QuantumCircuit)
-        sv_orig = np.abs(statevector(circuit))
-        sv_emit = np.abs(statevector(namespace["qc"]))
+        sv_orig = statevector(circuit)
+        sv_emit = statevector(namespace["qc"])
         np.testing.assert_allclose(sv_orig, sv_emit, atol=1e-10)
 
     def test_lcu_composability(self):
@@ -1970,7 +2012,7 @@ class TestSparseRegressions:
         for k in [0, 1, 3, 5, 6, 9]:
             expected[k] = 1.0
         expected /= np.linalg.norm(expected)
-        sv = np.abs(statevector(circuit))
+        sv = statevector(circuit)
         np.testing.assert_allclose(sv, expected, atol=1e-10)
 
     def test_double_x_flanking_polynomial_walsh(self):
@@ -1983,7 +2025,7 @@ class TestSparseRegressions:
         for k, a in loads:
             expected[k] = abs(a)
         expected /= np.linalg.norm(expected)
-        sv = np.abs(statevector(circuit))
+        sv = statevector(circuit)
         np.testing.assert_allclose(sv, expected, atol=1e-10)
 
     def test_sparse_random_sweep(self):
@@ -2001,9 +2043,140 @@ class TestSparseRegressions:
             for k, a in zip(idx, amps):
                 expected[k] = abs(a)
             expected /= np.linalg.norm(expected)
-            sv = np.abs(statevector(circuit))
+            sv = statevector(circuit)
             err = float(np.max(np.abs(sv - expected)))
             assert err < 1e-10, f"trial {trial}: m={m}, idx={idx}, err={err:.2e}"
+
+    # ------------------------------------------------------------------
+    # Negative-amplitude regression: signs must be preserved end-to-end.
+    #
+    # The original _synth_sparse routed L>=2 through _synth_disjoint_point_load,
+    # which calls abs(load["P"]) and silently dropped signs.  L=1 went
+    # through _synth_point_load, which ignores the amplitude entirely
+    # (an unobservable global phase standalone, but it becomes a wrong
+    # relative phase under SUM where the component circuit is controlled).
+    # The signed loader _synth_disjoint_point_load_signed already existed
+    # for POLYNOMIAL; the fix routes _synth_sparse to it on negatives,
+    # plus a global_phase += pi on L=1.  These tests exercise the raw
+    # encode(SPARSE(...)) path that the existing PARTITION-only signed
+    # test never touched.
+    # ------------------------------------------------------------------
+
+    def test_two_entry_mixed_signs_relative_sign(self):
+        """Headline bug: relative sign is observable, not a global phase."""
+        circuit, info = encode(
+            SPARSE([(1, 3.0), (6, -4.0)]), N=8, validate=True,
+        )
+        assert info.validated
+        target = np.array([0, 3, 0, 0, 0, 0, -4, 0], dtype=float)
+        assert_states_equal(statevector(circuit), target, tol=1e-10)
+        # Sanity: after phase alignment, indices 1 and 6 must carry
+        # opposite signs (no global phase can make them agree).
+        sv = np.real(statevector(circuit))
+        sign = np.sign(sv[1] * sv[6])
+        assert sign < 0, "relative sign collapsed to identical"
+
+    def test_two_entry_all_negative_global_phase(self):
+        """All-negative is the same physical state as all-positive."""
+        circuit, info = encode(
+            SPARSE([(1, -3.0), (6, -4.0)]), N=8, validate=True,
+        )
+        assert info.validated
+        target = np.array([0, -3, 0, 0, 0, 0, -4, 0], dtype=float)
+        assert_states_equal(statevector(circuit), target, tol=1e-10)
+
+    def test_single_entry_negative_records_global_phase(self):
+        """L=1 negative: global phase is unobservable standalone, but
+        must be recorded so it survives controlled use under SUM."""
+        circuit, _ = encode(SPARSE([(19, -1.0)]), N=64)
+        assert math.isclose(circuit.global_phase % (2 * math.pi), math.pi,
+                            abs_tol=1e-12)
+        sv = statevector(circuit)
+        assert np.isclose(sv[19], -1.0, atol=1e-10)
+
+    def test_four_entry_mixed_signs(self):
+        circuit, info = encode(
+            SPARSE([(0, 1.0), (3, -2.0), (5, 4.0), (7, -1.0)]),
+            N=8, validate=True,
+        )
+        assert info.validated
+        target = np.zeros(8); target[[0, 3, 5, 7]] = [1, -2, 4, -1]
+        assert_states_equal(statevector(circuit), target, tol=1e-10)
+
+    def test_clustered_indices_with_negatives(self):
+        """Clustered indices were the original Gleinig-Hoefler stress
+        case (the double-X-flanking bug).  Signs must not interact
+        with the merging order."""
+        circuit, info = encode(
+            SPARSE([(1, 1.0), (2, -1.0), (4, 1.0), (8, -1.0)]),
+            N=16, validate=True,
+        )
+        assert info.validated
+
+    def test_sign_flip_changes_state(self):
+        """Sanity: flipping one amplitude's sign must produce a
+        physically distinct state (low fidelity)."""
+        c_pos, _ = encode(SPARSE([(1, 3.0), (6,  4.0)]), N=8)
+        c_neg, _ = encode(SPARSE([(1, 3.0), (6, -4.0)]), N=8)
+        sv_pos = statevector(c_pos)
+        sv_neg = statevector(c_neg)
+        fidelity = abs(np.vdot(sv_pos, sv_neg)) ** 2
+        assert fidelity < 0.5
+
+    def test_sum_with_negative_l1_component(self):
+        """The L=1 global-phase fix matters here: SUM applies the
+        component circuit controlled, so a missing global phase becomes
+        a wrong relative phase and breaks validation."""
+        circuit, info = encode(
+            SUM([(1.0, SPARSE([(1, 1.0)])),
+                 (1.0, SPARSE([(6, -1.0)]))]),
+            N=8, validate=True,
+        )
+        assert info.validated
+
+    def test_partition_with_negative_sparse(self):
+        """PARTITION's anchor load was already signed-correct; this
+        documents the behavior at the public encode() entry point."""
+        circuit, info = encode(
+            PARTITION([
+                SPARSE([(1, -2.0), (2, 3.0)]),
+                GEOMETRIC(r=0.7, k_s=8),
+            ]),
+            N=16, validate=True,
+        )
+        assert info.validated
+        assert math.isclose(info.success_probability, 1.0, abs_tol=1e-12)
+
+
+# ===========================================================================
+# Validator: must compare up to a global phase, not amplitude magnitudes.
+# ===========================================================================
+
+class TestValidatorGlobalPhase:
+    """Regression: _validate_circuit must compare up to a global phase.
+
+    The previous validator used np.allclose(|simulated|, |expected|),
+    which is strictly weaker than 'equal up to global phase' and silently
+    masked the SPARSE sign-dropping bug.  The new validator must accept
+    genuine global-phase differences AND reject wrong relative phases.
+    """
+
+    def test_global_phase_difference_accepted(self):
+        """All-negative vs all-positive: same physical state."""
+        c, info = encode(SPARSE([(1, -3.0), (6, -4.0)]), N=8, validate=True)
+        assert info.validated
+
+    def test_wrong_relative_sign_rejected(self):
+        """Hand-build a circuit that reproduces the OLD buggy output
+        (positive amplitudes when negatives were requested) and feed it
+        through the validator directly; it must now reject it."""
+        from pyencode._helpers import _validate_circuit
+        # "Buggy" output: the +,+ version
+        c_buggy, _ = encode(SPARSE([(1, 3.0), (6, 4.0)]), N=8)
+        # Expected vector: the +,- version
+        f = np.zeros(8); f[1] = 3.0; f[6] = -4.0
+        with pytest.raises(ValueError, match="Validation failed"):
+            _validate_circuit(c_buggy, f, tol=1e-6)
 
 
 # ===========================================================================
@@ -2371,8 +2544,8 @@ class TestPartition:
 
         expected = self._build_expected(components, 256)
         expected /= np.linalg.norm(expected)
-        sv = np.abs(statevector(qc))
-        np.testing.assert_allclose(sv, np.abs(expected), atol=1e-7)
+        sv = statevector(qc)
+        np.testing.assert_allclose(sv, expected, atol=1e-7)
 
     def test_motivating_case_beats_lcu_cx_count(self):
         """PARTITION should produce fewer gates than LCU for the same
@@ -2411,8 +2584,7 @@ class TestPartition:
 
         expected = self._build_expected(components, 16)
         expected /= np.linalg.norm(expected)
-        np.testing.assert_allclose(
-            np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
+        assert_states_equal(statevector(qc), expected, tol=1e-10)
 
     def test_step_plus_geometric_tail(self):
         """STEP plateau followed by GEOMETRIC decay starting at k_e."""
@@ -2423,8 +2595,7 @@ class TestPartition:
 
         expected = self._build_expected(components, 32)
         expected /= np.linalg.norm(expected)
-        np.testing.assert_allclose(
-            np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
+        assert_states_equal(statevector(qc), expected, tol=1e-10)
 
     def test_sparse_interleaved_with_squares(self):
         """SPARSE singletons interleaved with SQUARE blocks."""
@@ -2439,8 +2610,7 @@ class TestPartition:
 
         expected = self._build_expected(components, 16)
         expected /= np.linalg.norm(expected)
-        np.testing.assert_allclose(
-            np.abs(statevector(qc)), np.abs(expected), atol=1e-10)
+        assert_states_equal(statevector(qc), expected, tol=1e-10)
 
     def test_signed_sparse_amplitudes(self):
         """Signed sparse values are correctly preserved (Gleinig handles
@@ -2519,10 +2689,11 @@ class TestPartition:
             qc, info = encode(PARTITION(components), N=8)
             expected = self._build_expected(components, 8)
             expected /= np.linalg.norm(expected)
-            sv = np.abs(statevector(qc))
-            np.testing.assert_allclose(
-                sv, np.abs(expected), atol=1e-10,
-                err_msg=f"Mismatch on {components}")
+            try:
+                assert_states_equal(statevector(qc), expected, tol=1e-10)
+            except AssertionError as e:
+                raise AssertionError(
+                    f"Mismatch on {components}") from e
 
     def test_single_component_delegates(self):
         """PARTITION with a single component must still be correct."""
@@ -2532,9 +2703,11 @@ class TestPartition:
             assert info.success_probability == 1.0
             expected = self._build_expected([comp], 16)
             expected /= np.linalg.norm(expected)
-            np.testing.assert_allclose(
-                np.abs(statevector(qc)), np.abs(expected), atol=1e-10,
-                err_msg=f"Single-component PARTITION wrong for {comp}")
+            try:
+                assert_states_equal(statevector(qc), expected, tol=1e-10)
+            except AssertionError as e:
+                raise AssertionError(
+                    f"Single-component PARTITION wrong for {comp}") from e
 
     # ------------------------------------------------------------------
     # Scaling / complexity
@@ -2578,7 +2751,7 @@ class TestPartition:
         _, info = encode(PARTITION(components), N=16, validate=True)
         assert info.validated is True
         ref = self._build_expected(components, 16)
-        np.testing.assert_allclose(np.abs(info.vector), np.abs(ref),
+        np.testing.assert_allclose(info.vector, ref,
                                    atol=1e-10)
 
     def test_emitted_code_runs(self):
@@ -2648,9 +2821,7 @@ class TestConstructorRepr:
         exec(compile(info.circuit_code, "<tensor>", "exec"), ns)
         assert "qc" in ns
         # The snippet reconstructs the same logical circuit.
-        ref_sv = np.abs(statevector(qc))
-        emit_sv = np.abs(statevector(ns["qc"]))
-        np.testing.assert_allclose(ref_sv, emit_sv, atol=1e-10)
+        assert_circuits_equivalent(qc, ns["qc"], tol=1e-10)
 
     def test_partition_emitter_exec_round_trip_with_sparse(self):
         """PARTITION's emitted code with a SPARSE component must round-trip."""
