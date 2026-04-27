@@ -620,9 +620,21 @@ class TestSum:
             N=8, validate=True)
         assert info.validated
 
-    def test_negative_weight_raises(self):
-        with pytest.raises(ValueError, match="positive"):
-            SUM([(-1.0, STEP(k_e=4, c=1.0))])
+    def test_zero_weight_raises(self):
+        # Only zero (or near-zero) weights are rejected; signed and
+        # complex weights are accepted (negative is now legitimate
+        # complex with imag=0).
+        with pytest.raises(ValueError, match="nonzero"):
+            SUM([(0.0, STEP(k_e=4, c=1.0))])
+
+    def test_negative_weight_accepted(self):
+        # Negative real weights are now treated as complex with imag=0
+        # and are valid; the SUM circuit threads the sign as a phase
+        # in the controlled SELECT step.
+        SUM([(-1.0, STEP(k_e=4, c=1.0))])
+
+    def test_complex_weight_accepted(self):
+        SUM([(1.0 + 1.0j, STEP(k_e=4, c=1.0))])
 
     def test_empty_raises(self):
         with pytest.raises(ValueError):
@@ -770,12 +782,15 @@ class TestGeometric:
         assert_circuits_equivalent(c1, c2, tol=1e-10)
 
     def test_r_zero_raises(self):
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ValueError, match="nonzero"):
             GEOMETRIC(r=0.0)
 
-    def test_r_negative_raises(self):
-        with pytest.raises(ValueError, match="positive"):
-            GEOMETRIC(r=-0.5)
+    def test_r_negative_real_accepted(self):
+        # Negative real r is a legitimate complex amplitude (imag part 0)
+        # and is now accepted; the resulting state is an oscillating
+        # geometric, e.g. r=-0.5 gives (1, -0.5, 0.25, -0.125, ...).
+        circuit, info = encode(GEOMETRIC(r=-0.5), N=8, validate=True)
+        assert info.validated
 
     def test_r_one_raises(self):
         with pytest.raises(ValueError, match="uniform"):
@@ -1521,12 +1536,14 @@ class TestHamming:
         assert_circuits_equivalent(c1, c2, tol=1e-10)
 
     def test_r_zero_raises(self):
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ValueError, match="nonzero"):
             HAMMING(r=0.0)
 
-    def test_r_negative_raises(self):
-        with pytest.raises(ValueError, match="positive"):
-            HAMMING(r=-0.3)
+    def test_r_negative_real_accepted(self):
+        # Negative real r yields the Walsh-like state f_i = (-r)**wt(i);
+        # legitimate as a real special case of the complex extension.
+        circuit, info = encode(HAMMING(r=-0.3), N=16, validate=True)
+        assert info.validated
 
     def test_emitted_code_runs(self):
         circuit, info = encode(HAMMING(r=0.8), N=16)
@@ -1640,12 +1657,14 @@ class TestStaircase:
             np.testing.assert_allclose(observed, 2.0, atol=1e-10)
 
     def test_r_zero_raises(self):
-        with pytest.raises(ValueError, match="positive"):
+        with pytest.raises(ValueError, match="nonzero"):
             STAIRCASE(r=0.0)
 
-    def test_r_negative_raises(self):
-        with pytest.raises(ValueError, match="positive"):
-            STAIRCASE(r=-0.4)
+    def test_r_negative_real_accepted(self):
+        # Negative real r yields a sign-alternating staircase on the
+        # unary indices; legitimate after complex lift.
+        circuit, info = encode(STAIRCASE(r=-0.4), N=8, validate=True)
+        assert info.validated
 
     def test_r_one_raises(self):
         with pytest.raises(ValueError, match="uniform"):
@@ -2951,3 +2970,338 @@ class TestLcuDeprecated:
         assert PatternKind.LCU is PatternKind.SUM
         # And the name returned by .name is the primary one ("SUM").
         assert PatternKind.LCU.name == "SUM"
+
+
+# ===================================================================
+# Complex amplitude support
+#
+# All ten exact pattern families and the three composition rules now
+# accept complex amplitudes natively, with no API change.  Real inputs
+# (the original case) follow the original code paths bit-for-bit; the
+# complex extensions only activate when at least one supplied parameter
+# carries a non-zero imaginary part.
+#
+# Each test below verifies (a) that the synthesizer produces a circuit
+# whose statevector matches the analytic target up to a single global
+# phase, and (b) that the encoder's `validate=True` path agrees -- i.e.
+# the fidelity-up-to-global-phase check is consistent with a direct
+# statevector comparison.
+# ===================================================================
+
+import cmath as _cmath
+
+
+def _fidelity(qc, target):
+    """Phase-aligned fidelity = |<target|simulated>|^2 (target normalised)."""
+    from qiskit.quantum_info import Statevector
+    sv = Statevector(qc).data
+    target = np.asarray(target, dtype=complex)
+    target = target / np.linalg.norm(target)
+    return abs(np.vdot(target, sv)) ** 2
+
+
+def _popcount(x):
+    return bin(x).count("1")
+
+
+class TestComplexSparse:
+    def test_single_complex_amp_validates(self):
+        qc, info = encode(SPARSE([(3, 1.0 + 2.0j)]), N=8, validate=True)
+        assert info.validated
+
+    def test_multi_complex_amp_fidelity(self):
+        qc, info = encode(
+            SPARSE([(1, 1.0 + 1j), (3, 0.5 - 0.5j), (6, 1.0 - 2j)]),
+            N=8, validate=True,
+        )
+        target = np.zeros(8, dtype=complex)
+        target[1], target[3], target[6] = 1.0 + 1j, 0.5 - 0.5j, 1.0 - 2j
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_mixed_signed_and_complex(self):
+        qc, info = encode(
+            SPARSE([(0, 1 + 1j), (1, 1 - 1j), (5, 0.5j),
+                    (10, -1.0), (15, 2 + 0j)]),
+            N=16, validate=True,
+        )
+        target = np.zeros(16, dtype=complex)
+        target[0], target[1], target[5] = 1 + 1j, 1 - 1j, 0.5j
+        target[10], target[15] = -1.0, 2 + 0j
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_real_path_unchanged(self):
+        # When all amps are real, gate count must match the prior
+        # signed-real Gleinig path exactly.
+        qc_r, info_r = encode(SPARSE([(1, 0.6), (4, -0.8)]), N=8)
+        qc_c, info_c = encode(
+            SPARSE([(1, 0.6 + 0j), (4, -0.8 + 0j)]), N=8,
+        )
+        # `_coerce_amp` collapses 0+0j to float, so both calls hit the
+        # same synthesizer path and must produce identical gate counts.
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexStep:
+    def test_complex_c_is_global_phase(self):
+        c = 1.0 + 2j
+        qc, info = encode(STEP(k_e=4, c=c), N=8, validate=True)
+        target = np.array([c if i < 4 else 0.0 for i in range(8)], dtype=complex)
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_real_path_gate_count_unchanged(self):
+        qc_r, info_r = encode(STEP(k_e=4, c=1.0), N=8)
+        qc_c, info_c = encode(STEP(k_e=4, c=1.0 + 0j), N=8)
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexSquare:
+    def test_complex_c_is_global_phase(self):
+        c = 1.0 - 1j
+        qc, info = encode(SQUARE(k_s=2, k_e=6, c=c), N=8, validate=True)
+        target = np.array(
+            [c if 2 <= i < 6 else 0.0 for i in range(8)], dtype=complex,
+        )
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+
+class TestComplexWalsh:
+    def test_complex_c0_c1(self):
+        qc, info = encode(
+            WALSH(k=1, c0=1.0 + 1j, c1=2.0 - 1j), N=8, validate=True,
+        )
+        target = np.array(
+            [(1.0 + 1j) if (i >> 1) & 1 == 0 else (2.0 - 1j)
+             for i in range(8)],
+            dtype=complex,
+        )
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_pure_imaginary_levels(self):
+        qc, info = encode(
+            WALSH(k=2, c0=1.0j, c1=-1.0j), N=8, validate=True,
+        )
+        assert info.validated
+
+    def test_real_path_gate_count_unchanged(self):
+        qc_r, info_r = encode(WALSH(k=1, c0=1.0, c1=2.0), N=8)
+        qc_c, info_c = encode(WALSH(k=1, c0=1.0 + 0j, c1=2.0 + 0j), N=8)
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexGeometric:
+    def test_unit_modulus_plane_wave(self):
+        # r = e^{i*omega} is the discrete plane-wave exp(i*omega*i).
+        omega = 0.7
+        r = _cmath.exp(1j * omega)
+        qc, info = encode(GEOMETRIC(r=r), N=16, validate=True)
+        target = np.array([r ** i for i in range(16)], dtype=complex)
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_negative_real_r(self):
+        qc, info = encode(GEOMETRIC(r=-0.7), N=8, validate=True)
+        target = np.array([(-0.7) ** i for i in range(8)], dtype=float)
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_complex_r_with_offset(self):
+        r = _cmath.exp(1j * 0.5) * 0.9
+        qc, info = encode(GEOMETRIC(r=r, k_s=5), N=16, validate=True)
+        target = np.zeros(16, dtype=complex)
+        for i in range(5, 16):
+            target[i] = r ** (i - 5)
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_real_positive_path_unchanged(self):
+        qc_r, info_r = encode(GEOMETRIC(r=0.7), N=16)
+        qc_c, info_c = encode(GEOMETRIC(r=0.7 + 0j), N=16)
+        # `_coerce_amp` collapses 0+0j to float, so the gate counts must
+        # match exactly (no phase gates emitted).
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexHamming:
+    def test_complex_r(self):
+        r = _cmath.exp(1j * 0.4) * 0.8
+        qc, info = encode(HAMMING(r=r), N=16, validate=True)
+        target = np.array(
+            [r ** _popcount(i) for i in range(16)], dtype=complex,
+        )
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_real_path_gate_count_unchanged(self):
+        qc_r, info_r = encode(HAMMING(r=0.7), N=16)
+        qc_c, info_c = encode(HAMMING(r=0.7 + 0j), N=16)
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexStaircase:
+    def test_negative_real_r(self):
+        # Sanity: r = -0.4 produces alternating signs at unary indices.
+        qc, info = encode(STAIRCASE(r=-0.4), N=8, validate=True)
+        target = np.zeros(8, dtype=float)
+        for k in range(4):
+            if 2 ** k - 1 < 8:
+                target[2 ** k - 1] = (-0.4) ** k
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_complex_r(self):
+        r = _cmath.exp(1j * 1.234) * 0.7
+        qc, info = encode(STAIRCASE(r=r), N=16, validate=True)
+        target = np.zeros(16, dtype=complex)
+        for k in range(5):
+            if 2 ** k - 1 < 16:
+                target[2 ** k - 1] = r ** k
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_real_path_gate_count_unchanged(self):
+        qc_r, info_r = encode(STAIRCASE(r=0.5), N=16)
+        qc_c, info_c = encode(STAIRCASE(r=0.5 + 0j), N=16)
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexDicke:
+    def test_complex_c_is_global_phase(self):
+        c = 1.0 + 1j
+        qc, info = encode(DICKE(k=2, c=c), N=16, validate=True)
+        target = np.array(
+            [c if _popcount(i) == 2 else 0.0 for i in range(16)],
+            dtype=complex,
+        )
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+
+class TestComplexPolynomial:
+    def test_complex_linear_coeff(self):
+        # f(x) = (1+j) * x  on x in [0, 1].
+        qc, info = encode(
+            POLYNOMIAL(coeffs=[0.0, 1.0 + 1j]), N=8, validate=True,
+        )
+        target = np.array(
+            [(1.0 + 1j) * (i / 7) for i in range(8)], dtype=complex,
+        )
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_complex_quadratic_coeffs(self):
+        # f(x) = (4+j)*x - 4*x^2  on x in [0, 1].
+        qc, info = encode(
+            POLYNOMIAL(coeffs=[0.0, 4.0 + 1j, -4.0]),
+            N=16, validate=True,
+        )
+        target = np.array(
+            [(4.0 + 1j) * (i / 15) - 4.0 * (i / 15) ** 2
+             for i in range(16)],
+            dtype=complex,
+        )
+        assert _fidelity(qc, target) > 1 - 1e-10
+
+    def test_real_path_unchanged(self):
+        qc_r, info_r = encode(
+            POLYNOMIAL(coeffs=[0.0, 1.0]), N=16,
+        )
+        qc_c, info_c = encode(
+            POLYNOMIAL(coeffs=[0.0 + 0j, 1.0 + 0j]), N=16,
+        )
+        # Walsh sparse loader must produce the same circuit when imag=0.
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexSum:
+    def test_complex_weights_disjoint(self):
+        qc, info = encode(
+            SUM([(1.0 + 1j, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0 - 1j, SQUARE(k_s=4, k_e=8, c=1.0))]),
+            N=8, validate=True,
+        )
+        assert info.validated
+        # Disjoint LCU success probability for equal-magnitude weights:
+        # |alpha|^2 sum = 2 * |w|^2 * ||f||^2 / Z^4.  With |w|=sqrt(2),
+        # ||f||=2 (norm of 4 ones) and Z^2 = 2 * sqrt(2) * 2 = 4*sqrt(2),
+        # giving p = 2 * 2 * 4 / 32 = 0.5.
+        assert abs(info.success_probability - 0.5) < 1e-9
+
+    def test_negative_real_weight(self):
+        # Negative real weight is now a complex weight with imag=0;
+        # it must produce the same magnitude tree as a positive weight
+        # but sign-flip the corresponding component in the post-selected
+        # state.
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            qc, info = encode(
+                SUM([(-1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                     (2.0,  SQUARE(k_s=4, k_e=8, c=1.0))]),
+                N=8, validate=True,
+            )
+        assert info.validated
+
+    def test_pure_imaginary_weight(self):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            qc, info = encode(
+                SUM([(0.5j, SPARSE([(1, 1.0 + 0.5j), (4, -1.0)])),
+                     (1.0,  STAIRCASE(r=0.7))]),
+                N=8, validate=True,
+            )
+        assert info.validated
+
+    def test_real_path_gate_count_unchanged(self):
+        qc_r, info_r = encode(
+            SUM([(1.0, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0, SQUARE(k_s=4, k_e=8, c=1.0))]),
+            N=8,
+        )
+        qc_c, info_c = encode(
+            SUM([(1.0 + 0j, SQUARE(k_s=0, k_e=4, c=1.0)),
+                 (1.0 + 0j, SQUARE(k_s=4, k_e=8, c=1.0))]),
+            N=8,
+        )
+        assert info_r.gate_count == info_c.gate_count
+
+
+class TestComplexPartition:
+    def test_complex_components(self):
+        qc, info = encode(
+            PARTITION([
+                SPARSE([(2, 1.0 + 1j), (5, 0.5 - 0.5j)]),
+                GEOMETRIC(r=0.8, k_s=8),
+            ]),
+            N=16, validate=True,
+        )
+        assert info.validated
+        assert info.success_probability == 1.0
+
+    def test_complex_geometric_in_partition(self):
+        r = _cmath.exp(1j * 0.3) * 0.7
+        qc, info = encode(
+            PARTITION([
+                SPARSE([(0, 1.0)]),
+                GEOMETRIC(r=r, k_s=4),
+            ]),
+            N=8, validate=True,
+        )
+        assert info.validated
+        assert info.success_probability == 1.0
+
+
+class TestComplexTensor:
+    def test_complex_geometric_subregister(self):
+        r = _cmath.exp(1j * 0.3)
+        qc, info = encode(
+            TENSOR([(GEOMETRIC(r=r), 8),
+                    (FOURIER(modes=[(2, 1.0, 0)]), 8)]),
+            N=64, validate=True,
+        )
+        assert info.validated
+
+    def test_real_path_unchanged(self):
+        qc_r, info_r = encode(
+            TENSOR([(GEOMETRIC(r=0.5), 8),
+                    (HAMMING(r=0.7), 8)]),
+            N=64,
+        )
+        qc_c, info_c = encode(
+            TENSOR([(GEOMETRIC(r=0.5 + 0j), 8),
+                    (HAMMING(r=0.7 + 0j), 8)]),
+            N=64,
+        )
+        assert info_r.gate_count == info_c.gate_count

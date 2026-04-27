@@ -6,6 +6,7 @@ Shared internal helpers used by the encode_* entry points.
 
 import builtins as _builtins
 import math
+import cmath
 import numpy as np
 from typing import Optional, Union
 
@@ -16,6 +17,7 @@ from .synthesizer import synthesize
 from .emitter import emit_code
 from .config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 from .types import (
+    _coerce_amp,
     _Pattern, SPARSE, FOURIER, STEP, SQUARE, GEOMETRIC,
     EncodingInfo,
     _COMPLEXITY, _PARAM_SCHEMAS,
@@ -104,7 +106,7 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
         if k_e < 1 or k_e > N:
             raise ValueError(f"k_e={k_e} out of range [1, {N}].")
         result["k_e"] = k_e
-        result["c"] = float(result["c"])
+        result["c"] = _coerce_amp(result["c"])
 
     elif kind == PatternKind.SQUARE:
         result.setdefault("c", 1.0)
@@ -112,7 +114,7 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
         if k_s < 0 or k_e > N or k_s >= k_e:
             raise ValueError(f"Invalid range [{k_s}, {k_e}) for N={N}.")
         result["k_s"], result["k_e"] = k_s, k_e
-        result["c"] = float(result["c"])
+        result["c"] = _coerce_amp(result["c"])
 
     elif kind == PatternKind.SPARSE:
         result = _validate_sparse_params(result, N)
@@ -124,9 +126,9 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
             raise ValueError(f"WALSH qubit index k={k} out of range [0, {m_bits}).")
         result["k"] = k
         result.setdefault("c0", 1.0)
-        c0 = float(result["c0"])
+        c0 = _coerce_amp(result["c0"])
         result["c0"] = c0
-        result["c1"] = float(result.get("c1", -c0))
+        result["c1"] = _coerce_amp(result.get("c1", -c0))
 
     elif kind == PatternKind.FOURIER:
         result = _validate_fourier_params(result, N)
@@ -135,9 +137,9 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
         result.setdefault("c", 1.0)
         result.setdefault("k_s", 0)
         result.setdefault("k_e", None)
-        r = float(result["r"])
-        if r <= 0:
-            raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
+        r = _coerce_amp(result["r"])
+        if abs(r) < 1e-14:
+            raise ValueError(f"GEOMETRIC r must be nonzero, got {r}.")
         if abs(r - 1.0) < 1e-14:
             raise ValueError("GEOMETRIC r=1.0 is a uniform vector; use STEP or SQUARE.")
         k_s = int(result["k_s"])
@@ -154,7 +156,7 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
         result["r"] = r
         result["k_s"] = k_s
         result["k_e"] = k_e
-        result["c"] = float(result["c"])
+        result["c"] = _coerce_amp(result["c"])
 
     elif kind == PatternKind.DICKE:
         result.setdefault("c", 1.0)
@@ -166,7 +168,7 @@ def _validate_params(kind: PatternKind, N: int, params: dict) -> dict:
                 f"(m={m_bits} qubits)."
             )
         result["k"] = k
-        result["c"] = float(result["c"])
+        result["c"] = _coerce_amp(result["c"])
 
     return result
 
@@ -316,29 +318,54 @@ def _validate_circuit(
 def _build_expected_vector(
     pattern: LoadPattern,
 ):
-    """Return the expected real amplitude vector for validation."""
+    """Return the expected amplitude vector for validation.
+
+    The vector dtype is complex whenever any pattern parameter is non-real;
+    otherwise it stays real (so existing real-only callers see the same
+    numerical values they always did).
+    """
     N  = pattern.N
     lt = pattern.kind
     p  = pattern.params
     if lt == PatternKind.STEP:
-        f = np.zeros(N); f[:p["k_e"]] = p.get("c", 1.0); return f
+        c = p.get("c", 1.0)
+        if _is_complex(c):
+            f = np.zeros(N, dtype=complex); f[:p["k_e"]] = c
+        else:
+            f = np.zeros(N, dtype=float); f[:p["k_e"]] = float(complex(c).real)
+        return f
 
     if lt == PatternKind.SQUARE:
-        f = np.zeros(N); f[p["k_s"]:p["k_e"]] = p.get("c", 1.0); return f
+        c = p.get("c", 1.0)
+        if _is_complex(c):
+            f = np.zeros(N, dtype=complex); f[p["k_s"]:p["k_e"]] = c
+        else:
+            f = np.zeros(N, dtype=float); f[p["k_s"]:p["k_e"]] = float(complex(c).real)
+        return f
 
     if lt == PatternKind.WALSH:
         k = p["k"]
         c0 = p.get("c0", 1.0)
         c1 = p.get("c1", -c0)
-        f = np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=float)
+        if _is_complex(c0) or _is_complex(c1):
+            f = np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=complex)
+        else:
+            c0r = float(complex(c0).real); c1r = float(complex(c1).real)
+            f = np.array([c0r if not ((i >> k) & 1) else c1r for i in range(N)], dtype=float)
         return f
 
     if lt == PatternKind.SPARSE:
-        f = np.zeros(N)
-        for load in p["loads"]: f[load["k"]] = load["P"]
+        any_complex = any(_is_complex(load["P"]) for load in p["loads"])
+        if any_complex:
+            f = np.zeros(N, dtype=complex)
+            for load in p["loads"]: f[load["k"]] = load["P"]
+        else:
+            f = np.zeros(N, dtype=float)
+            for load in p["loads"]: f[load["k"]] = float(complex(load["P"]).real)
         return f
 
     if lt == PatternKind.FOURIER:
+        # FOURIER's (n, A, phi) parameterisation always yields a real signal.
         k = np.arange(N)
         f = np.zeros(N)
         for mode in p["modes"]:
@@ -353,130 +380,108 @@ def _build_expected_vector(
         k_e = p.get("k_e", N)
         if k_e is None:
             k_e = N
-        f = np.zeros(N, dtype=float)
-        if k_s < k_e:
-            idx = np.arange(k_s, k_e)
-            f[k_s:k_e] = c * (r ** (idx - k_s))
+        any_cplx = _is_complex(r) or _is_complex(c)
+        if any_cplx:
+            f = np.zeros(N, dtype=complex)
+            if k_s < k_e:
+                idx = np.arange(k_s, k_e)
+                f[k_s:k_e] = c * (r ** (idx - k_s))
+        else:
+            rr = float(complex(r).real); cr = float(complex(c).real)
+            f = np.zeros(N, dtype=float)
+            if k_s < k_e:
+                idx = np.arange(k_s, k_e)
+                f[k_s:k_e] = cr * (rr ** (idx - k_s))
         return f
 
     if lt == PatternKind.HAMMING:
         r = p["r"]
         c = p.get("c", 1.0)
+        any_cplx = _is_complex(r) or _is_complex(c)
         pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
-        f = c * (r ** pops)
+        if any_cplx:
+            f = c * (np.asarray(r, dtype=complex) ** pops)
+        else:
+            rr = float(complex(r).real); cr = float(complex(c).real)
+            f = cr * (rr ** pops)
         return f
 
     if lt == PatternKind.STAIRCASE:
         r = p["r"]
         c = p.get("c", 1.0)
+        any_cplx = _is_complex(r) or _is_complex(c)
         m_bits = int(round(math.log2(N)))
-        f = np.zeros(N)
-        for k in range(m_bits + 1):
-            f[(1 << k) - 1] = c * (r ** k)
+        if any_cplx:
+            f = np.zeros(N, dtype=complex)
+            for k in range(m_bits + 1):
+                f[(1 << k) - 1] = c * (r ** k)
+        else:
+            rr = float(complex(r).real); cr = float(complex(c).real)
+            f = np.zeros(N, dtype=float)
+            for k in range(m_bits + 1):
+                f[(1 << k) - 1] = cr * (rr ** k)
         return f
 
     if lt == PatternKind.DICKE:
         k = p["k"]
         c = p.get("c", 1.0)
-        f = np.zeros(N)
-        for i in range(N):
-            if bin(i).count("1") == k:
-                f[i] = c
-        return f
-
-    if lt == PatternKind.DICKE:
-        k = p["k"]
-        c = p.get("c", 1.0)
-        f = np.zeros(N)
-        for i in range(N):
-            if bin(i).count("1") == k:
-                f[i] = c
+        if _is_complex(c):
+            f = np.zeros(N, dtype=complex)
+            for i in range(N):
+                if bin(i).count("1") == k:
+                    f[i] = c
+        else:
+            cr = float(complex(c).real)
+            f = np.zeros(N, dtype=float)
+            for i in range(N):
+                if bin(i).count("1") == k:
+                    f[i] = cr
         return f
 
     if lt == PatternKind.POLYNOMIAL:
         coeffs = p["coeffs"]
         normalize_domain = p.get("normalize_domain", True)
+        any_complex = any(_is_complex(c) for c in coeffs)
         if normalize_domain and N > 1:
             x = np.arange(N, dtype=float) / (N - 1)
         else:
             x = np.arange(N, dtype=float)
-        f = np.polyval(list(reversed(coeffs)), x)
+        if any_complex:
+            f = np.zeros(N, dtype=complex)
+            for j, cj in enumerate(coeffs):
+                f += complex(cj) * (x ** j)
+            return f
+        # Real path: cast complex-typed-but-real coeffs to floats so numpy
+        # keeps the result in float64 (matches pre-complex-support output).
+        coeffs_real = [float(complex(c).real) for c in coeffs]
+        f = np.polyval(list(reversed(coeffs_real)), x)
         return f
 
     return None
 
 
+def _is_complex(z) -> bool:
+    """True if z has a meaningful nonzero imaginary part."""
+    if isinstance(z, complex):
+        return abs(z.imag) > 1e-14
+    return False
+
+
 def _build_component_vector(comp: _Pattern, N: int):
-    """Materialise a single component vector from its constructor."""
-    p = comp.params
-    if comp.kind == PatternKind.STEP:
-        f = np.zeros(N); f[:p["k_e"]] = p.get("c", 1.0); return f
-    if comp.kind == PatternKind.SQUARE:
-        f = np.zeros(N); f[p["k_s"]:p["k_e"]] = p.get("c", 1.0); return f
-    if comp.kind == PatternKind.WALSH:
-        k = p["k"]
-        c0 = p.get("c0", 1.0)
-        c1 = p.get("c1", -c0)
-        return np.array([c0 if not ((i >> k) & 1) else c1 for i in range(N)], dtype=float)
-    if comp.kind == PatternKind.SPARSE:
-        f = np.zeros(N)
-        for load in p["loads"]: f[load["k"]] = load["P"]
-        return f
-    if comp.kind == PatternKind.FOURIER:
-        k = np.arange(N); f = np.zeros(N)
-        for mode in p["modes"]:
-            f += mode["A"] * np.sin(2 * math.pi * mode["n"] * k / N + mode.get("phi", 0.0))
-        return f
-    if comp.kind == PatternKind.GEOMETRIC:
-        r = p["r"]
-        c = p.get("c", 1.0)
-        k_s = p.get("k_s", 0)
-        k_e = p.get("k_e", N)
-        if k_e is None:
-            k_e = N
-        f = np.zeros(N, dtype=float)
-        if k_s < k_e:
-            idx = np.arange(k_s, k_e)
-            f[k_s:k_e] = c * (r ** (idx - k_s))
-        return f
-    if comp.kind == PatternKind.HAMMING:
-        r = p["r"]
-        c = p.get("c", 1.0)
-        pops = np.array([bin(i).count("1") for i in range(N)], dtype=float)
-        return c * (r ** pops)
-    if comp.kind == PatternKind.STAIRCASE:
-        r = p["r"]
-        c = p.get("c", 1.0)
-        m_bits = int(round(math.log2(N)))
-        f = np.zeros(N)
-        for k in range(m_bits + 1):
-            f[(1 << k) - 1] = c * (r ** k)
-        return f
-    if comp.kind == PatternKind.DICKE:
-        k = p["k"]
-        c = p.get("c", 1.0)
-        f = np.zeros(N)
-        for i in range(N):
-            if bin(i).count("1") == k:
-                f[i] = c
-        return f
-    if comp.kind == PatternKind.DICKE:
-        k = p["k"]
-        c = p.get("c", 1.0)
-        f = np.zeros(N)
-        for i in range(N):
-            if bin(i).count("1") == k:
-                f[i] = c
-        return f
-    if comp.kind == PatternKind.POLYNOMIAL:
-        coeffs = p["coeffs"]
-        normalize_domain = p.get("normalize_domain", True)
-        if normalize_domain and N > 1:
-            x = np.arange(N, dtype=float) / (N - 1)
-        else:
-            x = np.arange(N, dtype=float)
-        return np.polyval(list(reversed(coeffs)), x)
-    raise TypeError(f"Cannot materialise component of type {comp.kind.name}.")
+    """Materialise a single component vector from its constructor.
+
+    Delegates to ``_build_expected_vector`` so the dtype-selection logic
+    lives in one place.  Returns a numpy array of length N (real or
+    complex depending on the component's parameters).
+    """
+    # Validate to materialise default parameters (e.g. c=1 for STEP),
+    # then build the analytical vector.
+    validated = _validate_params(comp.kind, N, comp.params)
+    pattern = LoadPattern(comp.kind, N=N, params=validated)
+    f = _build_expected_vector(pattern)
+    if f is None:
+        raise TypeError(f"Cannot materialise component of type {comp.kind.name}.")
+    return f
 
 
 # -------------------------------------------------------------------
@@ -683,7 +688,7 @@ _synthesise_and_build_info = _synthesize_and_build_info  # noqa: E305
 
 
 def _validate_sparse_params(params: dict, N: int) -> dict:
-    """Validate SPARSE constructor params."""
+    """Validate SPARSE constructor params.  Amplitudes may be real or complex."""
     loads = params["loads"]
     if not isinstance(loads, list) or len(loads) < 1:
         raise TypeError("SPARSE loads must be a non-empty list.")
@@ -696,7 +701,7 @@ def _validate_sparse_params(params: dict, N: int) -> dict:
         if k in seen:
             raise ValueError(f"SPARSE index k={k} appears more than once.")
         seen.add(k)
-        validated.append({"k": k, "P": float(entry["P"])})
+        validated.append({"k": k, "P": _coerce_amp(entry["P"])})
     return {"loads": validated}
 
 
@@ -793,27 +798,42 @@ def _intervals_disjoint(comps):
 
 def _compute_success_probability(weights, component_vectors):
     """
-    Success probability for Protocol 1 LCU (PREP + ctrl-U + PREP_dagger):
-      p = sum_{i,j} beta_i * beta_j * <f_hat_i | f_hat_j>
-    where beta_j = w_j * ||f_j|| / Z, Z = ||(w_j * ||f_j||)||.
-    For disjoint support: all cross terms vanish, p = sum_j beta_j^2 <= 1.
-    For overlapping support: cross terms > 0, p > disjoint case.
-    p = 1 only when all component states are identical.
+    Success probability for Protocol 1 LCU (PREP + ctrl-U + PREP_dagger).
+
+    Define alpha_j = w_j * ||f_j|| / Z^2,  where Z^2 = sum_j |w_j| * ||f_j||
+    is the magnitude-tree squared norm.  The post-selected ancilla=|0>
+    subspace holds the (unnormalised) state sum_j alpha_j |f_hat_j>, so
+
+        p = || sum_j alpha_j |f_hat_j> ||^2
+          = sum_{i,j} alpha_i^* * alpha_j * <f_hat_i | f_hat_j>.
+
+    For real positive weights and real-valued f_hat_j this reduces to the
+    classic formula  sum_{i,j} beta_i^2 * beta_j^2 * <f_hat_i|f_hat_j>
+    with beta_j^2 = w_j * ||f_j|| / Z^2.  For disjoint support the cross
+    terms vanish and p = sum_j |alpha_j|^2 in [0, 1].  p = 1 only when
+    every weighted f_hat_j is identical up to phase.
     """
-    norms  = np.array([np.linalg.norm(v) for v in component_vectors])
-    scaled = np.sqrt(np.array(weights, dtype=float) * norms)
-    Z = np.linalg.norm(scaled)
+    norms = np.array([np.linalg.norm(v) for v in component_vectors],
+                     dtype=float)
+    w_arr = np.array(weights, dtype=complex)
+    abs_w = np.abs(w_arr)
+    scaled_mag = np.sqrt(abs_w * norms)
+    Z = np.linalg.norm(scaled_mag)
     if Z < 1e-14:
         return 0.0
-    betas   = scaled / Z
-    f_hats  = [v / n if n > 1e-14 else np.zeros_like(v)
-               for v, n in zip(component_vectors, norms)]
-    # Correct formula: p = ||sum_j beta_j^2 |f_hat_j>||^2
-    # = sum_{i,j} beta_i^2 * beta_j^2 * <f_hat_i|f_hat_j>
-    p = 0.0
-    for i, (bi, fi) in enumerate(zip(betas, f_hats)):
-        for j, (bj, fj) in enumerate(zip(betas, f_hats)):
-            p += (bi**2) * (bj**2) * float(np.dot(fi, fj))
+    alphas = w_arr * norms / (Z * Z)
+
+    # Build normalised (possibly complex) component states.
+    f_hats = []
+    for v, n in zip(component_vectors, norms):
+        v_c = np.asarray(v, dtype=complex)
+        f_hats.append(v_c / n if n > 1e-14 else np.zeros_like(v_c))
+
+    # p = || sum_j alpha_j |f_hat_j> ||^2.
+    combined = np.zeros_like(f_hats[0], dtype=complex)
+    for a, fh in zip(alphas, f_hats):
+        combined = combined + a * fh
+    p = float(np.real(np.vdot(combined, combined)))
     return float(np.clip(p, 0.0, 1.0))
 
 
@@ -864,10 +884,10 @@ def _encode_sum(sum_obj, N, validate, tol):
     # Disjoint support check
     disjoint = _intervals_disjoint(comp_objs)
 
-    # Compute success probability: p = sum_{i,j} beta_i*beta_j*<fi|fj>
-    # Disjoint: p = sum_j beta_j^2 (cross terms zero)
-    # Overlapping: p higher due to positive cross terms
-    # p = 1 only when all component states are identical
+    # Compute success probability using the complex-aware formula
+    # p = || sum_j (w_j * ||f_j|| / Z^2) |f_hat_j> ||^2.
+    # For real positive weights and real f_hat_j this reduces to the
+    # classic disjoint formula  sum_j beta_j^4.
     p_success = _compute_success_probability(weights, component_vectors)
     if not disjoint:
         warnings.warn(
@@ -878,12 +898,23 @@ def _encode_sum(sum_obj, N, validate, tol):
             UserWarning, stacklevel=3,
         )
 
-    # Ancilla amplitude: beta_j = sqrt(w_j * ||f_j||) / Z
-    # This ensures beta_j^2 proportional to w_j * ||f_j||,
-    # so the post-selected state is proportional to sum_j w_j |f_hat_j>.
-    norms  = np.array([np.linalg.norm(v) for v in component_vectors])
-    scaled = np.sqrt(np.array(weights, dtype=float) * norms)
-    Z      = np.linalg.norm(scaled)
+    # PREP register loads MAGNITUDES |w_j| only (real positive Ry-tree);
+    # the per-component phase arg(w_j) is threaded through the SELECT step
+    # by baking it into the global_phase of each component circuit.  Under
+    # `circ.to_gate().control(n_anc)`, the inner global_phase becomes a
+    # relative phase on the all-controls-|j> subspace, which is exactly
+    # the controlled-(e^{i arg(w_j)} U_j) operation required by LCU with
+    # complex weights.
+    #
+    # For real positive weights this reduces exactly to the original
+    # construction (arg(w_j)=0 -> no phase baking; |w_j|=w_j).
+    norms        = np.array([np.linalg.norm(v) for v in component_vectors],
+                            dtype=float)
+    w_complex    = np.array(weights, dtype=complex)
+    abs_weights  = np.abs(w_complex)
+    arg_weights  = np.array([cmath.phase(w) for w in w_complex], dtype=float)
+    scaled       = np.sqrt(abs_weights * norms)
+    Z            = np.linalg.norm(scaled)
     if Z < 1e-14:
         raise ValueError("SUM: combined vector is zero.")
     weights_norm = scaled / Z
@@ -898,16 +929,23 @@ def _encode_sum(sum_obj, N, validate, tol):
     data_qubits = list(range(m))
     anc_qubits  = list(range(m, total_qubits))
 
-    # Step 1: Ry-tree on ancilla
+    # Step 1: Ry-tree on ancilla loading magnitude amplitudes.
     _prepare_amplitude_ancilla(qc, weights_norm, K, n_anc, anc_qubits)
 
-    # Step 2: controlled component circuits
+    # Step 2: controlled component circuits, with arg(w_j) baked into
+    # each inner global_phase to thread the weight phase through SELECT.
     for i, circ_i in enumerate(component_circuits):
+        if abs(arg_weights[i]) > 1e-14:
+            circ_i_phased = circ_i.copy()
+            circ_i_phased.global_phase = circ_i_phased.global_phase + arg_weights[i]
+        else:
+            circ_i_phased = circ_i
+
         ctrl_state  = format(i, f'0{n_anc}b')[::-1]
         flip_qubits = [anc_qubits[b] for b in range(n_anc) if ctrl_state[b] == '0']
         for q in flip_qubits:
             qc.x(q)
-        controlled_circ = circ_i.to_gate().control(n_anc)
+        controlled_circ = circ_i_phased.to_gate().control(n_anc)
         qc.append(controlled_circ, anc_qubits + data_qubits)
         for q in flip_qubits:
             qc.x(q)
@@ -1015,29 +1053,44 @@ def _validate_lcu_circuit(qc, component_vectors, weights,
     Validate LCU circuit (Protocol 1) by post-selecting ancilla on |0>.
 
     After PREP + ctrl-U + PREP_dagger, the anc=0 subspace holds the
-    target pure state (up to normalization by sqrt(p_success)).
+    target pure state (up to normalisation by sqrt(p_success) and a
+    global phase from the synthesizers).  The comparison aligns the
+    optimal global phase via the inner product
+        e^{i*phi*} = <expected|simulated> / |<expected|simulated>|
+    and then checks ||expected - simulated * e^{-i*phi*}||_2 < tol.
+    This is equivalent to fidelity > 1 - tol^2/2 and works identically
+    for real and complex inputs.  When all weights and component vectors
+    are real, the imaginary parts of `expected` and `simulated` vanish
+    automatically and the original real-arithmetic check is recovered.
     """
     from qiskit.quantum_info import Statevector
 
-    # Build expected combined vector
-    f_combined = sum(w * v for w, v in zip(weights, component_vectors))
+    # Build expected combined vector (complex if any input is complex).
+    f_combined = sum(complex(w) * np.asarray(v, dtype=complex)
+                     for w, v in zip(weights, component_vectors))
     norm_f = np.linalg.norm(f_combined)
     if norm_f < 1e-14:
         return
-    expected = (f_combined / norm_f).real
+    expected = f_combined / norm_f
 
-    # Post-select: read anc=0 subspace of statevector
-    sv = np.array(Statevector(qc))
-    sv_anc0 = sv[:N].real   # ancilla qubit is MSB: anc=0 -> indices 0..N-1
+    # Post-select: read anc=0 subspace of statevector (no .real cast).
+    sv = np.array(Statevector(qc), dtype=complex)
+    sv_anc0 = sv[:N]                # ancilla qubit MSB: anc=0 -> indices [0..N)
     norm_anc0 = np.linalg.norm(sv_anc0)
     if norm_anc0 < 1e-14:
         raise ValueError("LCU validation: anc=0 subspace is empty.")
     simulated = sv_anc0 / norm_anc0
 
-    if not np.allclose(np.abs(simulated), np.abs(expected), atol=max(tol, 1e-4)):
-        max_err = np.max(np.abs(np.abs(simulated) - np.abs(expected)))
+    # Phase-aligned 2-norm comparison (equivalent to fidelity up to global phase).
+    overlap = np.vdot(expected, simulated)
+    if abs(overlap) < 1e-14:
+        raise ValueError("LCU validation: overlap with expected state is zero.")
+    aligned = simulated * np.exp(-1j * np.angle(overlap))
+    err = float(np.linalg.norm(expected - aligned))
+    if err > max(tol, 1e-4):
         raise ValueError(
-            f"LCU validation failed: max amplitude error = {max_err:.2e} > tol={tol}."
+            f"LCU validation failed: phase-aligned error = {err:.2e} > "
+            f"tol={tol}."
         )
 
 # ---------------------------------------------------------------------------
@@ -1206,28 +1259,28 @@ def _partition_atoms(comp, N):
     atoms = []
     if comp.kind == PatternKind.SPARSE:
         for load in p["loads"]:
-            atoms.append((int(load["k"]), 0, float(load["P"]), 1.0))
+            atoms.append((int(load["k"]), 0, complex(load["P"]), complex(1.0)))
         return atoms
     if comp.kind == PatternKind.STEP:
-        c = float(p.get("c", 1.0))
+        c = complex(p.get("c", 1.0))
         k_e = int(p["k_e"])
         if k_e <= 0:
             return atoms
         for (a_k, j_k) in _dyadic_decomposition(0, k_e):
-            atoms.append((a_k, j_k, c, 1.0))
+            atoms.append((a_k, j_k, c, complex(1.0)))
         return atoms
     if comp.kind == PatternKind.SQUARE:
-        c = float(p.get("c", 1.0))
+        c = complex(p.get("c", 1.0))
         k_s = int(p["k_s"])
         k_e = int(p["k_e"])
         if k_e <= k_s:
             return atoms
         for (a_k, j_k) in _dyadic_decomposition(k_s, k_e):
-            atoms.append((a_k, j_k, c, 1.0))
+            atoms.append((a_k, j_k, c, complex(1.0)))
         return atoms
     if comp.kind == PatternKind.GEOMETRIC:
-        r = float(p["r"])
-        c_seg = float(p.get("c", 1.0))
+        r = complex(p["r"])
+        c_seg = complex(p.get("c", 1.0))
         k_s = int(p.get("k_s", 0))
         k_e_raw = p.get("k_e", N)
         k_e = N if k_e_raw is None else int(k_e_raw)
@@ -1282,7 +1335,7 @@ def _encode_partition(part_obj, N, validate, tol):
     Cost: O(L * m) gates, no ancilla, success_probability = 1.
     """
     from .synthesizer import (
-        _gleinig_encode, _mcry_on_pattern,
+        _gleinig_encode, _mcry_on_pattern, _mcp_on_pattern,
     )
     from .types import EncodingInfo
 
@@ -1308,24 +1361,28 @@ def _encode_partition(part_obj, N, validate, tol):
     # Step 2: disjointness check.  Raises on overlap.
     _partition_check_disjoint(all_atoms, N)
 
-    # Step 3: anchor weights (signed, unnormalised).
-    #     w_k = c_at_a * sqrt( (r^(2*2^j) - 1) / (r^2 - 1) )    for r != 1
-    #     w_k = c_at_a * sqrt( 2^j )                            for r == 1
-    #     w_k = c_at_a                                          for j == 0
+    # Step 3: anchor weights (complex; magnitude carries the block-L2
+    # norm, phase carries the segment leading amplitude).
+    #     |w_k|^2  = |c_at_a|^2 · ( (|r|^(2·2^j) − 1) / (|r|^2 − 1) )    for |r| != 1
+    #     |w_k|^2  = |c_at_a|^2 · 2^j                                    for |r| == 1
+    #     w_k      = c_at_a                                              for j == 0
+    # Using |r| (not r) lets the same expression handle real-negative
+    # r and unit-modulus complex r (e.g. r = exp(iω)) cleanly; for real
+    # positive r it agrees with the original formula since r^2 = |r|^2.
     anchor_weights = []
     for (a_k, j_k, c_at_a, r) in all_atoms:
         if j_k == 0:
             anchor_weights.append(c_at_a)
             continue
         size = 1 << j_k
-        if abs(r - 1.0) < 1e-14:
+        abs_r = abs(r)
+        if abs(abs_r - 1.0) < 1e-14:
             block_norm2 = float(size)
         else:
-            r2 = r * r
-            block_norm2 = (r2 ** size - 1.0) / (r2 - 1.0)
+            block_norm2 = (abs_r ** (2 * size) - 1.0) / (abs_r ** 2 - 1.0)
         anchor_weights.append(c_at_a * math.sqrt(block_norm2))
 
-    Z = math.sqrt(sum(w * w for w in anchor_weights))
+    Z = math.sqrt(sum(abs(w) ** 2 for w in anchor_weights))
     if Z < 1e-14:
         raise ValueError("PARTITION: combined vector has zero norm.")
 
@@ -1337,15 +1394,26 @@ def _encode_partition(part_obj, N, validate, tol):
         anchor_state[bits] = w_k / Z
 
     if len(anchor_state) == 1:
-        # Single anchor: X-load only, no Gleinig machinery needed.
+        # Single anchor: X-load only, plus any non-trivial global phase
+        # carried by the (possibly complex) anchor amplitude.
         (only_bits,) = anchor_state.keys()
         for q, b in enumerate(only_bits):
             if b:
                 qc.x(q)
+        only_amp = next(iter(anchor_state.values()))
+        only_phase = cmath.phase(complex(only_amp))
+        if abs(only_phase) > 1e-14:
+            qc.global_phase += only_phase
     else:
         _gleinig_encode(qc, anchor_state, m)
 
-    # Step 5: spread each non-singleton block via MC-R_y on free bits.
+    # Step 5: spread each non-singleton block.  For each free bit j we
+    # apply a per-qubit unitary mapping
+    #     |0⟩  →  (|0⟩ + r^(2^j) |1⟩) / sqrt(1 + |r^(2^j)|^2)
+    # in the upper-control subspace selecting that block.  When r is real
+    # positive this is exactly Ry(2·atan(r^(2^j))) (existing path).  For
+    # complex (or real-negative) r we additionally apply a controlled-P
+    # gate by arg(r^(2^j)) to realise the complex ratio.
     for (a_k, j_k, _c_at_a, r) in all_atoms:
         if j_k == 0:
             continue
@@ -1353,20 +1421,42 @@ def _encode_partition(part_obj, N, validate, tol):
         ctrl_pattern = [(a_k >> q) & 1 for q in ctrl_qubits]
         for j in range(j_k):
             if abs(r - 1.0) < 1e-14:
-                # r = 1: uniform block, theta_j = pi/2 for every free bit,
-                # reproducing the H-like product state (|0>+|1>)/sqrt(2).
-                theta_j = math.pi / 2.0
-            else:
-                theta_j = 2.0 * math.atan(r ** (1 << j))
-            _mcry_on_pattern(qc, theta_j, ctrl_qubits, ctrl_pattern, target=j)
+                # r = 1 (uniform block): theta = π/2 for every free bit,
+                # reproducing the H-like product state (|0⟩+|1⟩)/sqrt(2).
+                _mcry_on_pattern(qc, math.pi / 2.0,
+                                 ctrl_qubits, ctrl_pattern, target=j)
+                continue
+            rj = r ** (1 << j)              # complex
+            abs_rj = abs(rj)
+            theta_j = 2.0 * math.atan(abs_rj)
+            _mcry_on_pattern(qc, theta_j,
+                             ctrl_qubits, ctrl_pattern, target=j)
+            # Phase correction when r is not real-positive.  cmath.phase
+            # returns 0 for real-positive arguments, π for real-negative,
+            # and the natural angle for complex.  Skipping when the
+            # phase is ~0 keeps the gate count identical to the
+            # real-positive baseline.
+            phase_j = cmath.phase(complex(rj))
+            if abs(phase_j) > 1e-14:
+                _mcp_on_pattern(qc, phase_j,
+                                ctrl_qubits, ctrl_pattern, target=j)
 
     # Optional classical validation.
     validated_flag = False
     f_vec = None
     if validate:
-        f_vec = np.zeros(N, dtype=float)
+        # Use complex dtype iff any component contributes a non-real
+        # amplitude; otherwise stay in float64 for backward-compat.
+        any_complex = False
+        comp_vecs = []
         for comp in comp_objs:
-            f_vec += _build_component_vector(comp, N)
+            v = _build_component_vector(comp, N)
+            if np.iscomplexobj(v):
+                any_complex = True
+            comp_vecs.append(v)
+        f_vec = np.zeros(N, dtype=complex if any_complex else float)
+        for v in comp_vecs:
+            f_vec = f_vec + v
         _validate_circuit(qc, f_vec, tol)
         validated_flag = True
 

@@ -14,6 +14,32 @@ __version__ = "3.0.0"
 
 
 # ---------------------------------------------------------------------------
+# Internal: amplitude type coercion
+# ---------------------------------------------------------------------------
+
+def _coerce_amp(z):
+    """
+    Internal coercion for amplitude-like parameters (c, c0, c1, P, r, w, ...).
+
+    The library accepts both real and complex amplitudes via the same
+    constructor signature; this helper keeps the *storage type* matched
+    to the *value*: a real-valued input round-trips as a Python float
+    (preserving all backward-compatible introspection like ``float(P)``
+    and ``params["c"] > 0``), and a genuinely complex input is stored
+    as a Python complex.
+
+    The dispatch rule is exactness of the imaginary part: complex(1+0j)
+    coerces to float(1.0); complex(1+1e-300j) stays complex.
+    """
+    if isinstance(z, (int, float)):
+        return float(z)
+    cz = complex(z)
+    if cz.imag == 0.0:
+        return cz.real
+    return cz
+
+
+# ---------------------------------------------------------------------------
 # Base class
 # ---------------------------------------------------------------------------
 
@@ -36,10 +62,14 @@ class STEP(_Pattern):
 
     Implements the Shukla-Vedula (2024) interval circuit.
     STEP(k_e=N) produces the full uniform superposition H^m|0>.
+
+    The amplitude ``c`` may be real or complex. A non-real ``c`` adds a
+    global phase ``arg(c)`` to the prepared state; this is unobservable
+    in isolation but matters when STEP is used as a SUM component.
     """
     def __init__(self, k_e, c=1.0):
         self.kind = PatternKind.STEP
-        self.params = {"k_e": int(k_e), "c": float(c)}
+        self.params = {"k_e": int(k_e), "c": _coerce_amp(c)}
 
 
 class SQUARE(_Pattern):
@@ -48,10 +78,13 @@ class SQUARE(_Pattern):
     Extends STEP to arbitrary intervals via a Draper QFT-based constant adder.
     O(m) for k_s=0 or power-of-2-aligned blocks.
     SQUARE(k_s=0, k_e=k_e) is identical to STEP(k_e).
+
+    The amplitude ``c`` may be real or complex. A non-real ``c`` adds a
+    global phase ``arg(c)`` to the prepared state.
     """
     def __init__(self, k_s, k_e, c=1.0):
         self.kind = PatternKind.SQUARE
-        self.params = {"k_s": int(k_s), "k_e": int(k_e), "c": float(c)}
+        self.params = {"k_s": int(k_s), "k_e": int(k_e), "c": _coerce_amp(c)}
 
 
 class WALSH(_Pattern):
@@ -65,13 +98,17 @@ class WALSH(_Pattern):
     When c1 = -c0 (default), R_y(pi) = X and this reduces to the
     standard Walsh function (signed uniform superposition).
 
+    The constants c0 and c1 may be real or complex. A complex pair gives
+    the prepared state an observable relative phase ``arg(c1) - arg(c0)``
+    between the two halves of the register.
+
     Parameters
     ----------
     k : int
         Qubit index (0 = LSB). Period P = 2^(k+1). Must satisfy 0 <= k < m.
-    c0 : float, optional
+    c0 : float or complex, optional
         Amplitude on the b_k=0 half. Default 1.0.
-    c1 : float, optional
+    c1 : float or complex, optional
         Amplitude on the b_k=1 half. Default -c0 (standard Walsh).
 
     Examples
@@ -79,11 +116,12 @@ class WALSH(_Pattern):
     >>> circuit, info = encode(WALSH(k=1), N=8)                      # standard: +1/-1
     >>> circuit, info = encode(WALSH(k=1, c0=2.0), N=8)              # standard: +2/-2
     >>> circuit, info = encode(WALSH(k=2, c0=1.0, c1=4.0), N=8)      # generalized: two positive levels
+    >>> circuit, info = encode(WALSH(k=0, c0=1.0, c1=1j), N=8)       # complex: relative phase pi/2
     """
     def __init__(self, k, c0=1.0, c1=None):
         self.kind = PatternKind.WALSH
-        c0 = float(c0)
-        c1 = float(c1) if c1 is not None else -c0
+        c0 = _coerce_amp(c0)
+        c1 = _coerce_amp(c1) if c1 is not None else -c0
         self.params = {"k": int(k), "c0": c0, "c1": c1}
 
 class SPARSE(_Pattern):
@@ -92,10 +130,15 @@ class SPARSE(_Pattern):
     Implements the Gleinig-Hoefler algorithm. Gate complexity O(s * m).
     The s=1 case reduces to a single computational-basis state (X gates only).
 
+    Amplitudes may be real or complex. The Gleinig-Hoefler tree uses an
+    Ry merge for purely real amplitudes (gate count unchanged) and adds
+    a per-merge controlled-phase gate for complex amplitudes.
+
     Example
     -------
     >>> circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
     >>> circuit, info = encode(SPARSE([(1, 3.0), (6, 4.0)]), N=8)
+    >>> circuit, info = encode(SPARSE([(1, 1+1j), (6, 1-1j)]), N=8)
     """
     def __init__(self, entries):
         self.kind = PatternKind.SPARSE
@@ -108,7 +151,7 @@ class SPARSE(_Pattern):
                     f"SPARSE expects a list of (index, amplitude) tuples, "
                     f"got {item!r}."
                 )
-            loads.append({"k": int(x), "P": float(a)})
+            loads.append({"k": int(x), "P": _coerce_amp(a)})
         if len(loads) == 0:
             raise ValueError("SPARSE requires at least one entry.")
         self.params = {"loads": loads}
@@ -119,7 +162,15 @@ class SPARSE(_Pattern):
         # 'loads' (list of {"k":..., "P":...} dicts).  Without this
         # override, ``eval(repr(obj))`` fails with an unknown-kwarg error,
         # which breaks every emitter that serialises components via {obj!r}.
-        entries = [(ld["k"], ld["P"]) for ld in self.params["loads"]]
+        # Real-valued amplitudes render as floats so repr round-trips
+        # through eval() without becoming ``complex(0.5, 0.0)``.
+        entries = []
+        for ld in self.params["loads"]:
+            P = ld["P"]
+            if isinstance(P, complex) and P.imag == 0.0:
+                entries.append((ld["k"], P.real))
+            else:
+                entries.append((ld["k"], P))
         return f"SPARSE({entries!r})"
 
 
@@ -207,10 +258,12 @@ class GEOMETRIC(_Pattern):
 
     Parameters
     ----------
-    r : float
+    r : float or complex
         Base (common ratio) of the geometric sequence. Must satisfy
-        0 < r and r != 1. Typical values: 0 < r < 1 for decay,
-        r > 1 for growth.
+        r != 0 and r != 1. Typical real values: 0 < r < 1 for decay,
+        r > 1 for growth. Complex r yields oscillating geometrics; in
+        particular, r = exp(i*omega) gives a discrete plane wave
+        f_i = exp(i*omega*i), the elementary Fourier basis function.
     k_s : int, optional (default 0)
         Starting index (inclusive). Amplitudes below this index are zero.
         Must satisfy 0 <= k_s < N.
@@ -218,8 +271,9 @@ class GEOMETRIC(_Pattern):
         Ending index (exclusive). Amplitudes at or above this index are
         zero. None means k_e = N (full window from k_s to end of register).
         Must satisfy k_s < k_e <= N.
-    c : float, optional
-        Leading amplitude (default 1.0). Only affects normalization.
+    c : float or complex, optional
+        Leading amplitude (default 1.0). Affects normalization, and (when
+        complex) the global phase of the prepared state.
 
     Examples
     --------
@@ -227,12 +281,15 @@ class GEOMETRIC(_Pattern):
     >>> circuit, info = encode(GEOMETRIC(r=0.5, k_s=0, k_e=8), N=16)  # tier 1: lower half
     >>> circuit, info = encode(GEOMETRIC(r=0.9, k_s=32), N=64)        # tier 1: upper half
     >>> circuit, info = encode(GEOMETRIC(r=0.8, k_s=4, k_e=10), N=16) # tier 2
+    >>> import math
+    >>> circuit, info = encode(GEOMETRIC(r=complex(math.cos(0.5),    # plane wave
+    ...                                            math.sin(0.5))), N=16)
     """
     def __init__(self, r, k_s=0, k_e=None, c=1.0):
         self.kind = PatternKind.GEOMETRIC
-        r = float(r)
-        if r <= 0:
-            raise ValueError(f"GEOMETRIC r must be positive, got {r}.")
+        r = _coerce_amp(r)
+        if abs(r) < 1e-14:
+            raise ValueError(f"GEOMETRIC r must be nonzero, got {r}.")
         if abs(r - 1.0) < 1e-14:
             raise ValueError(
                 "GEOMETRIC r=1.0 is a uniform vector; use STEP or SQUARE instead."
@@ -247,7 +304,7 @@ class GEOMETRIC(_Pattern):
                     f"GEOMETRIC requires k_s < k_e; got k_s={k_s}, k_e={k_e}."
                 )
         # Store k_e as None when unset; _validate_params resolves to N.
-        self.params = {"r": r, "k_s": k_s, "k_e": k_e, "c": float(c)}
+        self.params = {"r": r, "k_s": k_s, "k_e": k_e, "c": _coerce_amp(c)}
 
 
 class HAMMING(_Pattern):
@@ -300,13 +357,13 @@ class HAMMING(_Pattern):
     """
     def __init__(self, r, c=1.0):
         self.kind = PatternKind.HAMMING
-        r = float(r)
-        if r <= 0:
+        r = _coerce_amp(r)
+        if abs(r) < 1e-14:
             raise ValueError(
-                f"HAMMING r must be positive, got {r}. "
+                f"HAMMING r must be nonzero, got {r}. "
                 f"r=0 is a point mass at index 0; use SPARSE([(0, 1.0)]) instead."
             )
-        self.params = {"r": r, "c": float(c)}
+        self.params = {"r": r, "c": _coerce_amp(c)}
 
 
 class STAIRCASE(_Pattern):
@@ -356,10 +413,10 @@ class STAIRCASE(_Pattern):
     """
     def __init__(self, r, c=1.0):
         self.kind = PatternKind.STAIRCASE
-        r = float(r)
-        if r <= 0:
+        r = _coerce_amp(r)
+        if abs(r) < 1e-14:
             raise ValueError(
-                f"STAIRCASE r must be positive, got {r}. "
+                f"STAIRCASE r must be nonzero, got {r}. "
                 f"Use SPARSE([(0, 1.0)]) for the degenerate r=0 case."
             )
         if abs(r - 1.0) < 1e-14:
@@ -367,7 +424,7 @@ class STAIRCASE(_Pattern):
                 "STAIRCASE r=1.0 gives equal amplitudes on unary indices; "
                 "use SPARSE with uniform weights on {0,1,3,...,2^m-1} instead."
             )
-        self.params = {"r": r, "c": float(c)}
+        self.params = {"r": r, "c": _coerce_amp(c)}
 
 
 class DICKE(_Pattern):
@@ -452,7 +509,7 @@ class DICKE(_Pattern):
         k = int(k)
         if k < 0:
             raise ValueError(f"DICKE k must be non-negative, got {k}.")
-        self.params = {"k": k, "c": float(c)}
+        self.params = {"k": k, "c": _coerce_amp(c)}
 
 
 class POLYNOMIAL(_Pattern):
@@ -510,7 +567,7 @@ class POLYNOMIAL(_Pattern):
     """
     def __init__(self, coeffs, normalize_domain=True):
         self.kind = PatternKind.POLYNOMIAL
-        coeffs = [float(c) for c in coeffs]
+        coeffs = [_coerce_amp(c) for c in coeffs]
         if len(coeffs) == 0:
             raise ValueError("POLYNOMIAL requires at least one coefficient.")
         # Strip trailing zeros so degree is correct
@@ -625,7 +682,11 @@ class SUM(_Pattern):
     ----------
     components : list of (weight, pattern) tuples
         Unnormalized weights and typed constructors.
-        All weights must be positive.
+        Weights may be real or complex; only ``w == 0`` is rejected.
+        For complex weights ``w_j = |w_j| e^{i phi_j}``, the LCU
+        construction loads the magnitude distribution into the ancilla
+        register's amplitudes (real positive) and threads the phase
+        ``phi_j`` through SELECT as a controlled global phase.
 
     Examples
     --------
@@ -641,6 +702,11 @@ class SUM(_Pattern):
     ...     SUM([(1.0, STEP(k_e=8, c=1.0)),
     ...          (1.0, FOURIER(modes=[(1, 1.0, 0)]))]), N=16)
     >>> # UserWarning: overlapping support, p < 1.0
+
+    >>> # Complex weights: superposition with relative phase
+    >>> circuit, info = encode(
+    ...     SUM([(1.0,  SQUARE(k_s=0, k_e=8, c=1.0)),
+    ...          (1.0j, SQUARE(k_s=8, k_e=16, c=1.0))]), N=16)
 
     References
     ----------
@@ -664,10 +730,10 @@ class SUM(_Pattern):
                 raise TypeError(
                     f"SUM component must be a pattern, got {type(obj).__name__}."
                 )
-            w = float(w)
-            if w <= 0:
+            w = _coerce_amp(w)
+            if abs(w) < 1e-14:
                 raise ValueError(
-                    f"SUM weights must be positive, got {w}."
+                    f"SUM weights must be nonzero, got {w}."
                 )
             weights.append(w)
             objs.append(obj)

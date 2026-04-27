@@ -72,6 +72,19 @@ def emit_code(pattern: LoadPattern) -> str:
     }
 
     fn = dispatch.get(pattern.kind, _emit_mottonen)
+
+    # Detect complex amplitudes: when any pattern parameter is a complex
+    # number with non-zero imaginary part, the per-pattern hand-written
+    # emitters (which assume real amplitudes throughout) cannot express
+    # the resulting circuit.  Fall back to extracting the gate sequence
+    # from the synthesized circuit, which is the same path used by the
+    # "synthesized internally" placeholder below.  Real-only patterns
+    # take the original per-pattern emitter unchanged.
+    if _has_complex_params(pattern.params):
+        from .synthesizer import synthesize
+        circuit = synthesize(pattern)
+        return _emit_from_circuit(m, pattern, circuit)
+
     code = fn(m, pattern.params)
 
     # If the emitter produced an incomplete snippet (contains the
@@ -83,6 +96,39 @@ def emit_code(pattern: LoadPattern) -> str:
         code = _emit_from_circuit(m, pattern, circuit)
 
     return code
+
+
+def _has_complex_params(params: dict) -> bool:
+    """Return True iff any parameter value carries a non-zero imaginary part.
+
+    Recurses into lists/tuples (e.g. SPARSE 'P', POLYNOMIAL 'coeffs',
+    FOURIER 'modes').  Used by emit_code to detect when the per-pattern
+    hand-written emitter cannot express the circuit and the gate-sequence
+    extractor must be used instead.
+    """
+    def _is_complex_scalar(v) -> bool:
+        return isinstance(v, complex) and abs(v.imag) > 1e-14
+
+    for v in params.values():
+        if _is_complex_scalar(v):
+            return True
+        if isinstance(v, (list, tuple)):
+            for item in v:
+                if _is_complex_scalar(item):
+                    return True
+                if isinstance(item, (list, tuple)):
+                    for sub in item:
+                        if _is_complex_scalar(sub):
+                            return True
+                if isinstance(item, dict):
+                    for sub in item.values():
+                        if _is_complex_scalar(sub):
+                            return True
+        if isinstance(v, dict):
+            for sub in v.values():
+                if _is_complex_scalar(sub):
+                    return True
+    return False
 
 
 def _emit_from_circuit(m: int, pattern: LoadPattern, circuit) -> str:

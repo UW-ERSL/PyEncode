@@ -28,6 +28,7 @@ References
 """
 
 import math
+import cmath
 import numpy as np
 from typing import Optional
 
@@ -82,7 +83,21 @@ def synthesize(pattern: LoadPattern) -> QuantumCircuit:
     }
 
     fn = dispatch.get(pattern.kind, _synth_qiskit_fallback)
-    return fn(m, pattern.params)
+    qc = fn(m, pattern.params)
+
+    # STEP / SQUARE: the dedicated synthesizers ignore the leading
+    # constant `c` because it only affects normalization; for complex
+    # `c` we must still record arg(c) as a global phase so that the
+    # circuit composes correctly under SUM / PARTITION / TENSOR.  For
+    # real positive c (the original behaviour) arg(c) = 0 and no phase
+    # is added.
+    if pattern.kind in (PatternKind.STEP, PatternKind.SQUARE):
+        c = pattern.params.get("c", 1.0)
+        arg_c = cmath.phase(complex(c))
+        if abs(arg_c) > 1e-14:
+            qc.global_phase += arg_c
+
+    return qc
 
 
 # ---------------------------------------------------------------------------
@@ -493,15 +508,17 @@ def _synth_disjoint_point_load(m: int, params: dict) -> QuantumCircuit:
 def _synth_disjoint_point_load_signed(m: int, params: dict) -> QuantumCircuit:
     """
     Prepare a weighted superposition of L ≥ 2 point loads with SIGNED
-    amplitudes:
+    or COMPLEX amplitudes:
 
-        |ψ⟩ = (1/‖a‖) Σ_i a_i |k_i⟩,   a_i = P_i  (may be negative)
+        |ψ⟩ = (1/‖a‖) Σ_i a_i |k_i⟩,   a_i ∈ ℂ
 
     Same Gleinig-Hoefler construction as _synth_disjoint_point_load, but
-    carries signs through the pairwise reduction directly.  The key
-    observation is that the merging rotation angle θ = -2·atan2(cx1, cx2)
-    in _gleinig_reduce already handles arbitrary real amplitudes
-    correctly, so we simply skip the abs() step.
+    carries signs/phases through the pairwise reduction directly.  When
+    every a_i is real, the merge step uses the existing signed
+    θ = -2·atan2(c_x1, c_x2) parameterisation (no extra gates).  When
+    any a_i has a non-zero imaginary part, the merge inserts a
+    controlled-phase gate to strip the relative phase between the two
+    amplitudes, then performs a real magnitude merge.
 
     This eliminates the need for a post-hoc multi-controlled-Z
     phase-flip pass — critical for POLYNOMIAL, where most Walsh
@@ -512,12 +529,14 @@ def _synth_disjoint_point_load_signed(m: int, params: dict) -> QuantumCircuit:
     L     = len(loads)
     assert L >= 2, "Use _synth_point_load for L=1"
 
-    # Normalise amplitudes keeping signs intact
-    amps = np.array([float(load["P"]) for load in loads], dtype=float)
-    norm = np.linalg.norm(amps)
+    # Normalise amplitudes keeping signs/phases intact.  Use complex
+    # storage so the dtype is preserved through the Gleinig tree even
+    # for real inputs (the merge step then routes via the real path).
+    raw = np.array([complex(load["P"]) for load in loads], dtype=complex)
+    norm = np.linalg.norm(raw)
     if norm < 1e-14:
         raise ValueError("All point-load magnitudes are zero.")
-    amps = amps / norm
+    amps = raw / norm
 
     indices = [int(load["k"]) for load in loads]
 
@@ -547,20 +566,30 @@ def _gleinig_encode(qc: QuantumCircuit,
                     state: dict,
                     n: int) -> None:
     """
-    Algorithm 2 (Gleinig & Hoefler, DAC 2021).
+    Algorithm 2 (Gleinig & Hoefler, DAC 2021), generalised to complex
+    amplitudes.
 
     Takes a sparse quantum state represented as
-        state: dict mapping n-bit tuple -> amplitude (real, normalized)
-    and appends gates to qc that prepare that state from |0^n>.
+        state: dict mapping n-bit tuple -> amplitude (real or complex,
+                                                       normalised)
+    and appends gates to qc that prepare that state from |0^n⟩.
 
     Works by repeatedly calling _gleinig_reduce (Algorithm 1) which
     merges two basis states into one, until a single basis state remains,
-    then adds X gates to map that state to |0^n>.  The circuit is then
-    inverted so it maps |0^n> -> target state.
+    then adds X gates to map that state to |0^n⟩.  The circuit is then
+    inverted so it maps |0^n⟩ → target state.
+
+    For complex amplitudes the surviving 1-sparse amplitude after L-1
+    merges may have a non-trivial phase; this is absorbed into
+    ``qc.global_phase`` so that the prepared state matches the target
+    exactly (not merely up to a global phase).
     """
     gates_forward = []   # list of (gate_type, args) to be inverted
 
-    current_state = dict(state)
+    # Cast to complex storage so the merge step can detect non-real
+    # amplitudes uniformly.  For purely real inputs the per-merge
+    # routing falls through to the existing signed-atan2 path.
+    current_state = {bits: complex(amp) for bits, amp in state.items()}
 
     while len(current_state) > 1:
         new_gates = _gleinig_reduce(current_state, n)
@@ -571,10 +600,22 @@ def _gleinig_encode(qc: QuantumCircuit,
 
     # Now current_state has one basis state: add X gates to map it to |0^n>
     assert len(current_state) == 1
-    remaining_bits = list(current_state.keys())[0]
+    remaining_bits, remaining_amp = next(iter(current_state.items()))
     for i, b in enumerate(remaining_bits):
         if b:
             gates_forward.append(('x', i))
+
+    # Track global phase so the prepared state equals the target exactly.
+    # The forward gate sequence maps |ψ⟩ → remaining_amp · |0^n⟩.
+    # The inverse therefore prepares (1/remaining_amp) · |ψ⟩ from |0^n⟩;
+    # we add arg(remaining_amp) to the circuit's global phase to cancel
+    # the residual factor.  For real positive remaining_amp this is a
+    # no-op (preserving existing real-only behaviour); for negative real
+    # it adds π exactly, matching the explicit handling already used by
+    # _synth_sparse for the L=1 case.
+    phase_correction = cmath.phase(remaining_amp)
+    if abs(phase_correction) > 1e-14:
+        qc.global_phase += phase_correction
 
     # Invert: reverse gate list and invert each gate
     for gate in reversed(gates_forward):
@@ -593,6 +634,21 @@ def _gleinig_encode(qc: QuantumCircuit,
         elif gtype == 'mcry':
             # Inverse of MCRy(theta) is MCRy(-theta)
             _mcry(qc, -gate[1], gate[2], gate[3], gate[4])
+        elif gtype == 'p':
+            # ('p', delta, target) — uncontrolled phase shift on |1⟩.
+            # Inverse: P(-delta).
+            qc.p(-gate[1], gate[2])
+        elif gtype == 'cp':
+            # ('cp', delta, ctrl, target) — controlled phase shift.
+            # Inverse: CP(-delta).
+            qc.cp(-gate[1], gate[2], gate[3])
+        elif gtype == 'mcp':
+            # ('mcp', delta, ctrl_list, ctrl_vals, target) — multi-
+            # controlled phase shift.  Inverse: MCP(-delta).  The
+            # ctrl_vals are honoured by the X-flanking already emitted
+            # alongside this gate (same pattern as 'mcry'); mcp itself
+            # treats every control as active-high.
+            qc.mcp(-gate[1], gate[2], gate[4])
 
 
 def _gleinig_reduce(state: dict, n: int) -> list:
@@ -692,18 +748,59 @@ def _gleinig_reduce(state: dict, n: int) -> list:
     for b in flip_bits:
         gates.append(('x', b))
 
-    # --- Multi-controlled Ry to merge x1 and x2 ---
-    # G gate: maps  cx1|1> + cx2|0>  ->  e^{i*lambda}|0>
-    # which is CRy(2*arccos(cx2 / norm)) controlled on dif_qubits=1
-    # (after the NOT gates above, control is all-1 for both x1 and x2)
+    # --- Multi-controlled merge to combine x1 and x2 ---------------------
+    # G gate: maps  cx1|1⟩ + cx2|0⟩  →  ‖(cx1, cx2)‖ · e^{i·arg(cx2)} |0⟩
+    # on the |dif⟩ subspace where dif_qubits are all-1 (achieved by the X
+    # flanking emitted above).
+    #
+    # Real-only path  (no extra gates, preserves backward-compat counts):
+    #   Use the standard signed parameterisation
+    #       θ = -2 · atan2(cx1, cx2)
+    #   so that one CRy(θ) on the dif qubit absorbs both the magnitude
+    #   merge and any sign flip via atan2's sign handling.
+    #
+    # Complex path  (one extra controlled-phase per merge):
+    #   First strip the relative phase δ = arg(cx1) − arg(cx2) from the
+    #   |1⟩-branch via a (multi-)controlled phase shift CP(-δ) on dif.
+    #   After the strip, both branches share phase arg(cx2) and the
+    #   magnitude merge reduces to the real case
+    #       θ = -2 · atan2(|cx1|, |cx2|).
+    #
+    # Decomposition references:
+    #   Möttönen, Vartiainen, Bergholm & Salomaa, "Transformation of
+    #   quantum states using uniformly controlled rotations", QIC 2005
+    #   (Sec. III) — original Ry/Rz factorisation for complex amplitudes.
+    #   Plesch & Brukner, Phys. Rev. A 83, 032302 (2011) — equivalent
+    #   phase-strip + real-merge view for sparse state preparation.
     cx1 = state[x1]
     cx2 = state[x2]
-    norm_pair = math.sqrt(cx1**2 + cx2**2)
-    # We need Ry(theta) to map  cx1|1> + cx2|0>  ->  norm|0>
-    # Standard Ry: |0>->cos(θ/2)|0>+sin(θ/2)|1>, |1>->-sin(θ/2)|0>+cos(θ/2)|1>
-    # Requiring the |1> coefficient to vanish: cx1*cos(θ/2) + cx2*sin(θ/2) = 0
-    # => theta = -2*arctan(cx1/cx2)  [negative angle]
-    theta = -2.0 * math.atan2(cx1, cx2)
+    cx1_imag = abs(cx1.imag) if isinstance(cx1, complex) else 0.0
+    cx2_imag = abs(cx2.imag) if isinstance(cx2, complex) else 0.0
+    needs_phase_strip = cx1_imag > 1e-14 or cx2_imag > 1e-14
+
+    if needs_phase_strip:
+        delta = cmath.phase(complex(cx1)) - cmath.phase(complex(cx2))
+        # Normalise δ to (-π, π]
+        delta = (delta + math.pi) % (2.0 * math.pi) - math.pi
+        if abs(delta) > 1e-14:
+            if not dif_qubits:
+                gates.append(('p', -delta, dif))
+            elif len(dif_qubits) == 1:
+                gates.append(('cp', -delta, dif_qubits[0], dif))
+            else:
+                gates.append(('mcp', -delta, list(dif_qubits),
+                              list(dif_vals), dif))
+        # After the strip, the magnitude merge is exactly the real case.
+        abs_cx1 = abs(cx1)
+        abs_cx2 = abs(cx2)
+        theta = -2.0 * math.atan2(abs_cx1, abs_cx2)
+    else:
+        # Real-valued amplitudes (possibly stored as Python complex with
+        # zero imaginary): use the original signed-atan2 path so gate
+        # counts on existing real-only test inputs are unchanged.
+        cx1r = float(cx1.real) if isinstance(cx1, complex) else float(cx1)
+        cx2r = float(cx2.real) if isinstance(cx2, complex) else float(cx2)
+        theta = -2.0 * math.atan2(cx1r, cx2r)
 
     if not dif_qubits:
         gates.append(('cry', theta, -1, dif))  # unconditional Ry (no controls)
@@ -814,6 +911,48 @@ def _apply_gate_to_state(state: dict, gate: tuple, n: int) -> None:
                 new_state[b1] = new_a1
             else:
                 new_state.pop(b1, None)
+        state.clear()
+        state.update(new_state)
+
+    elif gtype == 'p':
+        # ('p', delta, target): uncontrolled phase shift on |1⟩ of target.
+        delta, tgt = gate[1], gate[2]
+        factor = cmath.exp(1j * delta)
+        new_state = {}
+        for bits, amp in state.items():
+            if bits[tgt] == 1:
+                new_state[bits] = amp * factor
+            else:
+                new_state[bits] = amp
+        state.clear()
+        state.update(new_state)
+
+    elif gtype == 'cp':
+        # ('cp', delta, ctrl, target): controlled phase shift.
+        delta, ctrl, tgt = gate[1], gate[2], gate[3]
+        factor = cmath.exp(1j * delta)
+        new_state = {}
+        for bits, amp in state.items():
+            if bits[ctrl] == 1 and bits[tgt] == 1:
+                new_state[bits] = amp * factor
+            else:
+                new_state[bits] = amp
+        state.clear()
+        state.update(new_state)
+
+    elif gtype == 'mcp':
+        # ('mcp', delta, ctrl_list, ctrl_vals, target): multi-controlled
+        # phase shift.  X-flanking on active-low controls is emitted
+        # separately as 'x' gates, so here we treat every control as
+        # active-high (must be |1⟩) — same convention as 'mcry'.
+        delta, ctrl_list, ctrl_vals, tgt = gate[1], gate[2], gate[3], gate[4]
+        factor = cmath.exp(1j * delta)
+        new_state = {}
+        for bits, amp in state.items():
+            if all(bits[q] == 1 for q in ctrl_list) and bits[tgt] == 1:
+                new_state[bits] = amp * factor
+            else:
+                new_state[bits] = amp
         state.clear()
         state.update(new_state)
 
@@ -1000,26 +1139,39 @@ def _synth_sparse(m: int, params: dict) -> QuantumCircuit:
     """
     SPARSE: delegate to the Gleinig-Hoefler disjoint-point-load synthesizer.
 
-    For s=1 this reduces to _synth_point_load (X gates only); a negative
-    amplitude is encoded as a global phase of pi so that the sign is
-    preserved when the circuit is used as a controlled sub-block (e.g.
-    inside SUM, where a global phase becomes a relative phase).
+    For s=1 this reduces to _synth_point_load (X gates only); a non-real
+    amplitude is encoded as a global phase ``arg(P)`` (which subsumes the
+    π for the negative-real case) so that the sign/phase is preserved
+    when the circuit is used as a controlled sub-block (e.g. inside SUM,
+    where a global phase becomes a relative phase).
 
     For s>1 the full Gleinig-Hoefler O(s*m) construction is used.  When
-    any amplitude is negative we route through the signed loader, whose
-    pairwise rotation theta = -2*atan2(c_x1, c_x2) handles arbitrary
-    real amplitudes correctly without any post-hoc phase-flip pass.
+    any amplitude is negative or complex we route through the signed
+    loader, whose pairwise merge handles arbitrary real amplitudes via
+    θ = -2·atan2(c_x1, c_x2) and arbitrary complex amplitudes via the
+    additional phase-strip CP/MCP gate emitted by ``_gleinig_reduce``.
     """
     loads = params["loads"]
-    has_negative = any(float(ld["P"]) < 0.0 for ld in loads)
+    # Real-but-signed (any P with negative real part) and any complex
+    # (non-zero imaginary) both need the signed/phase-aware path.
+    has_negative = any(complex(ld["P"]).real < 0.0
+                       and abs(complex(ld["P"]).imag) < 1e-14
+                       for ld in loads)
+    has_complex  = any(abs(complex(ld["P"]).imag) > 1e-14 for ld in loads)
+    needs_signed = has_negative or has_complex
 
     if len(loads) == 1:
         qc = _synth_point_load(m, loads[0])
-        if has_negative:
-            qc.global_phase += math.pi
+        # Encode the amplitude's phase as a global phase on the
+        # single-basis-state circuit.  arg(P) is 0 for real positive,
+        # π for real negative, arbitrary for complex.
+        P = complex(loads[0]["P"])
+        phi = cmath.phase(P)
+        if abs(phi) > 1e-14:
+            qc.global_phase += phi
         return qc
 
-    if has_negative:
+    if needs_signed:
         return _synth_disjoint_point_load_signed(m, params)
     return _synth_disjoint_point_load(m, params)
 
@@ -1045,19 +1197,34 @@ def _synth_fourier(m: int, params: dict) -> QuantumCircuit:
 
 def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
     """
-    Generalized WALSH: R_y(theta)_k + H^{otimes m}.
+    Generalized WALSH: U_walsh on qubit k + H^{otimes m}.
 
     Prepares a two-level piecewise-constant state with period P = 2^(k+1):
       amplitude proportional to c0 where bit k of i is 0
       amplitude proportional to c1 where bit k of i is 1
 
-    The rotation angle is:
-      theta = 2 * arctan((c0 - c1) / (c0 + c1))
-
-    When c1 = -c0: theta = pi => R_y(pi) = X (standard Walsh).
-
+    Real (c0, c1) case
+    ------------------
+    The single-qubit preparation reduces to R_y(theta) with
+        theta = 2 * atan2(c0 - c1, c0 + c1).
+    When c1 = -c0: theta = pi and R_y(pi) = X (standard Walsh).
     Circuit: R_y(theta) on qubit k, H on all m qubits.
-    Gate count: m + 1.  Complexity: O(m).
+    Gate count: m + 1.
+
+    Complex (c0, c1) case
+    ---------------------
+    Let N_c = sqrt(|c0|^2 + |c1|^2),
+        alpha = (c0 + c1) / (sqrt(2) * N_c),
+        beta  = (c0 - c1) / (sqrt(2) * N_c),
+    so |alpha|^2 + |beta|^2 = 1 and after H^{otimes m} the
+    bit-k = b component carries amplitude c_b / Z.  Decompose
+    alpha = e^{i*phi_a} cos(theta/2),  beta = e^{i*phi_b} sin(theta/2):
+      * R_y(theta) on qubit k  -- cos/sin amplitudes,
+      * P(phi_b - phi_a) on qubit k  -- relative phase,
+      * qc.global_phase += phi_a  -- absolute phase on |0>_k branch.
+    Reduces to the real construction when c0, c1 are real.
+
+    Complexity: O(m).
     """
     k  = params["k"]
     c0 = params.get("c0", 1.0)
@@ -1066,18 +1233,47 @@ def _synth_walsh(m: int, params: dict) -> QuantumCircuit:
     if k < 0 or k >= m:
         raise ValueError(f"WALSH qubit index k={k} out of range [0, {m}).")
 
-    denom = c0 + c1
-    if abs(denom) < 1e-14:
-        # c1 = -c0: standard Walsh, use X for exactness
-        theta = math.pi
-    else:
-        theta = 2 * math.atan2(c0 - c1, c0 + c1)
-
+    is_complex = isinstance(c0, complex) or isinstance(c1, complex)
     qc = QuantumCircuit(m, name="walsh")
-    if abs(theta - math.pi) < 1e-12:
-        qc.x(k)   # exact X for standard Walsh
+
+    if not is_complex:
+        # ------- backward-compatible real path -------
+        denom = c0 + c1
+        if abs(denom) < 1e-14:
+            theta = math.pi
+        else:
+            theta = 2 * math.atan2(c0 - c1, c0 + c1)
+        if abs(theta - math.pi) < 1e-12:
+            qc.x(k)
+        else:
+            qc.ry(theta, k)
     else:
-        qc.ry(theta, k)
+        # ------- complex path -------
+        c0c, c1c = complex(c0), complex(c1)
+        N_c = math.sqrt(abs(c0c)**2 + abs(c1c)**2)
+        if N_c < 1e-14:
+            raise ValueError("WALSH amplitudes (c0, c1) cannot both be zero.")
+        alpha = (c0c + c1c) / (math.sqrt(2) * N_c)
+        beta  = (c0c - c1c) / (math.sqrt(2) * N_c)
+        abs_a, abs_b = abs(alpha), abs(beta)
+        theta = 2 * math.atan2(abs_b, abs_a)
+        # Special cases: pure |0> or pure |1> -- avoid unnecessary R_y / P.
+        if abs_b < 1e-14:
+            phi_a = cmath.phase(alpha)
+            qc.global_phase += phi_a
+        elif abs_a < 1e-14:
+            qc.x(k)
+            phi_b = cmath.phase(beta)
+            qc.global_phase += phi_b
+        else:
+            phi_a = cmath.phase(alpha)
+            phi_b = cmath.phase(beta)
+            qc.ry(theta, k)
+            if abs(phi_b - phi_a) > 1e-14:
+                qc.p(phi_b - phi_a, k)
+            if abs(phi_a) > 1e-14:
+                qc.global_phase += phi_a
+
     for q in range(m):
         qc.h(q)
     return qc
@@ -1096,12 +1292,13 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
 
       (a) k_s == 0 and k_e == N  (full register)
           Plain product state.  m R_y gates, 0 CX, depth 1.
-          Theta_j = 2*arctan(r^(2^j)) on qubit j.
+          Theta_j = 2*arctan(|r|^(2^j)) on qubit j; for complex r,
+          a P(arg(r)*2^j) phase gate is appended on qubit j.
 
       (b) [k_s, k_e) is a single dyadic block
           i.e. w is a power of two AND k_s % w == 0.
-          log2(w) R_y gates on the low qubits plus X gates on the upper
-          qubits that encode k_s // w.  Still depth 1, 0 CX.
+          log2(w) R_y/P pairs on the low qubits plus X gates on the
+          upper qubits that encode k_s // w.  Still depth 1, 0 CX.
 
       (c) Otherwise  (general window)
           Dyadic decomposition of [k_s, k_e) into L <= m aligned blocks
@@ -1111,24 +1308,34 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
 
               |psi> = sum_k (w_k / Z) |block_k>,
 
-              w_k = r^(a_k - k_s) * sqrt( (r^(2*2^j_k) - 1)
-                                                 / (r^2 - 1) ),
+              w_k = r^(a_k - k_s) * sqrt( (|r|^(2*2^j_k) - 1)
+                                                 / (|r|^2 - 1) ),
 
           Assembly: Gleinig-Hoefler on the L anchor points {|a_k>} to
-          load the weights, followed by a multi-controlled R_y on each
-          free bit of each block to spread the anchor amplitude across
-          the block.  Total: O(L*m^2) basis gates, no ancilla,
-          post-selection probability 1 (the blocks are disjoint).
+          load the weights, followed by a multi-controlled R_y (and,
+          for complex r, MCP) on each free bit of each block to spread
+          the anchor amplitude across the block.  Total: O(L*m^2) basis
+          gates, no ancilla, post-selection probability 1 (the blocks
+          are disjoint).
+
+    Complex / signed r
+    ------------------
+    For real positive r the original product-state circuit is recovered
+    exactly (arg(r) = 0 suppresses every P / MCP gate).  For real
+    negative r the only emitted phase is on qubit 0 (other 2^j*pi mod 2pi
+    vanish).  For complex r every qubit j picks up a phase arg(r)*2^j.
 
     Parameters
     ----------
     m : int
         Number of qubits (N = 2^m).
     params : dict
-        Required:  'r' (float, > 0, != 1).
+        Required:  'r' (real or complex, |r| != 0, r != 1).
         Optional:  'k_s' (int, default 0, 0 <= k_s < N).
                    'k_e' (int, default N, k_s < k_e <= N).
-                   'c'   (float, default 1.0) — affects only normalisation.
+                   'c'   (real or complex, default 1.0) — its magnitude
+                         only affects normalisation; its phase is
+                         recorded as qc.global_phase.
 
     References
     ----------
@@ -1138,17 +1345,39 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     """
     r = params["r"]
     k_s = params.get("k_s", 0)
+    c   = params.get("c", 1.0)
     N = 1 << m
     k_e = params.get("k_e", N)
     if k_e is None:
         k_e = N
 
+    abs_r = abs(r)
+    arg_r = cmath.phase(complex(r))
+    arg_c = cmath.phase(complex(c))
+    is_complex_r = isinstance(r, complex) and abs(r.imag) > 1e-14
+
     qc = QuantumCircuit(m, name="geometric")
+
+    def _per_qubit(j_idx: int, q_idx: int) -> None:
+        """Per-qubit (|0> + r^(2^j_idx) |1>) preparation on qubit q_idx."""
+        if is_complex_r:
+            qc.ry(2.0 * math.atan(abs_r ** (1 << j_idx)), q_idx)
+            phase_j = (arg_r * (1 << j_idx)) % (2 * math.pi)
+            if phase_j > math.pi:
+                phase_j -= 2 * math.pi
+            if abs(phase_j) > 1e-14:
+                qc.p(phase_j, q_idx)
+        else:
+            # Real (signed) path.  For r < 0 this still works because
+            # r^(2^j) is real; atan handles negatives correctly.
+            qc.ry(2.0 * math.atan(r ** (1 << j_idx)), q_idx)
 
     # --- Regime (a): plain full-register product state -------------------
     if k_s == 0 and k_e == N:
         for j in range(m):
-            qc.ry(2.0 * math.atan(r ** (1 << j)), j)
+            _per_qubit(j, j)
+        if abs(arg_c) > 1e-14:
+            qc.global_phase += arg_c
         return qc
 
     # --- Regime (b): single dyadic block covering [k_s, k_e) -----------
@@ -1156,16 +1385,20 @@ def _synth_geometric(m: int, params: dict) -> QuantumCircuit:
     if (w & (w - 1)) == 0 and k_s % w == 0:
         m_low = w.bit_length() - 1
         for j in range(m_low):
-            qc.ry(2.0 * math.atan(r ** (1 << j)), j)
+            _per_qubit(j, j)
         upper_val = k_s // w
         for j in range(m - m_low):
             if (upper_val >> j) & 1:
                 qc.x(m_low + j)
+        if abs(arg_c) > 1e-14:
+            qc.global_phase += arg_c
         return qc
 
     # --- Regime (c): dyadic decomposition of [k_s, k_e) ----------------
     blocks = _dyadic_decomposition(k_s, k_e)
     _dyadic_geometric_assemble(qc, m, r, k_s, blocks)
+    if abs(arg_c) > 1e-14:
+        qc.global_phase += arg_c
     return qc
 
 
@@ -1224,7 +1457,7 @@ def _dyadic_decomposition(s: int, e: int) -> list:
 
 def _dyadic_geometric_assemble(qc: QuantumCircuit,
                                m: int,
-                               r: float,
+                               r,
                                k_s: int,
                                blocks: list) -> None:
     """
@@ -1234,40 +1467,50 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
     Two-step assembly:
 
       Step 1.  Gleinig-Hoefler sparse-state preparation on the L anchor
-               points {|a_k>}_{k=0..L-1} with weights w_k/Z.
-               After this step, the register is in
+               points {|a_k>}_{k=0..L-1} with (possibly complex) weights
+               w_k/Z.  After this step, the register is in
                    |psi_anchor> = sum_k (w_k/Z) |a_k>.
 
       Step 2.  For each block with j_k >= 1 and each free bit j in
-               {0, 1, ..., j_k - 1}, apply R_y(2*arctan(r^(2^j))) on
+               {0, 1, ..., j_k - 1}, apply R_y(2*arctan(|r|^(2^j))) on
                qubit j controlled on the upper (m - j_k) qubits matching
-               the bit pattern  a_k >> j_k.  Because the lower j_k bits
-               of a_k are zero (alignment), every qubit being rotated
-               starts in |0> within the controlled subspace, so the
-               standard product-state formula applies.
+               the bit pattern  a_k >> j_k.  When r is complex, append a
+               P(arg(r)*2^j) on the same qubit/control pattern.  Because
+               the lower j_k bits of a_k are zero (alignment), every
+               qubit being rotated starts in |0> within the controlled
+               subspace, so the standard product-state formula applies.
 
     The weights are
-        w_k^2 = r^(2*(a_k - k_s)) * (r^(2*2^j_k) - 1) / (r^2 - 1)
-              = sum_{i in block_k} r^(2*(i - k_s))
-    so that sum_k w_k^2 = Z^2 = sum_{i=k_s}^{N-1} r^(2*(i - k_s)).
+        w_k = r^(a_k - k_s) * sqrt( (|r|^(2*2^j_k) - 1) / (|r|^2 - 1) )
+    so that |w_k|^2 = sum_{i in block_k} |r|^(2*(i - k_s)) and arg(w_k)
+    equals (a_k - k_s)*arg(r); the magnitude part is the standard real
+    geometric-sum formula evaluated at |r|, and the phase part is
+    absorbed into the (signed/complex) Gleinig load.  When r is real
+    positive both magnitudes and phases reduce to the original formula.
 
-    Correctness sketch: after step 2, the amplitude on |a_k + i> for
-    i in [0, 2^j_k) is  (w_k/Z) * r^i / sqrt(w_k^2 / r^(2*(a_k-k_s)))
-    = r^(a_k + i - k_s) / Z,  which matches the target state.
+    For real positive r the arg(r) terms vanish, no P/MCP gates are
+    emitted, and the original real circuit is recovered exactly.
     """
-    r2 = r * r
+    abs_r = abs(r)
+    arg_r = cmath.phase(complex(r))
+    abs_r2 = abs_r * abs_r
 
-    # Block weights (unnormalised anchor amplitudes, all non-negative).
+    # Block weights.  Magnitude uses |r|; phase uses (a_k-k_s)*arg(r).
     weights = []
     for (a_k, j_k) in blocks:
-        # block_norm^2 = (r^(2*2^j_k) - 1) / (r^2 - 1)  for r != 1
         size = 1 << j_k
-        if abs(r2 - 1.0) < 1e-14:
+        if abs(abs_r2 - 1.0) < 1e-14:
             block_norm2 = float(size)
         else:
-            block_norm2 = (r2 ** size - 1.0) / (r2 - 1.0)
-        weights.append((r ** (a_k - k_s)) * math.sqrt(block_norm2))
-    Z = math.sqrt(sum(w * w for w in weights))
+            block_norm2 = (abs_r2 ** size - 1.0) / (abs_r2 - 1.0)
+        magn = (abs_r ** (a_k - k_s)) * math.sqrt(block_norm2)
+        if abs(arg_r) > 1e-14:
+            w_k = magn * cmath.exp(1j * arg_r * (a_k - k_s))
+        else:
+            # real-r branch -- preserve original sign behaviour
+            w_k = (r ** (a_k - k_s)) * math.sqrt(block_norm2)
+        weights.append(w_k)
+    Z = math.sqrt(sum(abs(w) * abs(w) for w in weights))
 
     # Step 1: load anchor superposition via Gleinig-Hoefler on L points.
     anchor_state = {}
@@ -1276,11 +1519,14 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
         anchor_state[bits] = w_k / Z
     if len(anchor_state) == 1:
         # Degenerate (L=1) — single aligned block handled by regime (b),
-        # but guard anyway: just X-load the bit pattern.
-        (only_bits,) = anchor_state.keys()
+        # but guard anyway: just X-load the bit pattern (and global-phase
+        # the residual amplitude phase).
+        ((only_bits, only_amp),) = anchor_state.items()
         for q, b in enumerate(only_bits):
             if b:
                 qc.x(q)
+        if abs(cmath.phase(complex(only_amp))) > 1e-14:
+            qc.global_phase += cmath.phase(complex(only_amp))
     else:
         _gleinig_encode(qc, anchor_state, m)
 
@@ -1292,8 +1538,19 @@ def _dyadic_geometric_assemble(qc: QuantumCircuit,
         ctrl_qubits = list(range(j_k, m))          # upper qubits
         ctrl_pattern = [(a_k >> q) & 1 for q in ctrl_qubits]
         for j in range(j_k):                       # free (lower) bits
-            theta_j = 2.0 * math.atan(r ** (1 << j))
-            _mcry_on_pattern(qc, theta_j, ctrl_qubits, ctrl_pattern, target=j)
+            if abs(arg_r) > 1e-14:
+                # complex path
+                theta_j = 2.0 * math.atan(abs_r ** (1 << j))
+                _mcry_on_pattern(qc, theta_j, ctrl_qubits, ctrl_pattern, target=j)
+                phase_j = (arg_r * (1 << j)) % (2 * math.pi)
+                if phase_j > math.pi:
+                    phase_j -= 2 * math.pi
+                if abs(phase_j) > 1e-14:
+                    _mcp_on_pattern(qc, phase_j, ctrl_qubits, ctrl_pattern, target=j)
+            else:
+                # real path (preserves original behaviour incl. r < 0)
+                theta_j = 2.0 * math.atan(r ** (1 << j))
+                _mcry_on_pattern(qc, theta_j, ctrl_qubits, ctrl_pattern, target=j)
 
 
 def _mcry_on_pattern(qc: QuantumCircuit,
@@ -1325,6 +1582,37 @@ def _mcry_on_pattern(qc: QuantumCircuit,
         if bit == 0:
             qc.x(q)
 
+
+def _mcp_on_pattern(qc: QuantumCircuit,
+                    phase: float,
+                    ctrl_qubits: list,
+                    ctrl_pattern: list,
+                    target: int) -> None:
+    """
+    Apply a phase shift exp(i·phase) on the |1⟩ branch of `target`,
+    controlled on `ctrl_qubits` being in the arbitrary bit-pattern
+    `ctrl_pattern` (same length as ctrl_qubits, each entry 0 or 1).
+
+    Sister of _mcry_on_pattern: same X-flip sandwich, but emits a
+    (multi-)controlled-phase gate instead of a (multi-)controlled-Ry.
+    Used by the GEOMETRIC / PARTITION block-spread when the geometric
+    ratio r is non-real-positive (so the per-qubit ratio r^(2^j) needs
+    a phase correction beyond the magnitude-only Ry).
+    """
+    if not ctrl_qubits:
+        qc.p(phase, target)
+        return
+    for q, bit in zip(ctrl_qubits, ctrl_pattern):
+        if bit == 0:
+            qc.x(q)
+    if len(ctrl_qubits) == 1:
+        qc.cp(phase, ctrl_qubits[0], target)
+    else:
+        qc.mcp(phase, ctrl_qubits, target)
+    for q, bit in zip(ctrl_qubits, ctrl_pattern):
+        if bit == 0:
+            qc.x(q)
+
 # ---------------------------------------------------------------------------
 # HAMMING  f_i ∝ r^{wt(i)}  (product state, m identical R_y gates)
 # ---------------------------------------------------------------------------
@@ -1341,14 +1629,19 @@ def _synth_hamming(m: int, params: dict) -> QuantumCircuit:
         f_i = c * prod_j r^(b_j)  where  b_j = (i >> j) & 1.
 
     Hence the normalised state is a product state:
-        |psi> = bigotimes_{j=0}^{m-1}  (|0> + r|1>) / sqrt(1 + r^2).
+        |psi> = bigotimes_{j=0}^{m-1}  (|0> + r|1>) / sqrt(1 + |r|^2).
 
-    Each qubit is prepared by the SAME single-qubit rotation
+    For real positive r, each qubit is prepared by the same single-qubit
+    rotation
         R_y(theta)|0> = cos(theta/2)|0> + sin(theta/2)|1>
-    with  theta = 2 * arctan(r).
+    with theta = 2 * arctan(r).
 
-    Gate count: m identical R_y gates, zero entangling gates.
-    Depth: 1 (all rotations commute and act on disjoint qubits).
+    For complex r, each qubit is prepared by R_y(2*arctan(|r|)) followed
+    by P(arg(r)).  When r is real positive, arg(r) = 0 and no phase
+    gate is emitted, recovering the original circuit exactly.
+
+    Gate count: m R_y gates plus (when r is non-real-positive) m P gates.
+    Depth: 1 (all rotations / phases commute on disjoint qubits).
     Complexity: O(m).
 
     Parameters
@@ -1356,15 +1649,26 @@ def _synth_hamming(m: int, params: dict) -> QuantumCircuit:
     m : int
         Number of qubits (N = 2^m).
     params : dict
-        Must contain 'r' (float, > 0).  Optional 'c' (default 1.0)
-        only affects normalisation.
+        Must contain 'r' (real or complex, |r| != 0).  Optional 'c'
+        (default 1.0); its magnitude only affects normalisation, its
+        phase is recorded as qc.global_phase.
     """
     r = params["r"]
-    theta = 2.0 * math.atan(r)
+    c = params.get("c", 1.0)
+    abs_r = abs(r)
+    arg_r = cmath.phase(complex(r))
+    arg_c = cmath.phase(complex(c))
+
+    theta = 2.0 * math.atan(abs_r)
 
     qc = QuantumCircuit(m, name="hamming")
     for j in range(m):
         qc.ry(theta, j)
+    if abs(arg_r) > 1e-14:
+        for j in range(m):
+            qc.p(arg_r, j)
+    if abs(arg_c) > 1e-14:
+        qc.global_phase += arg_c
 
     return qc
 
@@ -1400,21 +1704,37 @@ def _synth_staircase(m: int, params: dict) -> QuantumCircuit:
 
     Gate count: m (1 R_y + (m-1) CR_y).  Complexity: O(m).
 
+    Complex / signed amplitudes
+    ---------------------------
+    For arbitrary complex r = |r| * e^{i*arg(r)}, the magnitude cascade is
+    built using |r| (so all atan2 arguments are real-positive and the
+    rotation angles are well-defined), and a per-qubit phase gate
+    P(arg(r)) is then applied on every qubit.  Because the support is
+    on indices i_k = 2^k - 1 with Hamming weight wt(i_k) = k, the layer
+    P(arg(r))^{otimes m} multiplies amplitude k by e^{i*k*arg(r)},
+    converting |r|^k into r^k as required.  When r is real-positive,
+    arg(r) = 0 and no extra gates are emitted (backward compatible).
+    A complex prefactor c contributes its phase via qc.global_phase.
+
     Parameters
     ----------
     m : int
         Number of qubits (N = 2^m).
     params : dict
-        Must contain 'r' (float, > 0, != 1).  Optional 'c' only affects
-        normalisation.
+        Must contain 'r' (real or complex, |r| != 0).  Optional 'c' only
+        affects normalisation; its phase is recorded as a global phase.
     """
     r = params["r"]
+    c = params.get("c", 1.0)
+    abs_r = abs(r)
+    arg_r = cmath.phase(complex(r))
+    arg_c = cmath.phase(complex(c))
 
-    # Tail norms T_k = sqrt( sum_{j=k}^{m} r^{2j} ) for k = 0, ..., m+1
+    # Tail norms T_k = sqrt( sum_{j=k}^{m} |r|^{2j} ) for k = 0, ..., m+1
     # (T_{m+1} = 0).
     T = [0.0] * (m + 2)
     for k in range(m + 1):
-        T[k] = math.sqrt(sum(r ** (2 * j) for j in range(k, m + 1)))
+        T[k] = math.sqrt(sum(abs_r ** (2 * j) for j in range(k, m + 1)))
     # T[m+1] is 0 -- theta_m would be 0 (no rotation), so we stop at k=m-1.
 
     qc = QuantumCircuit(m, name="staircase")
@@ -1425,9 +1745,20 @@ def _synth_staircase(m: int, params: dict) -> QuantumCircuit:
 
     # Steps 1..m-1: CR_y from q_{k-1} to q_k.
     for k in range(1, m):
-        # cos(theta_k/2) = r^k / T_k,  sin = T_{k+1}/T_k
-        theta_k = 2.0 * math.atan2(T[k + 1], r ** k)
+        # cos(theta_k/2) = |r|^k / T_k,  sin = T_{k+1}/T_k
+        theta_k = 2.0 * math.atan2(T[k + 1], abs_r ** k)
         qc.cry(theta_k, k - 1, k)
+
+    # Per-qubit phase layer P(arg(r)) on every qubit:
+    # converts |r|^k into r^k on the support index 2^k - 1.
+    # Skipped entirely when r is real-positive (arg(r) = 0).
+    if abs(arg_r) > 1e-14:
+        for j in range(m):
+            qc.p(arg_r, j)
+
+    # Global phase from complex prefactor c.
+    if abs(arg_c) > 1e-14:
+        qc.global_phase += arg_c
 
     return qc
 
@@ -1531,12 +1862,18 @@ def _synth_dicke(m: int, params: dict) -> QuantumCircuit:
     k = params["k"]
 
     qc = QuantumCircuit(m, name="dicke")
+    c = params.get("c", 1.0)
+    arg_c = cmath.phase(complex(c))
 
     if k == 0:
+        if abs(arg_c) > 1e-14:
+            qc.global_phase += arg_c
         return qc
     if k == m:
         for i in range(m):
             qc.x(i)
+        if abs(arg_c) > 1e-14:
+            qc.global_phase += arg_c
         return qc
 
     # Symmetry: |D^m_k> = X^{otimes m} |D^m_{m-k}>. Prepare the lighter
@@ -1560,6 +1897,9 @@ def _synth_dicke(m: int, params: dict) -> QuantumCircuit:
     if use_complement:
         for i in range(m):
             qc.x(i)
+
+    if abs(arg_c) > 1e-14:
+        qc.global_phase += arg_c
 
     return qc
 
@@ -1603,19 +1943,25 @@ def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
     Quantum circuit:
       3. Prepare the sparse state |psi_x> = sum_k x_k |k>  using the
          Gleinig-Hoefler disjoint-point-load synthesiser (O(s * m) gates).
+         The loader handles real signed and complex Walsh coefficients
+         natively via complex atan2 / phase-strip rotations.
       4. Apply a single H layer to all m qubits.  Since H^{otimes m}
          applied to |k> gives (1/sqrt(N)) sum_i (-1)^{popcount(k AND i)} |i>,
          this precisely inverts the Walsh transform and yields
          sum_i f_i |i>  (normalised).
 
     Gate count: O(s * m) = O(m^{d+1}).  Exact (no approximation).
+    Complex-coefficient backward compatibility: when every coefficient is
+    real (imag == 0), the Walsh vector is real and the Gleinig-Hoefler
+    loader takes its original real-amplitude path; no extra phase-strip
+    gates are emitted.
 
     Parameters
     ----------
     m : int
         Number of qubits (N = 2^m).
     params : dict
-        Must contain 'coeffs' (list of floats).
+        Must contain 'coeffs' (list of real or complex numbers).
         Optional 'normalize_domain' (bool, default True).
     """
     coeffs           = params["coeffs"]
@@ -1623,12 +1969,24 @@ def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
     d = len(coeffs) - 1
     N = 2 ** m
 
-    # 1. Evaluate the polynomial on the grid.
+    # Detect whether any coefficient is genuinely complex (imag != 0).
+    is_complex = any(
+        isinstance(c, complex) and abs(c.imag) > 1e-14 for c in coeffs
+    )
+
+    # 1. Evaluate the polynomial on the grid (use complex dtype only when
+    #    necessary, so the real path is bit-for-bit unchanged).
     if normalize_domain and N > 1:
         x = np.arange(N, dtype=float) / (N - 1)
     else:
         x = np.arange(N, dtype=float)
-    f = np.polyval(list(reversed(coeffs)), x)   # polyval: high-to-low
+    if is_complex:
+        f = np.polyval(list(reversed(coeffs)), x).astype(complex)
+    else:
+        # Cast to float in case the user passed Python complex(z) with imag=0.
+        real_coeffs = [float(c.real if isinstance(c, complex) else c)
+                       for c in coeffs]
+        f = np.polyval(list(reversed(real_coeffs)), x)
 
     # 2. Walsh-Hadamard transform (in-place for memory efficiency).
     walsh = f.copy()
@@ -1636,36 +1994,41 @@ def _synth_polynomial(m: int, params: dict) -> QuantumCircuit:
     walsh /= np.sqrt(N)
 
     # 3. Extract nonzero Walsh coefficients at Hamming weight <= d.
-    #    Keep SIGNED amplitudes; the Gleinig-Hoefler loader handles signs
-    #    natively via signed rotation angles (atan2(cx1, cx2)), eliminating
-    #    the multi-controlled-Z phase-flip pass that dominated earlier
-    #    versions' transpiled gate count.
     tol = 1e-12 * max(1.0, float(np.linalg.norm(walsh)))
     sparse_loads = []
     for k in range(N):
         if bin(k).count("1") > d:
             continue
         if abs(walsh[k]) > tol:
-            sparse_loads.append({"k": k, "P": float(walsh[k])})  # SIGNED
+            if is_complex:
+                # Preserve full complex amplitude; the Gleinig-Hoefler
+                # loader emits a phase-strip CP/MCP gate per merge.
+                sparse_loads.append({"k": k, "P": complex(walsh[k])})
+            else:
+                # Preserve original SIGNED real path -- gate count and
+                # transpiled depth are unchanged when all coeffs are real.
+                sparse_loads.append({"k": k, "P": float(walsh[k].real)})
 
     if not sparse_loads:
         raise ValueError(
             "POLYNOMIAL: all Walsh coefficients are zero within tolerance."
         )
 
-    # 4. Synthesise the signed sparse Walsh state via Gleinig-Hoefler.
-    #    The loader normalises |P_i| internally and absorbs signs into the
-    #    rotation angles; no post-hoc phase corrections are needed.
+    # 4. Synthesise the (possibly complex) sparse Walsh state via
+    #    Gleinig-Hoefler.  The loader normalises |P_i| internally and
+    #    absorbs phases into the rotation / phase-strip angles.
     if len(sparse_loads) == 1:
-        # Point load with sign: handle directly (X gates + optional global phase)
+        # Single-basis-state load: X gates plus (for complex amplitude)
+        # a global phase carrying the argument of the lone coefficient.
         load = sparse_loads[0]
         qc = QuantumCircuit(m, name="polynomial_load")
         k = int(load["k"])
         for bit in range(m):
             if (k >> bit) & 1:
                 qc.x(bit)
-        # A single-basis-state with negative amplitude is equivalent to a
-        # global phase of -1, which is unobservable; leave as-is.
+        amp = load["P"]
+        if isinstance(amp, complex) and abs(cmath.phase(amp)) > 1e-14:
+            qc.global_phase += cmath.phase(amp)
     else:
         qc = _synth_disjoint_point_load_signed(m, {"loads": sparse_loads})
 
