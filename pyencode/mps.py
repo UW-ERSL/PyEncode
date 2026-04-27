@@ -283,13 +283,16 @@ def encode_mps(
     gate_count_1q = gate_count_2q = circuit_depth = None
     if transpile_for_counts:
         try:
+            print("Transpiling MPS circuit for gate counts...")
             tr = transpile(qc, basis_gates=BASIS_GATES,
                            optimization_level=OPTIMIZATION_LEVEL)
             ops = tr.count_ops()
             gate_count_1q = ops.get("u", 0)
             gate_count_2q = ops.get("cx", 0)
             circuit_depth = tr.depth()
+            print(f"Transpiled gate counts: {gate_count_1q} 1q gates, {gate_count_2q} 2q gates; depth {circuit_depth}.")    
         except Exception:
+            print(" Transpilation failed; gate counts and depth will be None.")
             pass
 
     # ---------- info packaging ----------

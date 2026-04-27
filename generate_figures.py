@@ -14,10 +14,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
+from pyencode.mps import encode_mps
 
 from pyencode import (
     encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC,
-    HAMMING, STAIRCASE, DICKE, TENSOR, POLYNOMIAL, SUM,
+    HAMMING, STAIRCASE, DICKE, TENSOR, POLYNOMIAL, SUM,PARTITION
 )
 from pyencode.config import BASIS_GATES, OPTIMIZATION_LEVEL, DECOMPOSE_REPS
 
@@ -362,23 +363,39 @@ def fig_lcu_overlap():
 # Figures: applications
 # ===================================================================
 
+
 def fig_hubbard():
-    """Fermi-Hubbard PREP oracle via generalized Walsh."""
-    print("\n--- Fermi-Hubbard PREP ---")
+    """Extended Fermi-Hubbard PREP via PARTITION of three disjoint intervals."""
+    print("\n--- Extended Fermi-Hubbard (via PARTITION) ---")
     import math
-    L = 8; t = 1.0; U = 4.0
-    N = 2 * L  # = 16
+    L = 8
+    t = 1.0
+    U = 4.0
+    V = 0.5
+    N = 1 << (3 * L - 1).bit_length()  # next power of two >= 3L
+
     circuit, info = encode(
-        WALSH(k=int(math.log2(L)), c0=t, c1=U),
+        PARTITION([
+            STEP(k_e=L,                  c=math.sqrt(t)),
+            SQUARE(k_s=L,     k_e=2*L,   c=math.sqrt(U)),
+            SQUARE(k_s=2*L,   k_e=3*L,   c=math.sqrt(V)),
+        ]),
         N=N)
     print_info("encode", info)
-    # coefficient vector: t on [0, L), U on [L, 2L)
-    f = np.zeros(N)
-    f[:L] = t; f[L:] = U
-    plot_vector(f, N, r"Fermi-Hubbard PREP: $t=1,\;U=4,\;L=8,\;N=16$",
-                "hubbard_vector.png")
-    save_circuit(circuit, "hubbard_circuit.png", scale=1.0)
 
+    # Build expected vector for plotting (matches what PARTITION prepares)
+    f = np.concatenate([
+        np.full(L, math.sqrt(t)),
+        np.full(L, math.sqrt(U)),
+        np.full(L, math.sqrt(V)),
+        np.zeros(N - 3*L),
+    ])
+    f /= np.linalg.norm(f)
+
+    plot_vector(f,N,
+                r"Extended Hubbard: $t{=}1$, $U{=}4$, $V{=}0.5$, $L{=}8$",
+                "hubbard_vector.png")
+    save_circuit(circuit, "hubbard_circuit.png", scale=0.6)
 
 def fig_poisson():
     """2D Poisson separable source — demonstrates TENSOR pattern."""
@@ -401,23 +418,30 @@ def fig_poisson():
 
 
 def fig_finance():
-    """Quantum finance: piecewise-constant distribution via SUM of SQUARE bins."""
-    print("\n--- Quantum Finance (SUM) ---")
-    N = 16
-    circuit, info = encode(
-        SUM([(0.10, SQUARE(k_s=0,  k_e=4,  c=1.0)),
-             (0.40, SQUARE(k_s=4,  k_e=8,  c=1.0)),
-             (0.35, SQUARE(k_s=8,  k_e=12, c=1.0)),
-             (0.15, SQUARE(k_s=12, k_e=16, c=1.0))]),
-        N=N)
-    print_info("encode", info)
-    print(f"  success_probability = {info.success_probability:.4f}")
-    f = np.zeros(N)
-    f[0:4] = 0.10; f[4:8] = 0.40; f[8:12] = 0.35; f[12:16] = 0.15
-    plot_vector(f, N,
-                r"Price distribution (4 bins), $N=16$",
-                "finance_vector.png", ylabel=r"$\sqrt{p_i}$")
-    save_circuit(circuit, "finance_circuit.png", scale=0.4)
+    """Log-normal density via MPS — demonstrates encode_mps for finance."""
+    print("\n--- Log-normal density (via MPS) ---")
+    from pyencode.mps import encode_mps
+
+    m = 16
+    N = 2**m
+    S0, r, sig, T = 100.0, 0.05, 0.2, 1.0
+    mu = np.log(S0) + (r - 0.5 * sig**2) * T
+
+    # Grid spans +/- 3 sigma*sqrt(T) in log-space
+    S = np.linspace(S0 * np.exp(-3 * sig * np.sqrt(T)),
+                    S0 * np.exp( 3 * sig * np.sqrt(T)), N)
+    p = np.exp(-(np.log(S) - mu)**2 / (2 * sig**2 * T)) \
+        / (S * sig * np.sqrt(2 * np.pi * T))
+    v = np.sqrt(p)
+    v /= np.linalg.norm(v)
+
+    circuit, info = encode_mps(v, bond_dim=8, transpile_for_counts=True)
+    print_info("encode_mps", info)
+
+    plot_vector(v,N,
+                r"Log-normal $\sqrt{p(S)}$: $S_0=100$, $\sigma=0.2$, $T=1$",
+                "lognormal_vector.png")
+    save_circuit(circuit, "lognormal_circuit.png", scale=0.3)
 
 
 # ===================================================================
@@ -694,6 +718,23 @@ def fig_gate_count_vs_m_reduced():
     plt.close(fig)
     print(f"  saved {FIGDIR}/gate_count_vs_m_reduced.png")
 
+def fig_mps_gaussian():
+    """MPS encoding of a discretized Gaussian (canonical hard case)."""
+
+    print("\n--- MPS: Gaussian, alpha=50, chi=4, N=256 ---")
+    N = 256
+    i = np.arange(N)
+    alpha = 50.0
+    v = np.exp(-alpha * ((i - N/2) / N) ** 2)
+    v /= np.linalg.norm(v)
+    circuit, info = encode_mps(v, bond_dim=8,validate=True,transpile_for_counts=True)
+    print(info)
+    print(f"  truncation_error_sq = {info.params['truncation_error_sq']:.2e}")
+    print(f"  gate_count_2q       = {info.gate_count_2q}")
+    plot_vector(v, N,
+                r"MPS: Gaussian $\exp(-\alpha(i-N/2)^2/N^2)$, $\alpha=50$, $N=256$",
+                f"mps_gaussian_vector.png", smooth=True)
+    save_circuit(circuit, f"mps_gaussian_circuit.png", scale=0.4)
 
 # ===================================================================
 # Gate count table
@@ -752,6 +793,7 @@ def gate_count_table():
 # Main
 # ===================================================================
 
+
 if __name__ == "__main__":
     import os
     os.makedirs(FIGDIR, exist_ok=True)
@@ -774,6 +816,7 @@ if __name__ == "__main__":
     fig_tensor()
     fig_lcu_disjoint()
     fig_lcu_overlap()
+    fig_mps_gaussian()
 
     # Application figures
     fig_hubbard()
@@ -782,6 +825,7 @@ if __name__ == "__main__":
 
     # Gate count scaling figure
     fig_gate_count_vs_m()
+
 
     fig_gate_count_vs_m_reduced()
     
