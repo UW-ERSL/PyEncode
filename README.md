@@ -3,7 +3,10 @@
 An open-source Python library for structured quantum state preparation.
 
 PyEncode maps typed parameter declarations directly to exact, closed-form
-Qiskit circuits — no vector materialization, no approximation.
+Qiskit circuits — no vector materialization, no approximation. For smooth
+amplitude vectors that fall outside the exact pattern families, a
+standalone matrix product state loader provides bounded-error approximate
+encoding.
 
 ## Installation
 
@@ -16,7 +19,9 @@ Requires Python 3.10+ and Qiskit 2.3+.
 ## Quick Start
 
 ```python
-from pyencode import encode, SPARSE, STEP, SQUARE, FOURIER, WALSH, GEOMETRIC, HAMMING, STAIRCASE, TENSOR, POLYNOMIAL, SUM, PARTITION
+from pyencode import (encode, SPARSE, STEP, SQUARE, FOURIER, WALSH,
+                      GEOMETRIC, HAMMING, STAIRCASE, DICKE, POLYNOMIAL,
+                      TENSOR, SUM, PARTITION)
 
 # Basis vector at index 19 (Hamming weight 3 → 3 gates)
 circuit, info = encode(SPARSE([(19, 1.0)]), N=64)
@@ -42,6 +47,9 @@ circuit, info = encode(HAMMING(r=0.5), N=64)
 # Sparse geometric staircase on unary indices — cascaded CR_y, O(m) gates
 circuit, info = encode(STAIRCASE(r=0.5), N=16)
 
+# Dicke state — uniform superposition over Hamming weight k
+circuit, info = encode(DICKE(k=2), N=16)
+
 # Degree-d polynomial via Walsh-sparse loading
 # Ramp:
 circuit, info = encode(POLYNOMIAL(coeffs=[0.0, 1.0]), N=32)
@@ -54,7 +62,7 @@ circuit, info = encode(
             (FOURIER(modes=[(3, 1.0, 0)]), 32)]),
     N=32 * 32)
 
-# Weighted superposition of patterns via SUM (implemented using the LCU technique)
+# Weighted superposition of patterns via SUM (implemented using LCU)
 circuit, info = encode(
     SUM([(1.0, SQUARE(k_s=0, k_e=8, c=1.0)),
          (3.0, SQUARE(k_s=8, k_e=16, c=1.0))]),
@@ -74,20 +82,21 @@ statevector-validated amplitude vector.
 
 ## Supported Patterns
 
-| Pattern    | Constructor                    | Complexity         | Source                       |
-|------------|--------------------------------|--------------------|------------------------------|
-| Sparse     | `SPARSE([(x,a), ...])`        | O(s·m)             | Gleinig & Hoefler (2021)     |
-| Step       | `STEP(k_e, c)`                | O(m)               | Shukla & Vedula (2024)       |
-| Square     | `SQUARE(k_s, k_e, c)`           | O(m²) / O(m)       | Shukla & Vedula + Draper     |
-| Walsh      | `WALSH(k, c0, c1)`      | O(m)               | Welch et al. (2014)          |
-| Geometric  | `GEOMETRIC(r, k_s, k_e, c)`   | O(m) aligned / O(m²) general | Xie & Ben-Ami (2025) |
-| Hamming    | `HAMMING(r, c)`              | O(m), 0 CX, depth 1| Product state (this work)    |
-| Staircase  | `STAIRCASE(r, c)`             | O(m), O(m) CX      | Hackbusch (1999)             |
-| Polynomial | `POLYNOMIAL(coeffs)`          | O(m^(d+1))         | Welch (2014), Gonzalez-Conde (2024) |
-| Fourier    | `FOURIER(modes=[...])`        | O(m²)              | Gonzalez-Conde / Moosa       |
-| Sum        | `SUM([(w, pattern), ...])`  | Σ component costs  | Childs & Wiebe (LCU, 2012)   |
-| Partition  | `PARTITION([pattern, ...])` | O(L·m), ancilla-free | Bentley & Saxe (1980) + Gleinig & Hoefler (2021) |
-| Tensor     | `TENSOR([(pattern, N_i), ...])` | Σ component costs, depth = max | Composition rule (this work) |
+| Pattern    | Constructor                       | Complexity                      | Source                              |
+|------------|-----------------------------------|---------------------------------|-------------------------------------|
+| Sparse     | `SPARSE([(x, a), ...])`           | O(s·m)                          | Gleinig & Hoefler (2021)            |
+| Step       | `STEP(k_e, c)`                    | O(m)                            | Shukla & Vedula (2024)              |
+| Square     | `SQUARE(k_s, k_e, c)`             | O(m²) general, O(m) aligned     | Shukla & Vedula (2024) + Draper (2000) |
+| Walsh      | `WALSH(k, c0, c1)`                | O(m)                            | Welch et al. (2014)                 |
+| Geometric  | `GEOMETRIC(r, k_s=0, c=1)`        | O(m) for k_s=0, O(m²) general   | Grover & Rudolph (2002), Bentley & Saxe (1980) |
+| Hamming    | `HAMMING(r, c)`                   | O(m), 0 CX, depth 1             | Cruz et al. (2019)                  |
+| Staircase  | `STAIRCASE(r, c)`                 | O(m)                            | Hackbusch (1999), Möttönen et al. (2005) |
+| Dicke      | `DICKE(k, c)`                     | O(k·(m−k))                      | Bärtschi & Eidenbenz (2019)         |
+| Polynomial | `POLYNOMIAL(coeffs)`              | O(m^(d+1))                      | Welch et al. (2014), Gonzalez-Conde et al. (2024) |
+| Fourier    | `FOURIER(modes=[...])`            | O(m²)                           | Gonzalez-Conde et al. (2024), Moosa et al. (2024) |
+| Sum        | `SUM([(w, pattern), ...])`        | Σ component costs               | Childs et al. (2018), Babbush et al. (2018) |
+| Partition  | `PARTITION([pattern, ...])`       | O(L·m), ancilla-free            | Bentley & Saxe (1980), Gleinig & Hoefler (2021) |
+| Tensor     | `TENSOR([(pattern, N_i), ...])`   | Σ component costs, depth = max  | Nielsen & Chuang (2010)             |
 
 Here m = log₂(N) is the number of qubits and N is the vector length.
 
@@ -157,7 +166,9 @@ Every prediction carries an `exact` flag:
   FOURIER (T=1), POLYNOMIAL (d=1), and SQUARE (aligned intervals).
 - **`exact=False`** — prediction is an empirical fit or asymptotic upper
   bound. Still useful for coarse selection (within a few percent for
-  POLYNOMIAL d=2 and SQUARE general; more conservative for SPARSE s≥2).
+  POLYNOMIAL d=2, SQUARE general, FOURIER T≥2, and DICKE; more
+  conservative for SPARSE s≥2, GEOMETRIC with k_s>0, and the composite
+  constructors TENSOR, SUM, PARTITION).
 
 Cross-checked against `encode()` ground-truth in `test_pyencode.py::TestPredictor`.
 
@@ -193,14 +204,15 @@ The inner loop runs 5,000 predictions in under a second. Without
 into components:
 
 ```python
-from pyencode import predict_gates, TENSOR, SUM, PARTITION, FOURIER, SQUARE, SPARSE, GEOMETRIC
+from pyencode import (predict_gates, TENSOR, SUM, PARTITION,
+                      FOURIER, SQUARE, SPARSE, GEOMETRIC)
 
 # TENSOR sums over disjoint subregisters
 p = predict_gates(TENSOR([(FOURIER(modes=[(2, 1.0, 0)]), 32),
                           (FOURIER(modes=[(3, 1.0, 0)]), 32)]),
                   N=32*32)
 
-# SUM: weighted superposition (ancilla-based via the LCU technique)
+# SUM: weighted superposition (ancilla-based via LCU)
 p = predict_gates(SUM([(0.5, SQUARE(k_s=0, k_e=8, c=1.0)),
                        (0.5, SQUARE(k_s=8, k_e=16, c=1.0))]),
                   N=16)
@@ -220,6 +232,43 @@ phase. Use `encode()` when you need:
   experiments;
 - the emitted source snippet in `info.circuit_code`;
 - statevector validation via `validate=True`.
+
+## Approximate Encoding via Matrix Product States
+
+For amplitude vectors that fall outside the exact pattern families —
+e.g., the discretized Gaussian, log-normal density, or other smooth
+distributions whose DFT is dense and whose values don't admit bitwise
+factorization — PyEncode provides a standalone matrix product state
+loader in a separate submodule:
+
+```python
+import numpy as np
+from pyencode.mps import encode_mps
+
+N = 256
+i = np.arange(N)
+v = np.exp(-50.0 * ((i - N/2) / N) ** 2)
+v /= np.linalg.norm(v)
+
+circuit, info = encode_mps(v, bond_dim=8, validate=True)
+# info.params["n_bond"]              → 3
+# info.params["truncation_error_sq"] → < 1e-12
+# info.success_probability           → 1.0
+```
+
+The single user-facing knob is `bond_dim` (χ), which trades approximation
+error against gate count. Cost is O(m·χ²) two-qubit gates on n_bond + m
+qubits, where n_bond = ⌈log₂ χ⌉. The truncation error is reported in
+`info.params["truncation_error_sq"]` — increase χ until it falls below
+the application's tolerance.
+
+Unlike `encode`, `encode_mps` operates on a materialized numerical vector
+(real or complex; non-power-of-2 lengths are zero-padded) and does not
+currently compose with `SUM`, `PARTITION`, or `TENSOR`. A second entry
+point, `encode_mps_from_tensors(tensors)`, accepts pre-built
+right-canonical site tensors of shape (χ_l, 2, χ_r) and skips the SVD
+sweep — useful when tensors come from an external source such as a DMRG
+calculation.
 
 ## Testing
 
