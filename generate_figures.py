@@ -205,6 +205,46 @@ def fig_geometric():
                 "geometric_vector.png")
     save_circuit(circuit, "geometric_circuit.png", scale=0.6)
 
+def fig_geometric_planewave():
+    """GEOMETRIC with complex r = e^{i*omega}: discrete plane wave.
+
+    Produces two figures matching the LaTeX example in Section 3.6:
+      - geometric_planewave_vector.png  : Re and Im parts (stacked bars)
+      - geometric_planewave_circuit.png : depth-1 product-state circuit
+    """
+    import cmath
+    print("\n--- GEOMETRIC: r = exp(i*0.7), N=64 (plane wave) ---")
+    omega = 0.7
+    N = 64
+    r = cmath.exp(1j * omega)
+    circuit, info = encode(GEOMETRIC(r=r), N=N)
+    print_info("GEOMETRIC (plane wave)", info)
+
+    # Build the analytic vector for plotting
+    f = (r ** np.arange(N))
+    f = f / np.linalg.norm(f)
+
+    # Two-panel Re/Im plot (custom, since plot_vector handles only real f)
+    fig, (axr, axi) = plt.subplots(2, 1, figsize=(4.2, 3.2), sharex=True)
+    axr.bar(range(N), f.real, width=1.0, color='steelblue',
+            edgecolor='steelblue', linewidth=0.3)
+    axr.set_ylabel(r"$\mathrm{Re}\,f_i$")
+    axr.axhline(0, color='gray', linewidth=0.5)
+    axr.set_xlim(-0.5, N - 0.5)
+    axi.bar(range(N), f.imag, width=1.0, color='indianred',
+            edgecolor='indianred', linewidth=0.3)
+    axi.set_ylabel(r"$\mathrm{Im}\,f_i$")
+    axi.set_xlabel("Node index $i$")
+    axi.axhline(0, color='gray', linewidth=0.5)
+    axi.set_xticks(list(range(0, N + 1, N // 4)))
+    fig.suptitle(rf"GEOMETRIC: $r=e^{{i\,{omega}}}$, $N={N}$ (plane wave)",
+                 fontsize=10, y=0.98)
+    fig.tight_layout()
+    fig.savefig(f"{FIGDIR}/geometric_planewave_vector.png")
+    plt.close(fig)
+    print(f"  saved {FIGDIR}/geometric_planewave_vector.png")
+
+    save_circuit(circuit, "geometric_planewave_circuit.png", scale=0.6)
 
 def fig_geometric_arbitrary():
     """GEOMETRIC with arbitrary k_s: dyadic decomposition path (O(m^2))."""
@@ -807,6 +847,7 @@ if __name__ == "__main__":
     fig_fourier_multi()
     fig_walsh()
     fig_geometric()
+    fig_geometric_planewave()
     fig_geometric_arbitrary()
     fig_hamming()
     fig_staircase()
