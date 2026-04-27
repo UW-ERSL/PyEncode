@@ -151,7 +151,26 @@ class FOURIER(_Pattern):
                     f"FOURIER expects (n, A) or (n, A, phi) tuples, "
                     f"got {item!r}."
                 )
-            mode_list.append({"n": int(n), "A": float(A), "phi": float(phi)})
+            # Reject non-integer frequencies. The DFT-pair construction in
+            # _synth_fourier is exact only when n is an integer aligned with
+            # the discrete grid; non-integer n makes the analytical signal
+            # non-periodic on N samples, so its true DFT spreads across every
+            # bin (spectral leakage) and the prepared state would silently
+            # disagree with the formula A*sin(2*pi*n*i/N + phi).
+            try:
+                n_int = int(n)
+            except (TypeError, ValueError):
+                raise TypeError(
+                    f"FOURIER mode n={n!r} must be an integer."
+                )
+            if n_int != n:
+                raise ValueError(
+                    f"FOURIER mode n={n!r} must be an integer; "
+                    f"non-integer frequencies are not aligned with the "
+                    f"discrete grid and would cause silent spectral "
+                    f"leakage. Use encode_mps for arbitrary smooth signals."
+                )
+            mode_list.append({"n": n_int, "A": float(A), "phi": float(phi)})
         if len(mode_list) == 0:
             raise ValueError("FOURIER requires at least one mode.")
         self.params = {"modes": mode_list}

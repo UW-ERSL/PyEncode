@@ -701,15 +701,39 @@ def _validate_sparse_params(params: dict, N: int) -> dict:
 
 
 def _validate_fourier_params(params: dict, N: int) -> dict:
-    """Validate FOURIER constructor params."""
+    """Validate FOURIER constructor params.
+
+    A real-valued sinusoid sin(2*pi*n*i/N + phi) is exactly representable
+    on the N-sample grid only for integer n in the strict half-open range
+    1 <= n < N/2.  Outside this range:
+      * n = 0          : DC (no oscillation)
+      * n = N/2        : Nyquist; sin is identically zero, cos is (-1)**i
+                         (a Walsh function) -- the iQFT-pair construction
+                         used by _synth_fourier does not handle the
+                         self-conjugate delta correctly.
+      * n > N/2        : aliases to the negative frequency N - n; the
+                         prepared state silently encodes a different
+                         frequency than the user requested.
+    All such cases are rejected here to prevent silent spectral leakage.
+    """
     modes = params["modes"]
     if not isinstance(modes, list) or len(modes) < 1:
         raise TypeError("FOURIER modes must be a non-empty list.")
+    n_max = N // 2  # strict upper bound: 1 <= n < N/2
     validated = []
     for entry in modes:
         n = int(entry["n"])
         if n < 1:
             raise ValueError(f"FOURIER mode n={n} must be >= 1.")
+        if n >= n_max:
+            raise ValueError(
+                f"FOURIER mode n={n} is not aligned with the N={N} grid: "
+                f"valid integer frequencies satisfy 1 <= n < N/2 = {n_max}. "
+                f"Values n >= N/2 alias to the negative frequency N-n and "
+                f"would cause silent spectral leakage. "
+                f"For the Nyquist case n = N/2, use WALSH on the leading "
+                f"qubit instead."
+            )
         validated.append({
             "n": n,
             "A": float(entry["A"]),

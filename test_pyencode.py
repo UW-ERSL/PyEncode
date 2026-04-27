@@ -357,6 +357,53 @@ class TestFourier:
         with pytest.raises(ValueError, match="must be >= 1"):
             encode(FOURIER(modes=[(0, 1.0, 0)]), N=8)
 
+    # ------------------------------------------------------------------
+    # Frequency-alignment checks -- the iQFT-pair construction in
+    # _synth_fourier is exact only when n is an integer in [1, N/2).
+    # Outside that range the prepared state silently disagrees with
+    # A*sin(2*pi*n*i/N + phi); these tests pin the behaviour to a hard
+    # error rather than silent leakage.
+    # ------------------------------------------------------------------
+
+    def test_non_integer_frequency_raises(self):
+        """Non-integer n is silent spectral leakage; reject at construction."""
+        with pytest.raises(ValueError, match="must be an integer"):
+            FOURIER(modes=[(1.5, 1.0, 0)])
+
+    def test_non_integer_frequency_multi_mode_raises(self):
+        """Non-integer n in any mode of a multi-mode list must error."""
+        with pytest.raises(ValueError, match="must be an integer"):
+            FOURIER(modes=[(1, 1.0, 0), (2.7, 0.5, 0)])
+
+    def test_integer_valued_float_accepted(self):
+        """np.float64(2.0) and 2.0 are integer-valued and must be accepted."""
+        f1 = FOURIER(modes=[(2.0, 1.0, 0.0)])
+        assert f1.params["modes"][0]["n"] == 2
+        f2 = FOURIER(modes=[(np.float64(3.0), 1.0, 0.0)])
+        assert f2.params["modes"][0]["n"] == 3
+
+    def test_aliased_frequency_above_nyquist_raises(self):
+        """n > N/2 silently aliases to N - n; reject with grid-aware error."""
+        with pytest.raises(ValueError, match="not aligned with the N=8 grid"):
+            encode(FOURIER(modes=[(7, 1.0, 0)]), N=8)
+
+    def test_nyquist_frequency_raises(self):
+        """n = N/2 is Nyquist; the iQFT-pair construction is incorrect."""
+        with pytest.raises(ValueError, match="not aligned"):
+            encode(FOURIER(modes=[(4, 1.0, 0)]), N=8)
+
+    def test_aliased_frequency_in_multi_mode_raises(self):
+        """One bad mode in a multi-mode list still errors at encode-time."""
+        with pytest.raises(ValueError, match="not aligned"):
+            encode(FOURIER(modes=[(1, 1.0, 0), (5, 0.5, 0)]), N=8)
+
+    def test_max_valid_frequency_accepted(self):
+        """Boundary: n = N/2 - 1 is the largest aligned frequency."""
+        N = 16
+        circuit, info = encode(FOURIER(modes=[(N // 2 - 1, 1.0, 0)]), N=N)
+        k = np.arange(N)
+        assert_encodes(circuit, np.sin(2 * np.pi * (N // 2 - 1) * k / N))
+
 
 # ===================================================================
 # General encode() behaviour
