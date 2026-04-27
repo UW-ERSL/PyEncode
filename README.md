@@ -289,9 +289,17 @@ python generate_figures.py
 
 If you use PyEncode in your work, please cite:
 
-```
-K. Suresh and S. Suresh, "PyEncode: An Open-Source Library for
-Structured Quantum State Preparation," 2026.
+```bibtex
+@misc{suresh2026pyencode,
+  title        = {{PyEncode}: An Open-Source Library for Structured
+                  Quantum State Preparation},
+  author       = {Krishnan Suresh and Sanjay Suresh},
+  year         = {2026},
+  eprint       = {2603.28259},
+  archivePrefix= {arXiv},
+  primaryClass = {cs.ET},
+  note         = {Code available at \url{https://github.com/UW-ERSL/PyEncode}}
+}
 ```
 
 ## License
