@@ -1001,48 +1001,70 @@ def _synth_multi_sin_load(m: int, params: dict) -> QuantumCircuit:
     """
     Prepare a superposition of multiple sinusoidal modes.
 
-    Strategy: the DFT of sum_t A_t sin(2pi n_t k/N) has 2T nonzero
-    entries at frequencies {n_t, N-n_t} with equal magnitudes |A_t|/2
-    and phases -pi/2 (pos freq) and +pi/2 (neg freq).
+    For target signal  f_k = sum_t  A_t  sin(2 pi n_t k / N + phi_t),
+    the +2 pi convention DFT (the convention applied by Qiskit's QFTGate)
+    has nonzero frequency-domain coefficients
 
-    1. Use the Ry-tree point load synthesizer to prepare the
-       magnitude distribution over the 2T frequency entries.
-    2. Apply Z on the MSB to encode the relative phase between
-       positive (MSB=0) and negative (MSB=1) frequencies.
-    3. Apply QFT to transform frequency -> spatial domain.
+        C_{n_t}     = (A_t / 2) * exp(  i * (phi_t - pi/2))
+        C_{N - n_t} = (A_t / 2) * exp(  i * (pi/2 - phi_t))
 
-    Gate count: O(T*m) for Ry tree + O(m^2) for QFT = O(m^2).
+    derived from the identity sin(x) = (1/(2i)) * (e^{ix} - e^{-ix}).
+    Each mode therefore contributes 2 nonzero entries with mode-dependent
+    phases; for the all-phi=0 case both phases collapse to {-pi/2, +pi/2}
+    and the imbalance is captured by a single Z gate on the MSB.  For
+    nonzero phi_t these two phases vary per mode, so the per-mode phase
+    must be loaded into the frequency-domain register directly.
+
+    Strategy:
+      1. Build the complex frequency-domain anchor list with the per-mode
+         phases above.
+      2. Use the signed Gleinig-Hoefler point loader, which accepts
+         complex amplitudes natively, to prepare the magnitude-and-phase
+         distribution.
+      3. Apply QFT to transform frequency -> spatial domain.
+
+    Gate count: O(T*m) for the signed loader + O(m^2) for QFT = O(m^2).
 
     Requires all mode frequencies n_t < N/2 (standard assumption).
+
+    Backward compatibility: when every phi_t = 0 the complex amplitudes
+    above reduce to (-i*A_t/2) at p = n_t and (+i*A_t/2) at p = N - n_t
+    -- the same magnitudes as the previous implementation but with a
+    relative phase of pi between the two halves, exactly the Z-on-MSB
+    pattern the old code emitted by hand.  The signed loader subsumes
+    that special case, so the previous _synth_disjoint_point_load + Z
+    pipeline is no longer needed.
     """
-    modes = params["modes"]  # list of {"A": amplitude, "n": mode}
+    modes = params["modes"]  # list of {"A": amplitude, "n": mode, "phi": phase}
     N     = 2 ** m
 
     qc = QuantumCircuit(m, name="multi_sin_load")
 
-    # Build frequency-domain point loads (magnitudes only)
+    # Step 1: build complex frequency-domain anchors with per-mode phases.
     freq_loads = []
     for mode in modes:
-        n = mode["n"]
-        A = abs(mode["A"])
-        if 0 < n < N:
-            freq_loads.append({"k": n,     "P": A})
-            freq_loads.append({"k": N - n, "P": A})
+        n   = mode["n"]
+        A   = abs(mode["A"])
+        phi = mode.get("phi", 0.0)
+        if not (0 < n < N):
+            continue
+        # See module docstring above for the derivation.
+        c_pos = (A / 2.0) * cmath.exp(1j * (phi - math.pi / 2.0))
+        c_neg = (A / 2.0) * cmath.exp(1j * (math.pi / 2.0 - phi))
+        freq_loads.append({"k": n,     "P": c_pos})
+        freq_loads.append({"k": N - n, "P": c_neg})
 
     if not freq_loads:
         raise ValueError("All mode amplitudes are zero.")
 
-    # Step 1: Ry-tree to prepare magnitude distribution
-    freq_circuit = _synth_disjoint_point_load(m, {"loads": freq_loads})
+    # Step 2: complex-aware Gleinig-Hoefler load.  The signed loader
+    # handles purely-real (sign-only) and fully-complex amplitudes
+    # uniformly; for the all-phi=0 case this reproduces the same
+    # frequency-domain state as the previous Ry-tree + Z construction.
+    freq_circuit = _synth_disjoint_point_load_signed(m, {"loads": freq_loads})
     qc.compose(freq_circuit, inplace=True)
 
-    # Step 2: Phase correction — Z on MSB gives relative phase pi
-    # between positive-freq entries (MSB=0, n_t < N/2) and
-    # negative-freq entries (MSB=1, N-n_t >= N/2).
-    # This encodes the sin antisymmetry: (|n> - |N-n>)/sqrt(2).
-    qc.z(m - 1)
-
-    # Step 3: QFT to transform frequency -> spatial domain
+    # Step 3: QFT to transform frequency -> spatial domain.
     from qiskit.circuit.library import QFTGate
     qc.append(QFTGate(num_qubits=m), qargs=list(range(m)))
 

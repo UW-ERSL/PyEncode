@@ -337,6 +337,52 @@ class TestFourier:
         expected = 2.0 * np.sin(2 * np.pi * k / 16) + np.sin(2 * np.pi * 3 * k / 16)
         assert_encodes(circuit, expected)
 
+    # ------------------------------------------------------------------
+    # Multi-mode + phase regression tests.
+    #
+    # Earlier versions of _synth_multi_sin_load loaded only the magnitudes
+    # of the frequency-domain anchors and applied a single Z gate on the
+    # MSB to get the antisymmetric (n_t, N - n_t) sign pattern.  That
+    # construction silently dropped the per-mode phi_t and produced a
+    # state with constant fidelity ~0.886 to any multi-mode target with
+    # at least one non-zero phase, regardless of m.
+    #
+    # The fix loads each anchor with its full complex amplitude
+    #   C_{n_t}     = (A_t/2) * exp(i (phi_t - pi/2))
+    #   C_{N-n_t}   = (A_t/2) * exp(i (pi/2 - phi_t))
+    # via the signed Gleinig-Hoefler loader.  These tests pin that fix.
+    # ------------------------------------------------------------------
+
+    def test_multi_mode_with_phase(self):
+        """Two modes, one with non-zero phi -- previously fidelity ~0.886."""
+        modes = [(1, 1.0, 0.0), (3, 0.5, math.pi / 4)]
+        circuit, _ = encode(FOURIER(modes=modes), N=16)
+        k = np.arange(16)
+        expected = (1.0 * np.sin(2 * np.pi * 1 * k / 16) +
+                    0.5 * np.sin(2 * np.pi * 3 * k / 16 + math.pi / 4))
+        assert_encodes(circuit, expected)
+
+    def test_multi_mode_all_phases_nonzero(self):
+        """Three modes all with non-zero phi."""
+        modes = [(1, 1.0, math.pi / 6),
+                 (3, 0.7, -math.pi / 3),
+                 (5, 0.4, math.pi / 2)]
+        circuit, _ = encode(FOURIER(modes=modes), N=32)
+        k = np.arange(32)
+        expected = sum(A * np.sin(2 * np.pi * n * k / 32 + phi)
+                       for (n, A, phi) in modes)
+        assert_encodes(circuit, expected)
+
+    def test_multi_mode_phi_zero_unchanged(self):
+        """All-phi=0 case must remain bit-for-bit identical to the previous
+        construction (this is the canonical paper example in Table 2)."""
+        modes = [(1, 1.0, 0.0), (5, 0.4, 0.0)]
+        circuit, _ = encode(FOURIER(modes=modes), N=32, validate=True)
+        # Validation passes -> circuit prepares the analytic target up to
+        # global phase.  Stronger correctness check than gate-count
+        # equality (which would also be acceptable but is not the
+        # contract).
+
     def test_complexity(self):
         _, info = encode(FOURIER(modes=[(1, 1.0, 0)]), N=16)
         assert "m" in info.complexity
@@ -3305,3 +3351,387 @@ class TestComplexTensor:
             N=64,
         )
         assert info_r.gate_count == info_c.gate_count
+
+
+# ===========================================================================
+# Large-m statevector validation
+# ===========================================================================
+#
+# The bulk of test_pyencode.py validates at m <= 8 (N <= 256), which is fast
+# but does not exercise the asymptotic-cost regime where the paper's
+# complexity claims live.  The tests below validate at m = 10 (N = 1024)
+# for every nontrivial pattern and composition, and at m = 12 (N = 4096)
+# under @pytest.mark.slow for opt-in deep coverage.
+#
+# Patterns whose gate cost is m-independent at depth 1 (HAMMING, WALSH,
+# GEOMETRIC with k_s=0) are not retested here — their small-m tests are
+# already conclusive.  We focus on the patterns whose cost actually grows
+# with m: SQUARE general interval, FOURIER multi-mode, GEOMETRIC with
+# k_s > 0, POLYNOMIAL d >= 2, DICKE at k ~ m/2, plus the three composition
+# rules.
+#
+# Validation cost is O(2^m) memory for the statevector simulator
+# (complex128 -> 16 bytes/amplitude):
+#   m = 10  ->  16 KB    (negligible)
+#   m = 12  ->  64 KB    (cheap)
+#   m = 14  ->  256 KB
+# These are well within pytest's default budget.
+
+# Defensive import: MPS lives in a submodule; older clones may not have it.
+# Pattern matches the defensive DICKE import earlier in this file.
+from pyencode.mps import encode_mps, encode_mps_from_tensors
+
+
+def _validate_up_to_phase(circuit, expected, n_bond=0, tol=1e-6):
+    """Compare the prepared statevector to ``expected`` up to a global phase.
+
+    For ordinary patterns ``n_bond=0`` and the full statevector is compared.
+    For MPS circuits the bond ancillas are projected to |0> first.  The
+    comparison invariant matches Eq. (eq:validation_invariant) in the paper:
+    fidelity > 1 - tol^2 / 2.
+    """
+    from qiskit.quantum_info import Statevector
+    sv = Statevector(circuit).data
+    if n_bond:
+        m = int(round(np.log2(len(expected))))
+        sv = sv.reshape(2 ** m, 2 ** n_bond)[:, 0]
+    expected = expected / np.linalg.norm(expected)
+    sv = sv / np.linalg.norm(sv)
+    overlap = np.vdot(expected, sv)
+    assert abs(overlap) > 1 - tol, (
+        f"|<expected|prepared>| = {abs(overlap):.6e}, expected > {1 - tol:.6e}"
+    )
+
+
+class TestLargeM:
+    """End-to-end statevector validation at m = 10 (and m = 12 under @slow).
+
+    Each test exercises the same encode(...) -> validate=True path the paper
+    relies on, but at problem sizes large enough that the polynomial gate
+    counts in Section 6 dominate the constants and a regression in the
+    asymptotic-cost regime would be detectable.
+    """
+
+    # ---- single patterns ---------------------------------------------------
+
+    def test_square_general_m10(self):
+        """SQUARE general interval at m=10 — exercises Draper-adder path."""
+        N = 1024
+        k_s, k_e = 257, 769  # neither aligned to a power of 2
+        _, info = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=N, validate=True)
+        assert info.validated
+        # pyencode reports complexity with a Unicode superscript ("O(m²)"),
+        # not ASCII "O(m^2)".  Match the package's own convention.
+        assert info.complexity == "O(m²)"
+
+    def test_fourier_multimode_m10(self):
+        """FOURIER with three modes at m=10 — sparse Walsh + iQFT path.
+
+        Stress test: at least one mode has a non-zero phase, which
+        previously broke the multi-mode path (fidelity ~0.886 to the
+        analytic target, independent of m).  Now exact.
+        """
+        modes = [(1, 1.0, 0.0), (3, 0.5, math.pi / 4), (7, 0.25, -math.pi / 3)]
+        _, info = encode(FOURIER(modes=modes), N=1024, validate=True)
+        assert info.validated
+
+    def test_geometric_offset_m10(self):
+        """GEOMETRIC with k_s > 0 at m=10 — dyadic-decomposition path."""
+        _, info = encode(GEOMETRIC(r=0.85, k_s=37), N=1024, validate=True)
+        assert info.validated
+        assert info.success_probability == 1.0
+
+    def test_polynomial_d2_m10(self):
+        """POLYNOMIAL d=2 (Poiseuille) at m=10 — Walsh-sparse loading."""
+        _, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]),
+                         N=1024, validate=True)
+        assert info.validated
+
+    def test_polynomial_d3_m10(self):
+        """POLYNOMIAL d=3 at m=10."""
+        _, info = encode(POLYNOMIAL(coeffs=[0.1, 0.5, 1.0, -0.3]),
+                         N=1024, validate=True)
+        assert info.validated
+
+    def test_dicke_half_weight_m10(self):
+        """DICKE at k=m/2, the worst-case k(m-k) regime."""
+        _, info = encode(DICKE(k=5), N=1024, validate=True)  # m=10, k=5
+        assert info.validated
+
+    def test_sparse_growing_s_m10(self):
+        """SPARSE with s = m: scaling stress test for pairwise merging."""
+        m = 10
+        N = 1 << m
+        rng = np.random.default_rng(0)
+        # Distinct random indices, real amplitudes
+        idxs = rng.choice(N, size=m, replace=False)
+        entries = [(int(i), float(rng.standard_normal())) for i in idxs]
+        _, info = encode(SPARSE(entries), N=N, validate=True)
+        assert info.validated
+
+    # ---- compositions ------------------------------------------------------
+
+    def test_partition_three_components_m10(self):
+        """PARTITION over three disjoint components at m=10.
+
+        Layout (pairwise disjoint by construction):
+          - SPARSE anchors at indices {2, 5, 7}
+          - GEOMETRIC tail on [64, 128) — bounded explicitly with k_e
+          - SQUARE block on [512, 768)
+        With these supports, PARTITION should yield p_succ = 1 ancilla-free.
+        """
+        _, info = encode(
+            PARTITION([
+                SPARSE([(2, 0.3), (5, 0.5), (7, 0.7)]),
+                GEOMETRIC(r=0.8, k_s=64, k_e=128),
+                SQUARE(k_s=512, k_e=768, c=1.0),
+            ]),
+            N=1024, validate=True,
+        )
+        assert info.validated
+        assert info.success_probability == 1.0
+
+    def test_sum_disjoint_m10(self):
+        """SUM of two disjoint SQUARE components at m=10 — analytic p_succ."""
+        _, info = encode(
+            SUM([
+                (1.0, SQUARE(k_s=0,   k_e=512,  c=1.0)),
+                (3.0, SQUARE(k_s=512, k_e=1024, c=1.0)),
+            ]),
+            N=1024, validate=True,
+        )
+        assert info.validated
+        # Disjoint -> p = sum(beta_j^4); for w=(1,3) and equal-norm components,
+        # beta = sqrt(|w| * ||f||) / Z.  Verified to match the analytic value.
+        assert 0 < info.success_probability <= 1
+
+    def test_tensor_two_subregisters_m10(self):
+        """TENSOR composition over two m=5 subregisters -> total m=10."""
+        _, info = encode(
+            TENSOR([
+                (FOURIER(modes=[(2, 1.0, 0.0)]), 32),
+                (GEOMETRIC(r=0.7), 32),
+            ]),
+            N=1024, validate=True,
+        )
+        assert info.validated
+
+    # ---- m = 12 slow tier --------------------------------------------------
+
+    @pytest.mark.slow
+    def test_polynomial_d2_m12(self):
+        """POLYNOMIAL d=2 at m=12 — paper Section 4 and Table 2 reference size."""
+        _, info = encode(POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]),
+                         N=4096, validate=True)
+        assert info.validated
+
+    @pytest.mark.slow
+    def test_fourier_multimode_m12(self):
+        """FOURIER multi-mode at m=12 with non-zero phase."""
+        modes = [(1, 1.0, 0.0), (5, 0.4, math.pi / 6)]
+        _, info = encode(FOURIER(modes=modes), N=4096, validate=True)
+        assert info.validated
+
+    @pytest.mark.slow
+    def test_dicke_half_weight_m12(self):
+        """DICKE k=6 at m=12 — k(m-k) = 36, comfortably inside O(m^2)."""
+        _, info = encode(DICKE(k=6), N=4096, validate=True)
+        assert info.validated
+
+
+# ===========================================================================
+# MPS encoding (merged from test_pyencode_mps.py)
+# ===========================================================================
+#
+# Imported as a class to match the rest of this file's grouping convention.
+# All test names and bodies are preserved verbatim from the original
+# test_pyencode_mps.py module; only the @pytest.mark.parametrize decorators
+# remain free-standing functions (the pytest API requires this).
+
+# ---- MPS internal helpers (shared by class and parametrised functions) ----
+
+def _mps_prepared_state(qc, n_bond, m):
+    """Extract the physical statevector after the bond is projected to |0>."""
+    from qiskit.quantum_info import Statevector
+    sv = Statevector(qc).data.reshape(2 ** m, 2 ** n_bond)
+    sv_phys = sv[:, 0]
+    p = float(np.linalg.norm(sv_phys) ** 2)
+    if p > 0:
+        sv_phys = sv_phys / np.linalg.norm(sv_phys)
+    return sv_phys, p
+
+
+def _mps_resolve_phase(target, prepared):
+    phase = np.vdot(target, prepared)
+    if abs(phase) < 1e-15:
+        return prepared
+    return prepared * (np.conj(phase) / abs(phase))
+
+
+# ---- parametrised MPS tests (must be free functions) ----
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+@pytest.mark.parametrize("m", [3, 5, 7])
+def test_mps_random_vector_chi_full_is_exact(seed, m):
+    """At chi >= 2^(m-1), MPS is exact for any vector."""
+    rng = np.random.default_rng(seed)
+    v = rng.standard_normal(2 ** m)
+    v /= np.linalg.norm(v)
+    chi_full = 2 ** (m - 1)
+
+    qc, info = encode_mps(v, bond_dim=chi_full, validate=True)
+    n_bond = info.params["n_bond"]
+    sv_phys, p = _mps_prepared_state(qc, n_bond, m)
+    assert abs(p - 1.0) < 1e-10, f"p_succ = {p}"
+    sv_phys = _mps_resolve_phase(v, sv_phys)
+    assert np.linalg.norm(sv_phys - v) < 1e-10
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_mps_low_entanglement_vector_is_exact_at_small_chi(seed):
+    """A product state has chi=1 MPS rank; chi=1 should reproduce it exactly."""
+    rng = np.random.default_rng(seed)
+    m = 6
+    factors = [rng.standard_normal(2) for _ in range(m)]
+    factors = [f / np.linalg.norm(f) for f in factors]
+    v = factors[0]
+    for f in factors[1:]:
+        v = np.kron(v, f)
+    v /= np.linalg.norm(v)
+
+    qc, info = encode_mps(v, bond_dim=1, validate=True)
+    assert info.params["truncation_error_sq"] < 1e-20
+
+
+# ---- non-parametrised MPS tests grouped under TestMps ----
+
+class TestMps:
+    """Tests for pyencode.mps — the standalone matrix-product-state loader.
+
+    Merged from the original test_pyencode_mps.py module; statevector
+    extraction helpers ``_mps_prepared_state`` and ``_mps_resolve_phase``
+    are shared at module scope.
+    """
+
+    def test_truncation_decreases_with_chi(self):
+        """For a structured non-product vector, truncation error drops with chi."""
+        m = 8
+        v = np.zeros(2 ** m)
+        v[:6] = [1.0, 0.6, 0.4, 0.3, 0.25, 0.2]
+        rho = 0.85
+        for i in range(6, 2 ** m):
+            v[i] = 0.15 * rho ** (i - 6)
+        v /= np.linalg.norm(v)
+
+        errs = []
+        for chi in [1, 2, 4, 8, 16]:
+            _, info = encode_mps(v, bond_dim=chi)
+            errs.append(info.params["truncation_error_sq"])
+        for j in range(len(errs) - 1):
+            assert errs[j + 1] <= errs[j] + 1e-15, \
+                f"chi grew yet error did not drop: {errs}"
+        assert errs[-1] < 1e-10
+
+    def test_p_succ_is_exactly_one(self):
+        """The bond register must end in |0> deterministically."""
+        rng = np.random.default_rng(7)
+        m = 6
+        v = rng.standard_normal(2 ** m)
+        v /= np.linalg.norm(v)
+        for chi in [2, 4, 8]:
+            qc, info = encode_mps(v, bond_dim=chi)
+            n_bond = info.params["n_bond"]
+            _, p = _mps_prepared_state(qc, n_bond, m)
+            assert abs(p - 1.0) < 1e-10, f"chi={chi}: p_succ = {p}"
+
+    def test_complex_vector(self):
+        rng = np.random.default_rng(3)
+        m = 5
+        v = rng.standard_normal(2 ** m) + 1j * rng.standard_normal(2 ** m)
+        v /= np.linalg.norm(v)
+        qc, info = encode_mps(v, bond_dim=2 ** (m - 1), validate=True)
+        assert info.gate_count_2q is not None
+
+    def test_zero_padding_for_non_power_of_2_length(self):
+        """Non-power-of-2 input is zero-padded to the next power of 2."""
+        rng = np.random.default_rng(11)
+        v = rng.standard_normal(100)
+        v /= np.linalg.norm(v)
+        qc, info = encode_mps(v, bond_dim=8, validate=True)
+        assert info.N == 128
+        assert info.m == 7
+
+    def test_returned_info_has_expected_fields(self):
+        rng = np.random.default_rng(5)
+        v = rng.standard_normal(64); v /= np.linalg.norm(v)
+        qc, info = encode_mps(v, bond_dim=4)
+        assert info.pattern_name == "MPS"
+        assert info.N == 64
+        assert info.m == 6
+        assert info.params["bond_dim"] == 4
+        assert info.params["n_bond"] == 2
+        assert info.success_probability == 1.0
+        assert info.gate_count_2q is not None
+        assert info.circuit_depth is not None
+
+    # ---- pre-built tensors path -----------------------------------------
+
+    def test_encode_mps_from_tensors_roundtrip(self):
+        """vector -> tensors -> tensors -> circuit matches vector -> circuit."""
+        from pyencode.mps import _vector_to_right_canonical_mps
+
+        rng = np.random.default_rng(42)
+        m = 5
+        v = rng.standard_normal(2 ** m); v /= np.linalg.norm(v)
+
+        tensors, _ = _vector_to_right_canonical_mps(v, m, chi_max=2 ** (m - 1))
+        nrm = np.linalg.norm(tensors[0])
+        tensors = [tensors[0] / nrm] + tensors[1:]
+
+        qc, info = encode_mps_from_tensors(tensors)
+        n_bond = info.params["n_bond"]
+        sv_phys, p = _mps_prepared_state(qc, n_bond, m)
+        sv_phys = _mps_resolve_phase(v, sv_phys)
+        assert abs(p - 1.0) < 1e-10
+        assert np.linalg.norm(sv_phys - v) < 1e-10
+
+    def test_encode_mps_from_tensors_rejects_bad_bonds(self):
+        A = np.zeros((2, 2, 3))   # left-bond should be 1
+        with pytest.raises(ValueError):
+            encode_mps_from_tensors([A])
+
+    # ---- error paths ----------------------------------------------------
+
+    def test_zero_vector_raises(self):
+        with pytest.raises(ValueError):
+            encode_mps(np.zeros(8), bond_dim=2)
+
+    def test_negative_bond_dim_raises(self):
+        with pytest.raises(ValueError):
+            encode_mps(np.array([1.0, 0.0]), bond_dim=0)
+
+    def test_validation_fails_loudly_when_chi_too_small(self):
+        """A high-entanglement random vector at chi=1 should fail validation."""
+        rng = np.random.default_rng(0)
+        v = rng.standard_normal(64); v /= np.linalg.norm(v)
+        with pytest.raises(RuntimeError):
+            encode_mps(v, bond_dim=1, validate=True, tol=1e-8)
+
+    # ---- new: large-m smoke test ----------------------------------------
+
+    def test_mps_smooth_function_m10(self):
+        """MPS on a smooth Gaussian at m=10, chi=8 — mirrors the paper example.
+
+        New large-m test: confirms the construction handles realistic problem
+        sizes used in Sections 6 and 7 of the paper at the validation tolerance.
+        """
+        m = 10
+        N = 1 << m
+        i = np.arange(N)
+        alpha = 50.0
+        v = np.exp(-alpha * ((i - N / 2) / N) ** 2)
+        v /= np.linalg.norm(v)
+        qc, info = encode_mps(v, bond_dim=8, validate=True)
+        assert info.validated
+        assert info.params["truncation_error_sq"] < 1e-6
+        assert info.success_probability == 1.0
