@@ -74,6 +74,11 @@ circuit, info = encode(
                GEOMETRIC(r=0.8, k_s=11)]),
     N=256)
 ```
+All ten patterns and the three compositions accept real or complex
+amplitudes. Complex inputs add at most O(m) phase gates, which the
+transpiler typically absorbs into adjacent rotations at
+`optimization_level=3`; real-amplitude code paths run unchanged
+(gate counts identical bit-for-bit).
 
 Every call returns `(circuit, info)` where `circuit` is a Qiskit
 `QuantumCircuit` and `info` is an `EncodingInfo` dataclass with gate
@@ -88,7 +93,7 @@ statevector-validated amplitude vector.
 | Step       | `STEP(k_e, c)`                    | O(m)                            | Shukla & Vedula (2024)              |
 | Square     | `SQUARE(k_s, k_e, c)`             | O(m²) general, O(m) aligned     | Shukla & Vedula (2024) + Draper (2000) |
 | Walsh      | `WALSH(k, c0, c1)`                | O(m)                            | Welch et al. (2014)                 |
-| Geometric  | `GEOMETRIC(r, k_s=0, c=1)`        | O(m) for k_s=0, O(m²) general   | Grover & Rudolph (2002), Bentley & Saxe (1980) |
+| Geometric  | `GEOMETRIC(r, k_s=0, k_e=None, c=1)` | O(m) for k_s=0, O(m²) general | Grover & Rudolph (2002), Bentley & Saxe (1980) |
 | Hamming    | `HAMMING(r, c)`                   | O(m), 0 CX, depth 1             | Cruz et al. (2019)                  |
 | Staircase  | `STAIRCASE(r, c)`                 | O(m)                            | Hackbusch (1999), Möttönen et al. (2005) |
 | Dicke      | `DICKE(k, c)`                     | O(k·(m−k))                      | Bärtschi & Eidenbenz (2019)         |
@@ -273,17 +278,26 @@ calculation.
 ## Testing
 
 ```bash
-python -m pytest test_pyencode.py -v
+pytest                  # 345 tests, ~20s on a laptop
+pytest -m slow          # opt-in: 3 deep-coverage tests at m=12
+pytest -m "not slow"    # explicit fast path (default)
 ```
+
+The full suite covers every pattern at small m (m ≤ 8), every pattern
+at m = 10 with statevector validation, and a slow tier at m = 12 for
+selected patterns (POLYNOMIAL d=2, FOURIER multi-mode, DICKE).
 
 ## Paper
 
-The paper and experiment notebooks are in `notebooks/paperExperiments.ipynb`.
-Figures can be regenerated with:
+Figures and Table 2 in the paper are reproduced by:
 
 ```bash
 python generate_figures.py
 ```
+
+The exploration notebook `notebooks/explore.ipynb` provides one
+runnable cell per pattern and composition for interactive use; it is
+not a paper-reproduction artifact (use `generate_figures.py` for that).
 
 ## Citation
 
