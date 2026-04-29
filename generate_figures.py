@@ -61,7 +61,7 @@ def plot_vector(f, N, title, filename, ylabel=r"$f_i$", smooth=False):
     ax.axhline(0, color='gray', linewidth=0.5)
     ax.set_title(title, fontsize=10, pad=4)
     fig.tight_layout()
-    fig.savefig(f"{FIGDIR}/{filename}")
+    fig.savefig(f"{FIGDIR}/{filename}", dpi=300)
     plt.close(fig)
     print(f"  saved {FIGDIR}/{filename}")
 
@@ -74,15 +74,15 @@ def plot_vector_2d(f_2d, N, title, filename):
     ax.set_title(title, fontsize=10, pad=4)
     fig.colorbar(im, ax=ax, shrink=0.8, label=r"$f_{ij}$")
     fig.tight_layout()
-    fig.savefig(f"{FIGDIR}/{filename}")
+    fig.savefig(f"{FIGDIR}/{filename}", dpi=300)
     plt.close(fig)
     print(f"  saved {FIGDIR}/{filename}")
 
 
-def save_circuit(circuit, filename, scale=0.8, fold=-1):
+def save_circuit(circuit, filename, scale=0.8, fold=12, dpi=200):
     """Save Qiskit circuit diagram as PNG."""
     fig = circuit.draw('mpl', scale=scale, fold=fold)
-    fig.savefig(f"{FIGDIR}/{filename}", bbox_inches='tight', pad_inches=0.05)
+    fig.savefig(f"{FIGDIR}/{filename}", bbox_inches='tight', pad_inches=0.05, dpi=dpi)
     plt.close(fig)
     print(f"  saved {FIGDIR}/{filename}")
 
@@ -261,7 +261,7 @@ def fig_geometric_arbitrary():
     plot_vector(f, N,
                 rf"GEOMETRIC: $r={ratio:g}$, $\mathrm{{k_s}}={k_s}$, $N={N}$",
                 "geometric_arbitrary_vector.png")
-    save_circuit(circuit, "geometric_arbitrary_circuit.png", scale=0.5)
+    save_circuit(circuit, "geometric_arbitrary_circuit.png", scale=0.5, fold=12)
 
 
 def fig_hamming():
@@ -307,7 +307,7 @@ def fig_dicke():
     plot_vector(f, N,
                 r"DICKE: $|D^4_2\rangle$, $N=16$",
                 "dicke_vector.png")
-    save_circuit(circuit, "dicke_circuit.png", scale=0.5)
+    save_circuit(circuit, "dicke_circuit.png", scale=0.5, fold=12)
 
 
 def fig_polynomial_ramp():
@@ -435,7 +435,7 @@ def fig_hubbard():
     plot_vector(f,N,
                 r"Extended Hubbard: $t{=}1$, $U{=}4$, $V{=}0.5$, $L{=}8$",
                 "hubbard_vector.png")
-    save_circuit(circuit, "hubbard_circuit.png", scale=0.6)
+    save_circuit(circuit, "hubbard_circuit.png", scale=0.6, fold=24)
 
 def fig_poisson():
     """2D Poisson separable source — demonstrates TENSOR pattern."""
@@ -867,9 +867,6 @@ if __name__ == "__main__":
     # Gate count scaling figure
     fig_gate_count_vs_m()
 
-
-    fig_gate_count_vs_m_reduced()
-    
     # Gate count table
     gate_count_table()
 
