@@ -92,20 +92,35 @@ def print_info(label, info):
           f"complexity={info.complexity}")
 
 
-def qiskit_gates(f_vec, N):
-    """Gate count for Qiskit StatePreparation on same vector."""
+def qiskit_gate_counts(f_vec, N):
+    """Return (1q, 2q, depth) for Qiskit StatePreparation on the same vector.
+
+    Matches the {cx, u} basis at optimization_level=3 used throughout the
+    rest of this script.  Returns (0, 0, 0) for the zero vector.
+    """
     from qiskit import QuantumCircuit, transpile
     from qiskit.circuit.library import StatePreparation
     norm = np.linalg.norm(f_vec)
     if norm < 1e-14:
-        return 0
+        return 0, 0, 0
     sv = (f_vec / norm).astype(complex)
     m = int(round(math.log2(N)))
     qc = QuantumCircuit(m)
     qc.append(StatePreparation(sv), range(m))
     qc = qc.decompose(reps=DECOMPOSE_REPS)
-    t = transpile(qc, basis_gates=BASIS_GATES, optimization_level=OPTIMIZATION_LEVEL)
-    return sum(t.count_ops().values())
+    t = transpile(qc, basis_gates=BASIS_GATES,
+                  optimization_level=OPTIMIZATION_LEVEL)
+    ops = t.count_ops()
+    return ops.get("u", 0), ops.get("cx", 0), t.depth()
+
+
+def qiskit_gates(f_vec, N):
+    """Backwards-compatible wrapper: total transpiled gate count only.
+
+    Prefer :func:`qiskit_gate_counts` for the (1q, 2q, depth) breakdown.
+    """
+    u, cx, _ = qiskit_gate_counts(f_vec, N)
+    return u + cx
 
 
 # ===================================================================
@@ -781,52 +796,99 @@ def fig_mps_gaussian():
 # ===================================================================
 
 def gate_count_table():
-    """Print gate count comparison table (N=64, m=6)."""
-    print("\n--- Gate Count Table (N=64, m=6) ---")
-    N = 64
-    k = np.arange(N)
+    """Reproduce Table 2 from the paper: gate counts and circuit depth
+    at N = 4096 (m = 12), transpiled to {cx, u} at optimization_level=3.
 
-    x_cts = np.arange(N, dtype=float) / (N - 1)
-    # Expected vectors for clarity
-    m_bits = int(round(math.log2(N)))
+    Every row reports (1q, 2q, depth) triples for both PyEncode and
+    Qiskit StatePreparation.  The 15 rows exactly match the 15 rows in
+    the paper's Table 2.
+    """
+    print("\n--- Gate Count Table  (N = 4096, m = 12) ---")
+    N = 4096
+    m = int(round(math.log2(N)))
+    k = np.arange(N)
+    x_cts = k.astype(float) / (N - 1)
+
+    # Analytic vectors used to give Qiskit an equal-footing target.
+    hamming_vec   = np.array([0.7 ** bin(i).count("1") for i in range(N)])
     staircase_vec = np.zeros(N)
-    for kk in range(m_bits + 1):
-        staircase_vec[(1 << kk) - 1] = 0.5 ** kk
-    hamming_vec = np.array([0.7 ** bin(i).count("1") for i in range(N)])
+    for j in range(m + 1):
+        staircase_vec[(1 << j) - 1] = 0.5 ** j
+
+    def dicke_vec(kk):
+        return np.array([1.0 if bin(i).count("1") == kk else 0.0
+                         for i in range(N)])
 
     cases = [
-        ("SPARSE s=1 (k=20)",    SPARSE([(20, 1.0)]),
-         np.eye(N)[20]),
-        ("STEP (k_e=4)",         STEP(k_e=4, c=1.0),
-         np.r_[np.ones(4), np.zeros(N-4)]),
-        ("SQUARE ([12,52), general)", SQUARE(k_s=12, k_e=52, c=1.0),
-         np.r_[np.zeros(12), np.ones(40), np.zeros(N-52)]),
-        ("FOURIER T=1 n=1",      FOURIER(modes=[(1, 1.0, 0)]),
-         np.sin(2*np.pi*k/N)),
-        ("FOURIER T=1 n=3 phi",  FOURIER(modes=[(3, 1.0, math.pi/4)]),
-         np.sin(2*np.pi*3*k/N + math.pi/4)),
-        ("SPARSE s=2",           SPARSE([(10, 3.0), (50, 4.0)]),
-         np.array([3.0 if i==10 else 4.0 if i==50 else 0.0 for i in range(N)])),
-        ("GEOMETRIC (r=0.95)",   GEOMETRIC(r=0.95),
-         0.95 ** np.arange(N)),
-        ("HAMMING (r=0.7)",     HAMMING(r=0.7),
+        # ---- SPARSE ----
+        ("Sparse s=1, k=N/4",
+         SPARSE([(N // 4, 1.0)]),
+         np.eye(N)[N // 4]),
+        ("Sparse s=2",
+         SPARSE([(10, 3.0), (50, 4.0)]),
+         np.array([3.0 if i == 10 else 4.0 if i == 50 else 0.0
+                   for i in range(N)])),
+        # ---- STEP ----
+        ("Step k_e=N/2",
+         STEP(k_e=N // 2, c=1.0),
+         np.r_[np.ones(N // 2), np.zeros(N // 2)]),
+        # ---- SQUARE (general non-aligned interval) ----
+        ("Square [N/4+1, 3N/4+1)",
+         SQUARE(k_s=N // 4 + 1, k_e=3 * N // 4 + 1, c=1.0),
+         np.r_[np.zeros(N // 4 + 1),
+               np.ones(N // 2),
+               np.zeros(N // 4 - 1)]),
+        # ---- WALSH ----
+        ("Walsh k=6, c0=1, c1=4",
+         WALSH(k=6, c0=1.0, c1=4.0),
+         np.where((k >> 6) & 1, 4.0, 1.0).astype(float)),
+        # ---- GEOMETRIC ----
+        ("Geometric r=0.95",
+         GEOMETRIC(r=0.95),
+         0.95 ** k),
+        # ---- HAMMING ----
+        ("Hamming r=0.7",
+         HAMMING(r=0.7),
          hamming_vec),
-        ("STAIRCASE (r=0.5)",    STAIRCASE(r=0.5),
+        # ---- STAIRCASE ----
+        ("Staircase r=0.5",
+         STAIRCASE(r=0.5),
          staircase_vec),
-        ("POLYNOMIAL d=1 (ramp)",     POLYNOMIAL(coeffs=[0.0, 1.0]),
+        # ---- DICKE (both k values from the paper) ----
+        ("Dicke k=2",
+         DICKE(k=2),
+         dicke_vec(2)),
+        ("Dicke k=11",
+         DICKE(k=11),
+         dicke_vec(11)),
+        # ---- POLYNOMIAL ----
+        ("Polynomial d=1 (ramp)",
+         POLYNOMIAL(coeffs=[0.0, 1.0]),
          x_cts),
-        ("POLYNOMIAL d=2 (Poiseuille)", POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]),
-         4 * x_cts - 4 * x_cts * x_cts),
-        ("POLYNOMIAL d=3",       POLYNOMIAL(coeffs=[0.1, 0.5, 1.0, -0.3]),
-         0.1 + 0.5 * x_cts + x_cts ** 2 - 0.3 * x_cts ** 3),
+        ("Polynomial d=2 (Poiseuille)",
+         POLYNOMIAL(coeffs=[0.0, 4.0, -4.0]),
+         4 * x_cts * (1 - x_cts)),
+        # ---- FOURIER ----
+        ("Fourier T=1 n=1 phi=0",
+         FOURIER(modes=[(1, 1.0, 0.0)]),
+         np.sin(2 * np.pi * k / N)),
+        ("Fourier T=1 n=3 phi=pi/4",
+         FOURIER(modes=[(3, 1.0, math.pi / 4)]),
+         np.sin(2 * np.pi * 3 * k / N + math.pi / 4)),
+        ("Fourier T=2",
+         FOURIER(modes=[(1, 1.0, 0.0), (3, 0.5, 0.0)]),
+         np.sin(2 * np.pi * k / N) + 0.5 * np.sin(2 * np.pi * 3 * k / N)),
     ]
 
-    print(f"{'Pattern':<32} {'PyEncode':>10} {'Qiskit':>8}  Complexity")
-    print("-" * 65)
+    print(f"{'Pattern':<28}{'PyEncode':>19}{'Qiskit':>19}  {'Complexity':<14}")
+    print(f"{'':<28}{'1q/2q/depth':>19}{'1q/2q/depth':>19}")
+    print("-" * (28 + 19 + 19 + 16))
     for name, pat, f_vec in cases:
-        circuit, info = encode(pat, N=N)
-        qk = qiskit_gates(f_vec, N)
-        print(f"{name:<32} {info.gate_count:>10} {qk:>8}  {info.complexity}")
+        _, info = encode(pat, N=N)
+        pe_str = f"{info.gate_count_1q}/{info.gate_count_2q}/{info.circuit_depth}"
+        qi1, qi2, qid = qiskit_gate_counts(f_vec, N)
+        qi_str = f"{qi1}/{qi2}/{qid}"
+        print(f"{name:<28}{pe_str:>19}{qi_str:>19}  {info.complexity}")
 
 
 # ===================================================================

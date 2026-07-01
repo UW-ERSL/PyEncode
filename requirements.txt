@@ -1,6 +1,6 @@
 # PyEncode requirements
-# Install with: pip install -r requirements.txt
-
+# Install from download: pip install -r requirements.txt
+# Intall from github: pip install -r https://raw.githubusercontent.com/UW-ERSL/PyEncode/main/requirements.txt
 # Core
 qiskit>=2.3.0
 numpy>=2.0.0
@@ -9,5 +9,13 @@ numpy>=2.0.0
 matplotlib>=3.8.0
 scipy>=1.12.0
 
+# Jupyter Notebooks
+jupyter>=1.1.0
+notebook>=7.2.0
+ipykernel>=6.29.0
+
+
 # Development / testing
 pytest>=9.0.0
+pylatexenc
+
