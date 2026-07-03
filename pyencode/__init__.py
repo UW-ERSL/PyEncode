@@ -64,10 +64,15 @@ from .types import (
 from .recognizer import PatternKind
 from .encode import encode
 from .predictor import predict_gates
+from .matcher import match_vector, PatternMatch, print_matches, format_matches
 
 __all__ = [
     "encode",
     "predict_gates",
+    "match_vector",
+    "PatternMatch",
+    "print_matches",
+    "format_matches",
     "EncodingInfo",
     "PatternKind",
     # Constructors

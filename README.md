@@ -238,6 +238,59 @@ phase. Use `encode()` when you need:
 - the emitted source snippet in `info.circuit_code`;
 - statevector validation via `validate=True`.
 
+## Reverse Lookup: Which Pattern Fits a Vector?
+
+The forward direction maps a typed declaration to a circuit. The reverse
+direction takes a *materialized* amplitude vector and finds which exact
+pattern family best represents it. `match_vector(v)` fits every family's
+free parameters to `v`, scores each fit, and returns the closest matches
+ranked by error — each as a ready-to-`encode` constructor.
+
+```python
+import numpy as np
+from pyencode import match_vector, print_matches, encode
+
+v = np.zeros(16); v[:5] = 1.0          # a prefix step
+matches = match_vector(v)              # top 3 by default
+print_matches(matches)
+# rank  pattern      rel_error   fidelity   gates  params
+#    1  STEP         0.000e+00   1.000000       7  k_e=5, c=1
+#    2  SQUARE       0.000e+00   1.000000       7  k_s=0, k_e=5, c=1
+#    3  SPARSE       0.000e+00   1.000000      40  loads=[5 entries]
+
+circuit, info = encode(matches[0].pattern, N=len(v))   # encode the winner
+```
+
+Each result is a `PatternMatch` with `pattern_name`, the fitted `pattern`
+constructor, `params`, `rel_error`, `fidelity`, and the predicted
+`gate_count`.
+
+The fit metric is scale- and phase-invariant — a pattern's leading
+amplitude `c` is a free parameter and quantum states are normalized, so
+
+```
+rel_error = ||v - alpha·w|| / ||v|| = sqrt(1 - |<w, v>|² / (||w||²·||v||²))
+```
+
+where `alpha` is the optimal complex scale and `w` is the pattern's vector.
+`rel_error` lies in `[0, 1]` (0 is an exact structural match) and
+`fidelity = 1 - rel_error²`. When several families tie on error (e.g. the
+vector is reproduced exactly by more than one), the cheaper circuit — by
+predicted gate count — ranks first.
+
+```python
+# Restrict the search, control top-k, tune fits
+match_vector(v, top_k=5)
+match_vector(v, families=["GEOMETRIC", "HAMMING", "FOURIER"])
+match_vector(v, max_fourier_modes=4, max_poly_degree=3)
+```
+
+`SPARSE` always reproduces a vector exactly from its nonzero entries, so it
+appears as the universal (but often expensive) fallback whenever no
+lower-cost structured family fits. `match_vector` operates on a real or
+complex numerical vector of power-of-two length; it does not attempt the
+composite constructors (`SUM`, `PARTITION`, `TENSOR`).
+
 ## Approximate Encoding via Matrix Product States
 
 For amplitude vectors that fall outside the exact pattern families —
@@ -278,7 +331,7 @@ calculation.
 ## Testing
 
 ```bash
-pytest                  # 345 tests, ~20s on a laptop
+pytest                  # 362 tests, ~20s on a laptop
 pytest -m slow          # opt-in: 3 deep-coverage tests at m=12
 pytest -m "not slow"    # explicit fast path (default)
 ```

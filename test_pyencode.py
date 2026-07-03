@@ -3735,3 +3735,136 @@ class TestMps:
         assert info.validated
         assert info.params["truncation_error_sq"] < 1e-6
         assert info.success_probability == 1.0
+
+# ---------------------------------------------------------------------------
+# Reverse lookup: match_vector
+# ---------------------------------------------------------------------------
+
+class TestMatcher:
+    """Tests for match_vector — fitting pattern families to a raw vector."""
+
+    @staticmethod
+    def _vec(pattern, N):
+        from pyencode._helpers import _build_component_vector
+        return _build_component_vector(pattern, N)
+
+    def test_step_vector_identified(self):
+        from pyencode import match_vector
+        v = np.zeros(16); v[:5] = 1.0
+        matches = match_vector(v)
+        assert matches[0].pattern_name == "STEP"
+        assert matches[0].params["k_e"] == 5
+        assert matches[0].rel_error < 1e-9
+
+    def test_hamming_vector_identified(self):
+        from pyencode import match_vector, HAMMING
+        v = self._vec(HAMMING(r=0.5), 16)
+        names = [m.pattern_name for m in match_vector(v)]
+        assert "HAMMING" in names
+        ham = next(m for m in match_vector(v) if m.pattern_name == "HAMMING")
+        assert ham.rel_error < 1e-6
+        assert abs(ham.params["r"] - 0.5) < 1e-3
+
+    def test_geometric_vector_identified(self):
+        from pyencode import match_vector, GEOMETRIC
+        v = self._vec(GEOMETRIC(r=0.8), 16)
+        geo = next(m for m in match_vector(v, top_k=None)
+                   if m.pattern_name == "GEOMETRIC")
+        assert geo.rel_error < 1e-4
+        assert abs(geo.params["r"] - 0.8) < 1e-2
+
+    def test_fourier_single_mode_identified(self):
+        from pyencode import match_vector, FOURIER
+        v = self._vec(FOURIER(modes=[(3, 1.0, 0.0)]), 16)
+        matches = match_vector(v)
+        assert matches[0].pattern_name == "FOURIER"
+        assert matches[0].rel_error < 1e-9
+        assert matches[0].params["modes"][0]["n"] == 3
+
+    def test_walsh_two_level_identified(self):
+        from pyencode import match_vector, WALSH
+        v = self._vec(WALSH(k=2, c0=1.0, c1=4.0), 16)
+        matches = match_vector(v)
+        assert matches[0].pattern_name == "WALSH"
+        assert matches[0].params["k"] == 2
+        assert matches[0].rel_error < 1e-9
+
+    def test_polynomial_ramp_identified(self):
+        from pyencode import match_vector, POLYNOMIAL
+        v = self._vec(POLYNOMIAL(coeffs=[0.0, 1.0]), 16)
+        matches = match_vector(v)
+        assert matches[0].pattern_name == "POLYNOMIAL"
+        assert matches[0].rel_error < 1e-9
+
+    def test_dicke_identified(self):
+        from pyencode import match_vector, DICKE
+        v = self._vec(DICKE(k=2), 16)
+        dicke = next(m for m in match_vector(v, top_k=None)
+                     if m.pattern_name == "DICKE")
+        assert dicke.params["k"] == 2
+        assert dicke.rel_error < 1e-9
+
+    def test_staircase_identified(self):
+        from pyencode import match_vector, STAIRCASE
+        v = self._vec(STAIRCASE(r=0.5), 16)
+        sc = next(m for m in match_vector(v) if m.pattern_name == "STAIRCASE")
+        assert sc.rel_error < 1e-6
+        assert abs(sc.params["r"] - 0.5) < 1e-3
+
+    def test_sparse_always_exact(self):
+        from pyencode import match_vector
+        rng = np.random.default_rng(1)
+        v = rng.standard_normal(16)
+        sparse = next(m for m in match_vector(v, top_k=None)
+                      if m.pattern_name == "SPARSE")
+        assert sparse.rel_error < 1e-9
+
+    def test_returns_sorted_top_k(self):
+        from pyencode import match_vector
+        rng = np.random.default_rng(2)
+        v = rng.standard_normal(32)
+        matches = match_vector(v, top_k=3)
+        assert len(matches) == 3
+        errs = [m.rel_error for m in matches]
+        assert errs == sorted(errs)
+
+    def test_best_match_round_trips_through_encode(self):
+        from pyencode import match_vector, encode, HAMMING
+        v = self._vec(HAMMING(r=0.5), 16)
+        best = match_vector(v)[0]
+        _, info = encode(best.pattern, N=16, validate=True, tol=1e-6)
+        assert info.validated
+
+    def test_complex_vector_supported(self):
+        from pyencode import match_vector
+        v = np.array([1 + 1j, 1 - 1j, 0, 0, 2, 0, 0, 0], dtype=complex)
+        matches = match_vector(v, top_k=2)
+        assert matches[0].rel_error < 1e-9   # SPARSE is exact
+
+    def test_families_filter(self):
+        from pyencode import match_vector
+        v = np.zeros(16); v[:5] = 1.0
+        matches = match_vector(v, families=["STEP", "HAMMING"])
+        names = {m.pattern_name for m in matches}
+        assert names <= {"STEP", "HAMMING"}
+
+    def test_non_power_of_two_rejected(self):
+        from pyencode import match_vector
+        with pytest.raises(ValueError):
+            match_vector(np.ones(12))
+
+    def test_zero_vector_rejected(self):
+        from pyencode import match_vector
+        with pytest.raises(ValueError):
+            match_vector(np.zeros(16))
+
+    def test_unknown_family_rejected(self):
+        from pyencode import match_vector
+        with pytest.raises(ValueError):
+            match_vector(np.ones(8), families=["NOPE"])
+
+    def test_format_matches_runs(self):
+        from pyencode import match_vector, format_matches
+        v = np.zeros(8); v[:3] = 1.0
+        out = format_matches(match_vector(v))
+        assert "STEP" in out and "rel_error" in out
