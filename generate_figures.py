@@ -79,9 +79,10 @@ def plot_vector_2d(f_2d, N, title, filename):
     print(f"  saved {FIGDIR}/{filename}")
 
 
-def save_circuit(circuit, filename, scale=0.8, fold=12, dpi=200):
+def save_circuit(circuit, filename, scale=0.8, fold=12, dpi=400):
     """Save Qiskit circuit diagram as PNG."""
-    fig = circuit.draw('mpl', scale=scale, fold=fold)
+    fig = circuit.draw('mpl', scale=scale, fold=fold,
+    style={'fontsize': 16, 'subfontsize': 14})
     fig.savefig(f"{FIGDIR}/{filename}", bbox_inches='tight', pad_inches=0.05, dpi=dpi)
     plt.close(fig)
     print(f"  saved {FIGDIR}/{filename}")
@@ -175,8 +176,8 @@ def fig_fourier_sine():
     N = 16; k = np.arange(N)
     f = np.sin(1 * 2 * np.pi * k / N)
     plot_vector(f, N, r"FOURIER: $\sin(2\pi i/N)$, $N=16$",
-                "params_sine_vector.png", smooth=True)
-    save_circuit(circuit, "params_sine_circuit.png", scale=1.0)
+                "fourier_sine_vector.png", smooth=True)
+    save_circuit(circuit, "fourier_sine_circuit.png", scale=1.0)
 
 
 def fig_fourier_multi():
@@ -926,10 +927,13 @@ if __name__ == "__main__":
     fig_poisson()
     fig_finance()
 
-    # Gate count scaling figure
-    fig_gate_count_vs_m()
+    gen_tables = False
 
-    # Gate count table
-    gate_count_table()
+    if gen_tables: # Takes time to run
+        # Gate count scaling figure
+        fig_gate_count_vs_m()
+
+        # Gate count table
+        gate_count_table()
 
     print("\nAll figures generated in figures/")
