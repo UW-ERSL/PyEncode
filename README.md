@@ -11,7 +11,7 @@ encoding.
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install git+https://github.com/UW-ERSL/PyEncode.git
 ```
 
 Requires Python 3.10+ and Qiskit 2.3+.
