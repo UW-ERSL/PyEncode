@@ -672,11 +672,24 @@ class SUM(_Pattern):
     of Childs & Wiebe 2012, using ceil(log2(r)) ancilla qubits and
     controlled component circuits.
 
-    When all components have disjoint support (e.g. multiple SQUARE
-    intervals) the ancilla uncomputes cleanly and the success probability
-    is exactly 1.0.  For overlapping components, success probability
-    p < 1.0 and post-selection or amplitude amplification is required
-    (a warning is issued in that case).
+    Success probability.  ``SUM`` always post-selects the ancilla on
+    |0>, so p < 1 in general -- including for disjoint components.
+    Disjointness removes the cross terms, giving the closed form
+
+        p = sum_j beta_j^4,    beta_j^2 = |w_j| ||f^(j)|| / Z,
+        Z = sum_j |w_j| ||f^(j)||,
+
+    which equals 1 only when a single component carries all the weight.
+    Equal weights over r components give p = 1/r; unequal weights give
+    something in between (e.g. weights 1 and 4 over two disjoint
+    normalized components give beta^2 = 1/5, 4/5 and p = 17/25 = 0.68).
+    Overlapping components additionally pick up cross terms, so p then
+    depends on the relative geometry of the component states; a warning
+    is issued in that case since amplitude amplification may be
+    warranted.
+
+    If you need p = 1 for disjoint components, use ``PARTITION``, which
+    prepares the same state ancilla-free and deterministically.
 
     Parameters
     ----------
@@ -690,12 +703,14 @@ class SUM(_Pattern):
 
     Examples
     --------
-    >>> # Piecewise-constant: two disjoint intervals (p = 1)
+    >>> # Piecewise-constant: two disjoint intervals.
+    >>> # Disjoint support removes the cross terms but does NOT give p = 1:
+    >>> # beta^2 = 1/5, 4/5  ->  p = (1/5)^2 + (4/5)^2 = 17/25 = 0.68.
     >>> circuit, info = encode(
     ...     SUM([(1.0, SQUARE(k_s=0,  k_e=8,  c=1.0)),
     ...          (4.0, SQUARE(k_s=8,  k_e=16, c=1.0))]), N=16)
-    >>> # info.success_probability -> 1.0
-    >>> # (For this specific disjoint case, PARTITION is cheaper.)
+    >>> # info.success_probability -> 0.68
+    >>> # PARTITION prepares this same state ancilla-free with p = 1.
 
     >>> # Mixed patterns: overlapping (p < 1, warning issued)
     >>> circuit, info = encode(

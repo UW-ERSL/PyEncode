@@ -65,9 +65,12 @@ from .recognizer import PatternKind
 from .encode import encode
 from .predictor import predict_gates
 from .matcher import match_vector, PatternMatch, print_matches, format_matches
+from .mps import encode_mps, encode_mps_from_tensors
 
 __all__ = [
     "encode",
+    "encode_mps",
+    "encode_mps_from_tensors",
     "predict_gates",
     "match_vector",
     "PatternMatch",

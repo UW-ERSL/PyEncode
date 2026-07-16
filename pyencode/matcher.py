@@ -87,7 +87,7 @@ class PatternMatch:
 # ---------------------------------------------------------------------------
 
 def match_vector(v, top_k: int = 3, families=None, max_fourier_modes: int = 4,
-                 max_poly_degree: int = 3):
+                 max_poly_degree: int = 3, tol: float = 1e-6):
     """Rank the exact pattern families by how well they match *v*.
 
     Parameters
@@ -106,12 +106,17 @@ def match_vector(v, top_k: int = 3, families=None, max_fourier_modes: int = 4,
     max_poly_degree : int, optional
         Highest polynomial degree to try for the POLYNOMIAL family.
         Default 3.
+    tol : float, optional
+        Fits with ``rel_error <= tol`` are all treated as exact and are
+        ranked among themselves by predicted gate count, so the cheapest
+        exact encoding comes first. Default 1e-6.
 
     Returns
     -------
     list of PatternMatch
-        Sorted by ``rel_error`` ascending, ties broken by predicted gate
-        count. Length ``min(top_k, n_families)``.
+        Sorted by ``rel_error`` ascending -- with all fits at or below
+        ``tol`` treated as equally exact and ordered by predicted gate
+        count instead. Length ``min(top_k, n_families)``.
 
     Examples
     --------
@@ -179,9 +184,14 @@ def match_vector(v, top_k: int = 3, families=None, max_fourier_modes: int = 4,
             gate_count=gate_count,
         ))
 
-    # Primary key: error (rounded so near-exact ties group together).
+    # Primary key: error, with every fit at or below *tol* treated as
+    # equally exact so that the gate count decides among them.  A plain
+    # round() is not enough here: SPARSE returns rel_error == 0.0 exactly
+    # by construction, while a fitted family (GEOMETRIC via golden section,
+    # POLYNOMIAL via lstsq) lands a few ulp above zero -- so SPARSE would
+    # always win the primary key and the tie-break would never be consulted.
     # Secondary key: cheaper circuit wins the tie.
-    matches.sort(key=lambda mt: (round(mt.rel_error, 9),
+    matches.sort(key=lambda mt: (0.0 if mt.rel_error <= tol else mt.rel_error,
                                  mt.gate_count if mt.gate_count is not None
                                  else float("inf")))
     if top_k is not None:
@@ -293,17 +303,25 @@ def _fit_ratio(build, v, vnorm2, ranges, n_grid=80):
 
     best_r, best = None, -1.0
     for lo, hi in ranges:
+        # Track the best point *within this range* separately: refining a
+        # bracket around a best_r carried over from a previous range would
+        # give lo > hi and make the golden-section search meaningless.
+        local_r, local_best = None, -1.0
         grid = np.linspace(lo, hi, n_grid)
         for r in grid:
             c = cos2(float(r))
-            if c > best:
-                best, best_r = c, float(r)
+            if c > local_best:
+                local_best, local_r = c, float(r)
+        if local_r is None:
+            continue
         step = (hi - lo) / (n_grid - 1)
-        r_ref = _maximize_1d(cos2, max(lo, best_r - step),
-                             min(hi, best_r + step))
+        r_ref = _maximize_1d(cos2, max(lo, local_r - step),
+                             min(hi, local_r + step))
         c_ref = cos2(r_ref)
-        if c_ref > best:
-            best, best_r = c_ref, r_ref
+        if c_ref > local_best:
+            local_best, local_r = c_ref, r_ref
+        if local_best > best:
+            best, best_r = local_best, local_r
     return best_r
 
 

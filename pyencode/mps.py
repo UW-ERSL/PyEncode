@@ -235,8 +235,15 @@ def encode_mps(
         raise ValueError("Input vector is the zero vector.")
     v = v / norm
 
-    chi_max = int(bond_dim)
-    n_bond = max(0, int(math.ceil(math.log2(chi_max)))) if chi_max > 1 else 0
+    # The Schon cascade applies each site unitary to n_bond + 1 qubits, so
+    # every site unitary must be (2*chi) x (2*chi) with 2*chi == 2**(n_bond+1).
+    # That forces chi to be a power of two.  A bond_dim that is not a power of
+    # two is rounded *up* to the next one: the bond register already needs
+    # ceil(log2(chi)) qubits, so the larger chi retains strictly more singular
+    # values at no extra qubit cost.
+    chi_req = int(bond_dim)
+    n_bond = max(0, int(math.ceil(math.log2(chi_req)))) if chi_req > 1 else 0
+    chi_max = 1 << n_bond
 
     # ---------- MPS construction ----------
     tensors, trunc_err_sq = _vector_to_right_canonical_mps(v, m, chi_max)
@@ -304,7 +311,8 @@ def encode_mps(
         complexity=f"O(m*chi^2) with chi={chi_max}",
         validated=validated,
         params={
-            "bond_dim": chi_max,
+            "bond_dim": chi_max,           # effective chi (power of two)
+            "bond_dim_requested": chi_req,  # as supplied by the caller
             "n_bond": n_bond,
             "truncation_error_sq": trunc_err_sq,
             "n_padded": N,
@@ -459,14 +467,18 @@ def mps_cascade_unitaries(v: np.ndarray, bond_dim: int):
         raise ValueError("Input vector is the zero vector.")
     v = v / nrm
 
-    chi_max = int(bond_dim)
-    n_bond = max(0, int(math.ceil(math.log2(chi_max)))) if chi_max > 1 else 0
+    # chi must be a power of two for the cascade unitaries to match the
+    # n_bond + 1 qubits they act on; round up if necessary (see encode_mps).
+    chi_req = int(bond_dim)
+    n_bond = max(0, int(math.ceil(math.log2(chi_req)))) if chi_req > 1 else 0
+    chi_max = 1 << n_bond
     tensors, trunc_err_sq = _vector_to_right_canonical_mps(v, m, chi_max)
     tensors_padded = _pad_tensors(tensors, chi_max)
     unitaries = _build_cascade_unitaries(tensors_padded)
     return unitaries, {
         "n_bond": n_bond,
         "bond_dim": chi_max,
+        "bond_dim_requested": chi_req,
         "m": m,
         "truncation_error_sq": trunc_err_sq,
         "n_padded": N,
