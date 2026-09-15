@@ -1,0 +1,249 @@
+diff --git a/pyencode/predictor.py b/pyencode/predictor.py
+index d99848a..560de53 100644
+--- a/pyencode/predictor.py
++++ b/pyencode/predictor.py
+@@ -16,12 +16,18 @@ whereas ``predict_gates()`` is always sub-millisecond.
+ Accuracy
+ --------
+ For patterns with deterministic structure (HAMMING, WALSH,
+-GEOMETRIC, STEP, STAIRCASE, POLYNOMIAL d=1) the predictions are
++GEOMETRIC, STAIRCASE, POLYNOMIAL d=1) the predictions are
+ EXACT.  For POLYNOMIAL d>=2 and FOURIER T=1 they are exact
+-closed-form fits to the empirical transpiled counts.  For SPARSE and
+-SQUARE (general interval) the counts depend on specific index bit
+-patterns in ways that transpilation further optimizes, so predictions
+-are UPPER BOUNDS; the 'exact' field in the returned dict is False.
++closed-form fits to the empirical transpiled counts.  For SPARSE,
++STEP (k_e not a power of 2) and SQUARE (general interval) the
++predictions are UPPER BOUNDS; the 'exact' field in the returned dict
++is False.  STEP and SQUARE bounds are structural counts of the
++synthesized circuit (see _predict_step) and do not depend on the
++Qiskit version.
++
++Formulas described as fits were calibrated on Qiskit 2.5.1 with
++optimization_level=3; transpiler changes in other Qiskit releases can
++shift those counts.
+ 
+ For the composite constructors (SUM, TENSOR) predictions sum the
+ component predictions plus composition overhead.
+@@ -107,31 +113,51 @@ def _predict_sparse(m: int, params: dict) -> dict:
+ 
+ 
+ def _predict_step(m: int, params: dict) -> dict:
+-    """STEP: 1q = m-1 for pc=1; 1q = m + 4*pc - 6 for pc>=2.
+-    2q = max(0, 2*pc - 3).  depth = 1 for pc<=1 else 4*pc - 5.  Exact."""
++    """STEP: structural count of the Shukla-Vedula circuit.
++
++    Let l_0 < ... < l_k be the 1-bit positions of k_e and pc = k + 1.
++
++    pc = 1 (k_e = 2^p): H on qubits 0..p-1.  1q = p, 2q = 0,
++    depth = min(p, 1).  Exact.
++
++    pc >= 2: _synth_step_load emits one CH per position l_0..l_k - 1 and
++    pc - 2 CRY gates.  With CH = 1 CX and CRY = 2 CX,
++        2q = (l_k - l_0) + 2 (pc - 2).
++    The circuit acts on qubits 0..l_k.  After single-qubit fusion each
++    qubit carries at most one U before, between and after its 2q gates,
++    and no path through the circuit has two consecutive U gates, so
++        1q <= (l_k + 1) + 2 * 2q,     depth <= 2 * 2q + 1.
++    These are upper bounds on the transpiled counts provided the
++    transpiler does not add CX gates and fuses single-qubit runs; they
++    do not depend on the Qiskit version.  exact=False.
++    """
+     k_e = int(params["k_e"])
+     if k_e == 0:
+         return dict(gate_count_1q=0, gate_count_2q=0, circuit_depth=0,
+                     complexity="O(m)", exact=True)
+-    pc = bin(k_e).count("1")
++    ls = [i for i in range(k_e.bit_length()) if (k_e >> i) & 1]
++    pc = len(ls)
+     if pc == 1:
+-        return dict(gate_count_1q=m - 1, gate_count_2q=0, circuit_depth=1,
+-                    complexity="O(m)", exact=True)
++        p = ls[0]
++        return dict(gate_count_1q=p, gate_count_2q=0,
++                    circuit_depth=min(p, 1), complexity="O(m)", exact=True)
++    cx = (ls[-1] - ls[0]) + 2 * (pc - 2)
+     return dict(
+-        gate_count_1q=m + 4 * pc - 6,
+-        gate_count_2q=2 * pc - 3,
+-        circuit_depth=4 * pc - 5,
++        gate_count_1q=(ls[-1] + 1) + 2 * cx,
++        gate_count_2q=cx,
++        circuit_depth=2 * cx + 1,
+         complexity="O(m)",
+-        exact=True,
++        exact=False,
+     )
+ 
+ 
+ def _draper_cost(r: int) -> tuple:
+     """Transpiled (1q, 2q, depth) of the Draper constant adder on r qubits
+-    for an odd constant, {CX, U} basis, optimization_level=3.  The 2q count
+-    is exact and independent of the constant (Qiskit 2.3-2.5).  The 1q count
+-    and depth are exact on Qiskit 2.5; on 2.3-2.4 they vary with the
+-    constant by a few gates."""
++    for an odd constant, {CX, U} basis, optimization_level=3.  Measured, not
++    structural: the 2q count is the same for every constant on Qiskit
++    2.3-2.5.  The 1q count and depth are exact on Qiskit 2.5; on 2.3-2.4
++    they vary with the constant by up to 3 gates.  _predict_square uses
++    only the 2q count."""
+     if r <= 0:
+         return (0, 0, 0)
+     if r == 1:
+@@ -142,41 +168,51 @@ def _draper_cost(r: int) -> tuple:
+ 
+ 
+ def _predict_square(m: int, params: dict) -> dict:
+-    """SQUARE: if aligned or k_s=0 reduces to STEP + shift; else STEP plus a
+-    Draper adder of width r = m - tz(shift), after the reflection choice in
+-    synthesizer._square_plan.  Exact for aligned/prefix cases; upper bound
+-    for general intervals."""
++    """SQUARE: structural count of synthesizer._synth_square_load.
++
++    After the reflection choice of synthesizer._square_plan the circuit is
++    STEP(w) (or an aligned X/H block), a Draper adder on r = m - tz(k_s)
++    qubits, and, if reflected, X on all m qubits.
++
++    Aligned block (including k_s = 0 with w = 2^p): p H gates and X gates
++    on the set bits of the original k_s >> p.  With reflection the X layer
++    fuses into the H gates and cancels the X gates of the reflected
++    offset, leaving the same count.  Exact.
++
++    Otherwise the CX count is the STEP structural count plus the Draper
++    adder CX count, and the same fusion argument as in _predict_step gives
++        1q <= q + 2 * 2q,     depth <= 2 * 2q + 1,
++    with q the number of qubits the circuit acts on.  exact=False.
++    """
+     from .synthesizer import _square_plan, _trailing_zeros
+-    _, k_s, k_e = _square_plan(m, int(params["k_s"]), int(params["k_e"]))
++    k_s0 = int(params["k_s"])
++    reflect, k_s, k_e = _square_plan(m, k_s0, int(params["k_e"]))
+     w = k_e - k_s
+-    aligned = (w > 0) and ((w & (w - 1)) == 0) and (k_s % w == 0)
+-    if k_s == 0:
+-        return _predict_step(m, {"k_e": w})
+-    if aligned:
+-        # Power-of-2-aligned block: X gates on upper qubits + Hadamards
+-        # on lower qubits. 1q = m - 1 in typical case (same as STEP prefix).
+-        p = int(math.log2(w))
+-        # Upper qubits carrying k_s bits: popcount of (k_s >> p)
+-        upper_pc = bin(k_s >> p).count("1")
+-        return dict(
+-            gate_count_1q=p + upper_pc,
+-            gate_count_2q=0,
+-            circuit_depth=1,
+-            complexity="O(m)",
+-            exact=True,
+-        )
+-    # General interval: STEP(w) + Draper adder on r = m - tz(k_s) qubits.
+-    # Sum of the two parts.  The adder term is exact; the total inherits
+-    # the error of _predict_step, and transpiling the composition may
+-    # merge gates across the boundary.  Mark as inexact.
+-    r = m - _trailing_zeros(k_s, m)
++
++    if (w & (w - 1)) == 0 and k_s % w == 0:
++        p = w.bit_length() - 1
++        oneq = p + bin(k_s0 >> p).count("1")
++        return dict(gate_count_1q=oneq, gate_count_2q=0,
++                    circuit_depth=min(oneq, 1), complexity="O(m)",
++                    exact=True)
++
+     step = _predict_step(m, {"k_e": w})
+-    a1, a2, ad = _draper_cost(r)
++    top = w.bit_length()                 # STEP acts on qubits 0..top-1
++    if k_s == 0:
++        cx, q = step["gate_count_2q"], top
++        complexity = "O(m)"
++    else:
++        t = _trailing_zeros(k_s, m)
++        cx = step["gate_count_2q"] + _draper_cost(m - t)[1]
++        q = m if t <= top else top + (m - t)
++        complexity = "O(m^2)"
++    if reflect:
++        q = m
+     return dict(
+-        gate_count_1q=step["gate_count_1q"] + a1,
+-        gate_count_2q=step["gate_count_2q"] + a2,
+-        circuit_depth=step["circuit_depth"] + ad,
+-        complexity="O(m^2)",
++        gate_count_1q=q + 2 * cx,
++        gate_count_2q=cx,
++        circuit_depth=2 * cx + 1,
++        complexity=complexity,
+         exact=False,
+     )
+ 
+diff --git a/test_pyencode.py b/test_pyencode.py
+index 454bfcb..bb78ee9 100644
+--- a/test_pyencode.py
++++ b/test_pyencode.py
+@@ -2450,20 +2450,57 @@ class TestPredictor:
+             assert p["gate_count_2q"] == c_t
+             assert p["circuit_depth"] == d_t
+ 
+-    def test_step_exact(self):
+-        """STEP: popcount-based closed form for various k_e."""
++    def test_step_power_of_two_exact(self):
++        """STEP k_e = 2^p: p Hadamards, exact."""
+         from pyencode import predict_gates, STEP
+-        for m in [6, 8, 10, 12]:
++        for m in [4, 6, 8]:
+             N = 2**m
+-            test_cases = [N//2, 3*N//4, N//2 + N//4 + N//8, N-1]
+-            for k_e in test_cases:
+-                u_t, c_t, d_t = self._ground(STEP(k_e=k_e, c=1.0), N)
+-                p = predict_gates(STEP(k_e=k_e, c=1.0), N)
++            for p_ in range(m + 1):
++                u_t, c_t, d_t = self._ground(STEP(k_e=2**p_, c=1.0), N)
++                p = predict_gates(STEP(k_e=2**p_, c=1.0), N)
+                 assert p["exact"] is True
+-                assert p["gate_count_1q"] == u_t, \
+-                    f"m={m}, k_e={k_e}: 1q {p['gate_count_1q']} != {u_t}"
+-                assert p["gate_count_2q"] == c_t
+-                assert p["circuit_depth"] == d_t
++                assert (p["gate_count_1q"], p["gate_count_2q"],
++                        p["circuit_depth"]) == (u_t, c_t, d_t), (m, p_)
++
++    def test_step_structural_cx(self):
++        """Predicted CX equals #CH + 2 #CRY of the synthesized circuit
++        (independent of the transpiler)."""
++        from pyencode import predict_gates
++        from pyencode.synthesizer import _synth_step_load
++        m = 8
++        for k_e in range(1, 2**m + 1):
++            ops = _synth_step_load(m, {"k_e": k_e}).count_ops()
++            p = predict_gates(STEP(k_e=k_e, c=1.0), 2**m)
++            assert p["gate_count_2q"] == ops.get("ch", 0) + 2 * ops.get("cry", 0), k_e
++
++    def test_step_upper_bound_all(self):
++        """STEP: prediction bounds the transpiled 1q, 2q and depth for
++        every k_e at m = 6; exact=False unless k_e is a power of 2."""
++        from pyencode import predict_gates
++        N = 64
++        for k_e in range(1, N + 1):
++            u_t, c_t, d_t = self._ground(STEP(k_e=k_e, c=1.0), N)
++            p = predict_gates(STEP(k_e=k_e, c=1.0), N)
++            assert p["gate_count_1q"] >= u_t, k_e
++            assert p["gate_count_2q"] >= c_t, k_e
++            assert p["circuit_depth"] >= d_t, k_e
++            assert p["exact"] is ((k_e & (k_e - 1)) == 0)
++
++    def test_square_upper_bound_all(self):
++        """SQUARE: prediction bounds the transpiled counts for every
++        interval at m = 5, and is exact whenever exact=True."""
++        from pyencode import predict_gates
++        N = 32
++        for k_s in range(N):
++            for k_e in range(k_s + 1, N + 1):
++                pat = SQUARE(k_s=k_s, k_e=k_e, c=1.0)
++                u_t, c_t, d_t = self._ground(pat, N)
++                p = predict_gates(pat, N)
++                got = (p["gate_count_1q"], p["gate_count_2q"], p["circuit_depth"])
++                if p["exact"]:
++                    assert got == (u_t, c_t, d_t), (k_s, k_e)
++                else:
++                    assert got[0] >= u_t and got[1] >= c_t and got[2] >= d_t, (k_s, k_e)
+ 
+     def test_sparse_s1_exact(self):
+         """SPARSE s=1: just X gates on set bits."""

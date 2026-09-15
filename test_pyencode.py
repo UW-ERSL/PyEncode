@@ -2450,20 +2450,57 @@ class TestPredictor:
             assert p["gate_count_2q"] == c_t
             assert p["circuit_depth"] == d_t
 
-    def test_step_exact(self):
-        """STEP: popcount-based closed form for various k_e."""
+    def test_step_power_of_two_exact(self):
+        """STEP k_e = 2^p: p Hadamards, exact."""
         from pyencode import predict_gates, STEP
-        for m in [6, 8, 10, 12]:
+        for m in [4, 6, 8]:
             N = 2**m
-            test_cases = [N//2, 3*N//4, N//2 + N//4 + N//8, N-1]
-            for k_e in test_cases:
-                u_t, c_t, d_t = self._ground(STEP(k_e=k_e, c=1.0), N)
-                p = predict_gates(STEP(k_e=k_e, c=1.0), N)
+            for p_ in range(m + 1):
+                u_t, c_t, d_t = self._ground(STEP(k_e=2**p_, c=1.0), N)
+                p = predict_gates(STEP(k_e=2**p_, c=1.0), N)
                 assert p["exact"] is True
-                assert p["gate_count_1q"] == u_t, \
-                    f"m={m}, k_e={k_e}: 1q {p['gate_count_1q']} != {u_t}"
-                assert p["gate_count_2q"] == c_t
-                assert p["circuit_depth"] == d_t
+                assert (p["gate_count_1q"], p["gate_count_2q"],
+                        p["circuit_depth"]) == (u_t, c_t, d_t), (m, p_)
+
+    def test_step_structural_cx(self):
+        """Predicted CX equals #CH + 2 #CRY of the synthesized circuit
+        (independent of the transpiler)."""
+        from pyencode import predict_gates
+        from pyencode.synthesizer import _synth_step_load
+        m = 8
+        for k_e in range(1, 2**m + 1):
+            ops = _synth_step_load(m, {"k_e": k_e}).count_ops()
+            p = predict_gates(STEP(k_e=k_e, c=1.0), 2**m)
+            assert p["gate_count_2q"] == ops.get("ch", 0) + 2 * ops.get("cry", 0), k_e
+
+    def test_step_upper_bound_all(self):
+        """STEP: prediction bounds the transpiled 1q, 2q and depth for
+        every k_e at m = 6; exact=False unless k_e is a power of 2."""
+        from pyencode import predict_gates
+        N = 64
+        for k_e in range(1, N + 1):
+            u_t, c_t, d_t = self._ground(STEP(k_e=k_e, c=1.0), N)
+            p = predict_gates(STEP(k_e=k_e, c=1.0), N)
+            assert p["gate_count_1q"] >= u_t, k_e
+            assert p["gate_count_2q"] >= c_t, k_e
+            assert p["circuit_depth"] >= d_t, k_e
+            assert p["exact"] is ((k_e & (k_e - 1)) == 0)
+
+    def test_square_upper_bound_all(self):
+        """SQUARE: prediction bounds the transpiled counts for every
+        interval at m = 5, and is exact whenever exact=True."""
+        from pyencode import predict_gates
+        N = 32
+        for k_s in range(N):
+            for k_e in range(k_s + 1, N + 1):
+                pat = SQUARE(k_s=k_s, k_e=k_e, c=1.0)
+                u_t, c_t, d_t = self._ground(pat, N)
+                p = predict_gates(pat, N)
+                got = (p["gate_count_1q"], p["gate_count_2q"], p["circuit_depth"])
+                if p["exact"]:
+                    assert got == (u_t, c_t, d_t), (k_s, k_e)
+                else:
+                    assert got[0] >= u_t and got[1] >= c_t and got[2] >= d_t, (k_s, k_e)
 
     def test_sparse_s1_exact(self):
         """SPARSE s=1: just X gates on set bits."""
