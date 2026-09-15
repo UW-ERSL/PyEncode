@@ -272,8 +272,17 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
     k_s = 0 : reduces to plain STEP(k_e) with no adder — O(m) total.
     Aligned power-of-2 block : X gates + H gates — O(m) total.
 
-    Gate count: O(m) for STEP + O(m²) for adder = O(m²) in general.
-    For k_s = 0: O(m).  For power-of-2-aligned blocks: O(m).
+    Reduced adder width
+    -------------------
+    For k_s = 2^t a with a odd, ADD(k_s) on m qubits equals ADD(a) on the
+    upper m - t qubits, so the adder is built on r = m - t qubits.
+    The reflection X^{⊗m} maps [a, b) to [N - b, N - a); when k_e has
+    more trailing zeros than k_s, the reflected interval is prepared and
+    X^{⊗m} is appended.  This makes suffix intervals [k_s, N) an O(m)
+    STEP + X layer.  See _square_plan.
+
+    Gate count: O(m) for STEP + O(r²) for adder, r = m - max(t_s, t_e).
+    For k_s = 0 or k_e = N: O(m).  For power-of-2-aligned blocks: O(m).
 
     Note on the paper's O(m) claim
     --------------------------------
@@ -291,6 +300,39 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
     if w <= 0:
         raise ValueError(f"SQUARE requires k_s < k_e, got k_s={k_s} k_e={k_e}")
 
+    # ── Reflect if the shift from k_e is cheaper than from k_s ────────────
+    reflect, k_s, k_e = _square_plan(m, k_s, k_e)
+    qc = _square_core(m, k_s, k_e)
+    if reflect:
+        qc.x(range(m))
+    qc.name = "square_load"
+    return qc
+
+
+def _trailing_zeros(x: int, m: int) -> int:
+    """Number of trailing zero bits of x, with x ≡ 0 (mod 2^m) counted as m."""
+    x %= 2 ** m
+    return m if x == 0 else (x & -x).bit_length() - 1
+
+
+def _square_plan(m: int, k_s: int, k_e: int) -> tuple:
+    """
+    Choose between [k_s, k_e) and its reflection [N - k_e, N - k_s).
+
+    The adder width of the direct construction is m - tz(k_s); that of the
+    reflected construction is m - tz(N - k_e) = m - tz(k_e).  Reflect iff
+    tz(k_e) > tz(k_s).  Returns (reflect, k_s', k_e').
+    """
+    N = 2 ** m
+    if _trailing_zeros(k_e, m) > _trailing_zeros(k_s, m):
+        return True, N - k_e, N - k_s
+    return False, k_s, k_e
+
+
+def _square_core(m: int, k_s: int, k_e: int) -> QuantumCircuit:
+    """Unreflected SQUARE: STEP(w) followed by ADD(k_s) on the upper qubits."""
+    w = k_e - k_s
+
     # ── Special case: k_s == 0 → plain STEP, no adder ─────────────────────
     if k_s == 0:
         return _synth_step_load(m, {"k_e": k_e})
@@ -306,11 +348,11 @@ def _synth_square_load(m: int, params: dict) -> QuantumCircuit:
             qc.h(q)
         return qc
 
-    # ── General case: STEP(w) + Draper QFT constant adder(k_s) ────────────
-    step = _synth_step_load(m, {"k_e": w})
-    adder = _draper_add_const(m, k_s)
-    qc = step.compose(adder)
-    qc.name = "square_load"
+    # ── General case: STEP(w) + Draper adder(k_s >> t) on qubits t..m-1 ───
+    t = _trailing_zeros(k_s, m)
+    qc = _synth_step_load(m, {"k_e": w})
+    qc.compose(_draper_add_const(m - t, k_s >> t), qubits=range(t, m),
+               inplace=True)
     return qc
 
 

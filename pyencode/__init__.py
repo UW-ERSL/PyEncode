@@ -10,7 +10,7 @@ The exact pattern families are:
 
   SPARSE     :  Gleinig-Hoefler s-sparse state             O(s·m)
   STEP       :  Prefix uniform superposition [0, k_e)      O(m)
-  SQUARE     :  Interval uniform superposition [k_s, k_e)    O(m²) / O(m) aligned
+  SQUARE     :  Interval uniform superposition [k_s, k_e)    O(m²) / O(m) aligned, prefix, suffix
   WALSH      :  k-th Walsh function                        O(m)
   FOURIER    :  T sinusoidal modes via inverse QFT         O(m²)
   GEOMETRIC  :  Geometric product state c·rⁱ               O(m) / O(m²) offset

@@ -223,8 +223,9 @@ def _synthesize_and_build_info(
 
     # SQUARE: override complexity for special cases that avoid the Draper adder
     if pattern.kind == PatternKind.SQUARE:
-        k_s = pattern.params.get("k_s", 0)
-        k_e = pattern.params.get("k_e", 0)
+        from .synthesizer import _square_plan
+        _, k_s, k_e = _square_plan(m, pattern.params.get("k_s", 0),
+                                   pattern.params.get("k_e", 0))
         w  = k_e - k_s
         aligned = (w > 0) and ((w & (w - 1)) == 0) and (k_s % w == 0)
         if k_s == 0 or aligned:

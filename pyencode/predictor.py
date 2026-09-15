@@ -126,11 +126,28 @@ def _predict_step(m: int, params: dict) -> dict:
     )
 
 
+def _draper_cost(r: int) -> tuple:
+    """Transpiled (1q, 2q, depth) of the Draper constant adder on r qubits
+    for an odd constant, {CX, U} basis, optimization_level=3.  The 2q count
+    is exact and independent of the constant (Qiskit 2.3-2.5).  The 1q count
+    and depth are exact on Qiskit 2.5; on 2.3-2.4 they vary with the
+    constant by a few gates."""
+    if r <= 0:
+        return (0, 0, 0)
+    if r == 1:
+        return (1, 0, 1)
+    if r == 2:
+        return (4, 1, 3)
+    return (3 * r * r - 3 * r - 1, 2 * r * r - 2 * r - 3, 16 * r - 29)
+
+
 def _predict_square(m: int, params: dict) -> dict:
-    """SQUARE: if aligned or k_s=0 reduces to STEP + shift; else Draper adder.
-    Exact for aligned/prefix cases; upper bound for general intervals."""
-    k_s = int(params["k_s"])
-    k_e = int(params["k_e"])
+    """SQUARE: if aligned or k_s=0 reduces to STEP + shift; else STEP plus a
+    Draper adder of width r = m - tz(shift), after the reflection choice in
+    synthesizer._square_plan.  Exact for aligned/prefix cases; upper bound
+    for general intervals."""
+    from .synthesizer import _square_plan, _trailing_zeros
+    _, k_s, k_e = _square_plan(m, int(params["k_s"]), int(params["k_e"]))
     w = k_e - k_s
     aligned = (w > 0) and ((w & (w - 1)) == 0) and (k_s % w == 0)
     if k_s == 0:
@@ -148,12 +165,17 @@ def _predict_square(m: int, params: dict) -> dict:
             complexity="O(m)",
             exact=True,
         )
-    # General interval: Draper QFT adder. Empirical fit ~ 2.9 m^2 + ...
-    # Give an asymptotic upper bound; mark as inexact.
+    # General interval: STEP(w) + Draper adder on r = m - tz(k_s) qubits.
+    # Sum of the two parts.  The adder term is exact; the total inherits
+    # the error of _predict_step, and transpiling the composition may
+    # merge gates across the boundary.  Mark as inexact.
+    r = m - _trailing_zeros(k_s, m)
+    step = _predict_step(m, {"k_e": w})
+    a1, a2, ad = _draper_cost(r)
     return dict(
-        gate_count_1q=3 * m * m,
-        gate_count_2q=2 * m * m,
-        circuit_depth=m * m,
+        gate_count_1q=step["gate_count_1q"] + a1,
+        gate_count_2q=step["gate_count_2q"] + a2,
+        circuit_depth=step["circuit_depth"] + ad,
         complexity="O(m^2)",
         exact=False,
     )

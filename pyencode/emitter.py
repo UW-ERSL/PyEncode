@@ -343,10 +343,17 @@ def _step_ry_lines(k: int, m: int) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def _emit_square_load(m: int, params: dict) -> str:
-    k_s = params["k_s"]
-    k_e = params["k_e"]
+    from .synthesizer import _square_plan, _trailing_zeros
+    k_s0 = params["k_s"]
+    k_e0 = params["k_e"]
+    reflect, k_s, k_e = _square_plan(m, k_s0, k_e0)
     w  = k_e - k_s
-    lines = [_header(m, f"SQUARE_LOAD  k_s={k_s}  k_e={k_e}")]
+    lines = [_header(m, f"SQUARE_LOAD  k_s={k_s0}  k_e={k_e0}")]
+    if reflect:
+        lines += [
+            f"# Reflection: prepare [{k_s}, {k_e}), then X on every qubit",
+            f"# maps it to [{k_s0}, {k_e0}).",
+        ]
 
     if (w & (w - 1)) == 0 and (k_s % w == 0):
         p = int(round(math.log2(w)))
@@ -361,17 +368,28 @@ def _emit_square_load(m: int, params: dict) -> str:
                 lines.append(f"qc.x({bit})  # set address bit {bit}")
         for q in range(p):
             lines.append(f"qc.h({q})  # uniform superposition over segment")
-    else:
+    elif k_s == 0:
         lines += [
             f"",
-            f"# General segment [{k_s}, {k_e}): STEP({w}) + Draper adder({k_s})",
+            f"# Prefix segment [0, {k_e}): STEP({k_e})",
             f"# (circuit synthesized internally by PyEncode)",
             f"qc = QuantumCircuit({m}, name='square_load')",
         ]
+    else:
+        t = _trailing_zeros(k_s, m)
+        lines += [
+            f"",
+            f"# General segment [{k_s}, {k_e}): STEP({w}) + Draper adder({k_s >> t})",
+            f"# on qubits {t}..{m - 1} (k_s = {k_s} = 2^{t} * {k_s >> t})",
+            f"# (circuit synthesized internally by PyEncode)",
+            f"qc = QuantumCircuit({m}, name='square_load')",
+        ]
+    if reflect:
+        lines.append(f"qc.x(range({m}))  # reflection i -> N-1-i")
 
     lines.append("")
     lines.append(
-        f"# Circuit prepares (1/sqrt({w})) sum_{{k={k_s}}}^{{{k_e-1}}} |k>"
+        f"# Circuit prepares (1/sqrt({w})) sum_{{k={k_s0}}}^{{{k_e0-1}}} |k>"
     )
     return "\n".join(lines)
 

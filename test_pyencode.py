@@ -302,6 +302,105 @@ class TestSquare:
         assert circuit.num_qubits >= 3  # m=3 data qubits + ancilla
 
 
+class TestSquareAdderWidth:
+    """SQUARE shift via a width-reduced Draper adder and the X^m reflection.
+
+    ADD(2^t a) on m qubits equals ADD(a) on the upper m - t qubits, and
+    X^m maps [a, b) to [N - b, N - a).  The synthesizer shifts from
+    whichever of k_s, k_e has more trailing zeros.
+    """
+
+    @staticmethod
+    def _cx(circuit):
+        from qiskit import transpile
+        t = transpile(circuit, basis_gates=["cx", "u"], optimization_level=3,
+                      seed_transpiler=0)
+        return t.count_ops().get("cx", 0)
+
+    def test_all_intervals_m4(self):
+        N = 16
+        for k_s in range(N):
+            for k_e in range(k_s + 1, N + 1):
+                circuit, _ = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=N)
+                expected = np.zeros(N); expected[k_s:k_e] = 1.0
+                assert_encodes(circuit, expected)
+
+    def test_emitted_code_runs(self):
+        for k_s, k_e in [(4, 12), (5, 16), (8, 16), (3, 12), (6, 11)]:
+            circuit, info = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=16)
+            namespace = {}
+            exec(compile(info.circuit_code, "<test>", "exec"), namespace)
+            np.testing.assert_allclose(statevector(namespace["qc"]),
+                                       statevector(circuit), atol=1e-10)
+
+    def test_center_half_one_cx(self):
+        """[N/4, 3N/4) is a width-2 adder: one CX for every m."""
+        for m in range(3, 11):
+            N = 2 ** m
+            _, info = encode(SQUARE(k_s=N // 4, k_e=3 * N // 4, c=1.0), N=N)
+            assert info.gate_count_2q == 1, f"m={m}: {info.gate_count_2q} CX"
+
+    def test_cx_independent_of_m(self):
+        """Both endpoints multiples of 2^(m-4): adder width 4 at every m."""
+        counts = set()
+        for m in range(5, 11):
+            s = 2 ** (m - 4)
+            _, info = encode(SQUARE(k_s=3 * s, k_e=13 * s, c=1.0), N=2 ** m)
+            counts.add(info.gate_count_2q)
+        assert len(counts) == 1, counts
+
+    def test_suffix_matches_step(self):
+        """[k_s, N) is STEP(N - k_s) followed by X^m: same CX count, O(m)."""
+        N = 256
+        for k_s in [1, 3, 37, 100, 201]:
+            _, sq = encode(SQUARE(k_s=k_s, k_e=N, c=1.0), N=N)
+            _, st = encode(STEP(k_e=N - k_s, c=1.0), N=N)
+            assert sq.gate_count_2q == st.gate_count_2q, k_s
+            assert sq.complexity == "O(m)"
+
+    def test_reflection_uses_k_e(self):
+        """k_s odd, k_e = 3N/4: reflection gives [N/4, N - k_s), adder width 2."""
+        m = 8; N = 2 ** m
+        _, info = encode(SQUARE(k_s=13, k_e=3 * N // 4, c=1.0), N=N)
+        _, ref = encode(SQUARE(k_s=13, k_e=3 * N // 4 + 1, c=1.0), N=N)
+        assert info.gate_count_2q < ref.gate_count_2q
+
+    def test_no_worse_than_full_width_adder(self):
+        """Every interval at m = 4 costs at most the unreduced construction."""
+        from pyencode.synthesizer import _synth_step_load, _draper_add_const
+        m = 4; N = 2 ** m
+        for k_s in range(1, N):
+            for k_e in range(k_s + 1, N + 1):
+                old = _synth_step_load(m, {"k_e": k_e - k_s}).compose(
+                    _draper_add_const(m, k_s))
+                new, _ = encode(SQUARE(k_s=k_s, k_e=k_e, c=1.0), N=N)
+                assert self._cx(new) <= self._cx(old), (k_s, k_e)
+
+    def test_draper_cost(self):
+        """_draper_cost: CX exact for every odd constant; U and depth within
+        3 gates or 5% (Qiskit < 2.5 varies them with the constant)."""
+        from qiskit import transpile
+        from pyencode.synthesizer import _draper_add_const
+        from pyencode.predictor import _draper_cost
+        for r in range(1, 8):
+            for a in range(1, 2 ** r, 2):
+                t = transpile(_draper_add_const(r, a), basis_gates=["cx", "u"],
+                              optimization_level=3, seed_transpiler=0)
+                ops = t.count_ops()
+                u, cx, d = _draper_cost(r)
+                assert ops.get("cx", 0) == cx, (r, a)
+                assert abs(ops.get("u", 0) - u) <= max(3, 0.05 * u), (r, a)
+                assert abs(t.depth() - d) <= max(1, 0.05 * d), (r, a)
+
+    def test_match_vector_prefers_square(self):
+        """Center-half step: SQUARE is the cheapest exact family."""
+        from pyencode import match_vector
+        v = np.zeros(16); v[4:12] = 1.0
+        best = match_vector(v)[0]
+        assert best.pattern_name == "SQUARE"
+        assert best.rel_error == 0.0
+
+
 # ===================================================================
 # FOURIER
 # ===================================================================
