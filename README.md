@@ -371,4 +371,6 @@ If you use PyEncode in your work, please cite:
 
 ## License
 
-University of Wisconsin–Madison.
+PyEncode is released under the [Apache License 2.0](LICENSE).
+
+Copyright 2026 University of Wisconsin–Madison.
